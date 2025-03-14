@@ -1,8 +1,11 @@
 import discord
 from redbot.core import commands
 from redbot.core.utils import AsyncIter
+
 import asyncio
 import subprocess
+
+from urllib.parse import urlparse
 import re
 
 class MadTools(commands.Cog):
@@ -32,14 +35,19 @@ class MadTools(commands.Cog):
         return
 
     @staticmethod
-    def is_url(url: str):
-        return re.match(r'(?i)\b((?:[a-z][\w-]+:(?:/{1,3}|[a-z0-9%])|www\d{0,3}[.]|[a-z0-9.\-]+[.][a-z]{2,4}/)(?:[^\s()<>]+|\(([^\s()<>]+|(\([^\s()<>]+\)))*\))+(?:\(([^\s()<>]+|(\([^\s()<>]+\)))*\)|[^\s`!()\[\]{};:\'".,<>?«»“”‘’]))', url)
+    def get_hostname(url: str) -> str:
+        try:
+            urlObj = urlparse(url)
+            return urlObj.hostname
+        except Exception as e:
+            return
 
     @commands.command()
     @commands.mod()
     async def pingsite(self, ctx, url: str):
-        if not self.is_url(url):
-            await ctx.send("Invalid URL. Please provide a valid URL to ping.")
+        url = self.get_hostname(url)
+        if not url:
+            await ctx.send("Invalid or missing URL. Please provide a valid URL to ping.")
             return
         await ctx.channel.typing()
         try:
@@ -83,8 +91,9 @@ class MadTools(commands.Cog):
     @commands.command()
     @commands.mod()
     async def resolvesite(self, ctx, url: str):
-        if not self.is_url(url):
-            ctx.send("Invalid URL. Please provide a valid URL to resolve.")
+        url = self.get_hostname(url)
+        if not url:
+            await ctx.send("Invalid or missing URL. Please provide a valid URL to resolve.")
             return
         await ctx.channel.typing()
         try:
