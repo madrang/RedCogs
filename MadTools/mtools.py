@@ -39,7 +39,7 @@ class MadTools(commands.Cog):
     @commands.mod()
     async def pingsite(self, ctx, url: str):
         if not self.is_url(url):
-            ctx.send("Invalid URL. Please provide a valid URL to ping.")
+            await ctx.send("Invalid URL. Please provide a valid URL to ping.")
             return
         await ctx.channel.typing()
         try:
