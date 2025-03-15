@@ -106,7 +106,7 @@ class MadTools(commands.Cog):
 
             embed = discord.Embed(
                 title=f"Ping results for {'\n\t\t'.join(resolvedHostnames) if resolvedHostnames else url}"
-                , description=(f"({', '.join(addresses)})\n" if addresses else "") + f"Average Ping: {sum(results) / len(results):.2f} ms\nHighest Ping: {max(results)} ms\nLowest Ping: {min(results)} ms\n\nPing Speeds: {', '.join(map(str, results))} ms"
+                , description=((f"({', '.join(addresses)})" + "\n") if addresses else "") + f"Average Ping: {sum(results) / len(results):.2f} ms\nHighest Ping: {max(results)} ms\nLowest Ping: {min(results)} ms\n\nPing Speeds: {', '.join(map(str, results))} ms"
                 , color=discord.Color.green()
             )
             await ctx.send(embed=embed)
