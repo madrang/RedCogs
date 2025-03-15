@@ -74,6 +74,8 @@ class MadTools(commands.Cog):
         await ctx.channel.typing()
         try:
             results = []
+            address = None
+            resolvedHostname = None
             async for value in AsyncIter(range(5), delay=1):
                 process = await asyncio.create_subprocess_shell(
                     f"ping -c 1 {url}"
@@ -82,19 +84,34 @@ class MadTools(commands.Cog):
                 )
                 stdout, stderr = await process.communicate()
                 output = stdout.decode()
+                # Time
                 match = re.search(r"time=([\d.]+) ms", output)
                 if not match:
-                    await ctx.send("Error: Unable to ping the site.")
+                    await ctx.send("Error timedout: Unable to ping the site.")
                     return
                 ping_time = float(match.group(1))
                 results.append(ping_time)
-
-            if not results:
-                await ctx.send("Error: Unable to ping the site.")
-                return
+                # IP Address
+                match = re.search(r"\(([\d.:]+)\)", output)
+                if not match:
+                    continue
+                if not address:
+                    address = match.group(1)
+                elif address != match.group(1):
+                    await ctx.send(f"Error address changed: {address} -> {match.group(1)}")
+                    return
+                # Hostname
+                match = re.search(r"from (\S+)", output)
+                if not match:
+                    continue
+                if not resolvedHostname:
+                    resolvedHostname = match.group(1)
+                elif resolvedHostname != match.group(1):
+                    await ctx.send(f"Error host changed: {resolvedHostname} -> {match.group(1)}")
+                    return
 
             embed = discord.Embed(
-                title=f"Ping results for {url}"
+                title=f"Ping results for {resolvedHostname or url}" + f" ({address})" if address else ""
                 , description=f"Average Ping: {sum(results) / len(results):.2f} ms\nHighest Ping: {max(results)} ms\nLowest Ping: {min(results)} ms\n\nPing Speeds: {', '.join(map(str, results))} ms"
                 , color=discord.Color.green()
             )
