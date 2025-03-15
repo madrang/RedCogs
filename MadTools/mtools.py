@@ -105,7 +105,7 @@ class MadTools(commands.Cog):
                     resolvedHostnames.append(match.group(1))
 
             embed = discord.Embed(
-                title="Ping results for " + '\n\t\t\t\t\t\t'.join(resolvedHostnames) if resolvedHostnames else url
+                title="Ping results for " + '\n\t\t\t\t\t\t\t'.join(resolvedHostnames) if resolvedHostnames else url
                 , description=(f"({', '.join(addresses)})\n" if addresses else "") + f"Average Ping: {sum(results) / len(results):.2f} ms\nHighest Ping: {max(results)} ms\nLowest Ping: {min(results)} ms\n\nPing Speeds: {', '.join(map(str, results))} ms"
                 , color=discord.Color.green()
             )
