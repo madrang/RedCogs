@@ -1,3 +1,5 @@
+import contextlib
+
 import discord
 from redbot.core import commands
 from redbot.core.utils import AsyncIter
@@ -16,6 +18,16 @@ class MadTools(commands.Cog):
 
     def __init__(self, bot):
         self.bot = bot
+        self.old_ping_command = bot.get_command("ping")
+        if self.old_ping_command:
+            bot.remove_command("ping")
+
+    async def cog_unload(self) -> None:
+        if not self.old_ping_command:
+            return
+        with contextlib.suppress(Exception):
+            self.bot.remove_command("ping")
+            self.bot.add_command(self.old_ping_command)
 
     #
     # Red methods
@@ -34,13 +46,23 @@ class MadTools(commands.Cog):
         """Nothing to delete."""
         return
 
+    @commands.command()
+    async def ping(self, ctx: commands.Context):
+        """Ping command with latency information"""
+        try:
+            latency_ms = round(self.bot.latency * 1000)
+        except OverflowError:
+            await ctx.send("Connection issues in the last few seconds, precise ping times are unavailable. Try again in a minute.")
+            return
+        await ctx.send(f":satellite: Pong! :stopwatch:`{latency_ms}ms`")
+
     @staticmethod
     def get_hostname(url: str) -> str:
         try:
             urlObj = urlparse(url)
             return urlObj.hostname
         except Exception as e:
-            return
+            return None
 
     @commands.command()
     @commands.mod()
