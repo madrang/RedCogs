@@ -74,7 +74,7 @@ class MadTools(commands.Cog):
         await ctx.channel.typing()
         try:
             results = []
-            address = None
+            addresses = []
             resolvedHostname = None
             async for value in AsyncIter(range(5), delay=1):
                 process = await asyncio.create_subprocess_shell(
@@ -95,11 +95,10 @@ class MadTools(commands.Cog):
                 match = re.search(r"\(([\d.:]+)\)", output)
                 if not match:
                     continue
-                if not address:
-                    address = match.group(1)
-                elif address != match.group(1):
-                    await ctx.send(f"Error address changed: {address} -> {match.group(1)}")
-                    return
+                if not addresses:
+                    addresses.append(match.group(1))
+                elif match.group(1) not in addresses:
+                    addresses.append(match.group(1))
                 # Hostname
                 match = re.search(r"from (\S+)", output)
                 if not match:
@@ -111,7 +110,7 @@ class MadTools(commands.Cog):
                     return
 
             embed = discord.Embed(
-                title=f"Ping results for {resolvedHostname or url}" + f" ({address})" if address else ""
+                title=f"Ping results for {resolvedHostname or url}" + f" ({', '.join(addresses)})" if addresses else ""
                 , description=f"Average Ping: {sum(results) / len(results):.2f} ms\nHighest Ping: {max(results)} ms\nLowest Ping: {min(results)} ms\n\nPing Speeds: {', '.join(map(str, results))} ms"
                 , color=discord.Color.green()
             )
