@@ -1,0 +1,19 @@
+{
+    "author": [
+        "Madrang"
+    ]
+    , "install_msg": "Installed FeedWatch from [RedCogs repository](https://github.com/madrang/RedCogs). Load the cog, set a channel with `[p]setchannel`, and add feeds with `[p]addsrc`"
+    , "name": "FeedWatch"
+    , "disabled": false
+    , "short": "Watch feed URLs and auto-post new entries to a channel."
+    , "description": "Polls watch-listed URLs every 5 minutes and posts new entries as embeds to a configured channel. Each watch URL must return a JSON array of posts (id, title, link or url, excerpt or description; plain strings or WordPress-style rendered objects)."
+    , "tags": [
+        "feed"
+        , "watchlist"
+        , "autopost"
+    ]
+    , "min_bot_version": "3.5.0"
+    , "min_python_version": [ 3, 11, 0 ]
+    , "hidden": false
+    , "end_user_data_statement": "This cog does not persistently store data or metadata about users."
+}
