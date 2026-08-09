@@ -1,0 +1,24 @@
+{
+    "author": [
+        "Madrang"
+    ]
+    , "install_msg": "Installed SdrTools from [RedCogs repository](https://github.com/madrang/RedCogs). Load the cog and request a spectrum picture with `[p]spectrum 96.9`"
+    , "name": "SdrTools"
+    , "disabled": false
+    , "short": "RTL-SDR tools: post pictures of the RF spectrum."
+    , "description": "Captures the RF spectrum around a frequency with an RTL-SDR device on the bot host and replies with a rendered picture."
+    , "tags": [
+        "sdr"
+        , "rtlsdr"
+        , "radio"
+    ]
+    , "min_bot_version": "3.5.0"
+    , "min_python_version": [ 3, 11, 0 ]
+    , "requirements": [
+        "pyrtlsdr"
+        , "numpy"
+        , "matplotlib"
+    ]
+    , "hidden": false
+    , "end_user_data_statement": "This cog does not persistently store data or metadata about users."
+}
