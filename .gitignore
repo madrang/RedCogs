@@ -172,3 +172,12 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+# Agent tooling sessions
+.zcode/
+
+# Local virtual environments (any depth)
+py_venv/
+
+# Internal project notes (not for the repo)
+AGENTS.md

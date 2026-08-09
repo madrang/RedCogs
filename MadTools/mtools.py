@@ -18,6 +18,7 @@ class MadTools(commands.Cog):
 
     def __init__(self, bot):
         self.bot = bot
+        # Replace ping cmd
         self.old_ping_command = bot.get_command("ping")
         if self.old_ping_command:
             bot.remove_command("ping")
@@ -47,7 +48,7 @@ class MadTools(commands.Cog):
         return
 
     @commands.command()
-    async def ping(self, ctx: commands.Context):
+    async def ping(self, ctx: commands.Context) -> None:
         """Ping command with latency information"""
         try:
             latency_ms = round(self.bot.latency * 1000)
