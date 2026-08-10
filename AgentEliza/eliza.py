@@ -842,7 +842,12 @@ class Eliza(commands.Cog):
         if scope not in ("server", "channel", "user", "all"):
             await ctx.send("Give a scope: `server`, `channel`, `user`, or `all`.")
             return
-        if not await is_admin_or_superior(self.bot, ctx.author):
+        if isinstance(ctx.author, discord.Member):
+            admin = await is_admin_or_superior(self.bot, ctx.author)
+        else:
+            # A direct message has a User: only the owner sees more than the user scope.
+            admin = await self.bot.is_owner(ctx.author)
+        if not admin:
             if (member is not None and member != ctx.author) or scope not in ("user", "all"):
                 await ctx.send("You can only see your own user memory. Use `eliza memory show user`.")
                 return
