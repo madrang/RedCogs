@@ -91,7 +91,7 @@ class Eliza(commands.Cog):
         self.mcp = MCPManager(self.config)
         # Long-term memory lives in Config. The harness tools let the agent control it.
         self.memory = Memory(self.config)
-        self.harness_tools = HarnessTools(self.memory)
+        self.harness_tools = HarnessTools(self.memory, self._get_session)
         self._harness_tool_names = {tool["function"]["name"] for tool in self.harness_tools.tools()}
         # Usage stats and rate windows per scope, in Config.
         self.scope_stats = ScopeStats(self.config)
@@ -137,6 +137,12 @@ class Eliza(commands.Cog):
 
     def _new_session(self) -> aiohttp.ClientSession:
         return aiohttp.ClientSession(headers={"User-Agent": f"{USER_AGENT} v{self.__version__}"})
+
+    def _get_session(self) -> aiohttp.ClientSession:
+        """The shared HTTP session, recreated when closed."""
+        if self.session is None or self.session.closed:
+            self.session = self._new_session()
+        return self.session
 
     async def _compact(self, session_id: int, session: Session, api_key: str, preset) -> dict | None:
         """Summarize the turns of a session and persist the summary.
