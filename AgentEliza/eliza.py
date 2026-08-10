@@ -61,6 +61,9 @@ DEFAULT_DM_RULES = "Be respectful. Do not generate illegal, harmful, or explicit
 RULES_MAX_CHARS = 2000
 # MCP server names become tool names `<name>__<tool>`: the API accepts only these characters.
 MCP_SERVER_NAME_RE = re.compile(r"^[a-zA-Z0-9_-]{1,32}$")
+# Context backfill of a fresh session: recent channel messages from Discord.
+BACKFILL_MESSAGES = 20
+BACKFILL_MAX_CHARS = 8000
 
 
 class Eliza(commands.Cog):
@@ -365,7 +368,7 @@ class Eliza(commands.Cog):
             session.seen_users.add(user_id)
         await self.scope_stats.record(guild_id=guild_id, channel_id=channel_id, user_id=user_id, usage=usage)
 
-    async def generate_reply(self, channel_id: int, content: str, *, guild_id: int | None = None, user_id: int | None = None, bot_name: str | None = None, user_name: str | None = None, is_owner: bool = False) -> str | None:
+    async def generate_reply(self, channel_id: int, content: str, *, guild_id: int | None = None, user_id: int | None = None, bot_name: str | None = None, user_name: str | None = None, is_owner: bool = False, message_id: int | None = None) -> str | None:
         """Send one user message to the chat API and return the reply text.
 
         The conversation session is the guild, or the user in DMs: the
@@ -389,9 +392,56 @@ class Eliza(commands.Cog):
             return await self._generate_locked(
                 session, session_id, channel_id, content, api_key=api_key,
                 guild_id=guild_id, user_id=user_id, bot_name=bot_name, user_name=user_name, is_owner=is_owner,
+                message_id=message_id,
             )
 
-    async def _generate_locked(self, session: Session, session_id: int, channel_id: int, content: str, *, api_key: str, guild_id, user_id, bot_name, user_name, is_owner) -> str | None:
+    async def _backfill_turns(self, channel, bot_name: str, skip_id: int | None) -> list:
+        """Recent channel messages as context turns: users as user role, the bot as assistant.
+
+        A fresh session has lost the verbatim turns (reload, restart). The
+        Discord history still holds them, so the new context starts with the
+        recent exchange instead of only a summary. Consecutive bot messages
+        (pagified replies) merge into one assistant turn. Returns [] on any
+        failure: the backfill never breaks a reply.
+        """
+        if self.bot.user is None:
+            return []
+        bot_id = self.bot.user.id
+        try:
+            prefixes = tuple(
+                p for p in await self.bot.get_valid_prefixes(getattr(channel, "guild", None))
+                if not p.startswith("<@")
+            )
+        except Exception:
+            prefixes = ()
+        try:
+            history = [message async for message in channel.history(limit=BACKFILL_MESSAGES)]
+        except (discord.Forbidden, discord.HTTPException):
+            return []
+        turns = []
+        for message in reversed(history):
+            if message.id == skip_id:
+                # The triggering message joins the context as the new user turn.
+                continue
+            content = message.content.strip()
+            if not content or (prefixes and content.startswith(prefixes)):
+                continue
+            if message.author.id == bot_id:
+                if turns and turns[-1]["role"] == "assistant":
+                    turns[-1]["content"] += "\n" + content
+                else:
+                    turns.append({"role": "assistant", "content": content})
+                continue
+            if message.author.bot:
+                continue
+            for form in (f"<@{bot_id}>", f"<@!{bot_id}>"):
+                content = content.replace(form, bot_name)
+            turns.append({"role": "user", "content": f"{message.author.display_name}: {content.strip()}"})
+        while turns and sum(len(turn["content"]) for turn in turns) > BACKFILL_MAX_CHARS:
+            turns.pop(0)
+        return turns
+
+    async def _generate_locked(self, session: Session, session_id: int, channel_id: int, content: str, *, api_key: str, guild_id, user_id, bot_name, user_name, is_owner, message_id) -> str | None:
         """The reply work of generate_reply. The caller holds the session lock."""
         preset = await self._current_preset()
         cache_ttl = (preset.cache_ttl if preset is not None else None) or DEFAULT_CACHE_TTL
@@ -418,7 +468,14 @@ class Eliza(commands.Cog):
                 rules_block = "You talk to the bot owner. The owner has all rights."
             else:
                 rules_block = f"You talk to a limited user. User rules:\n{await self.config.dm_rules()}"
+            # A fresh session lost its verbatim turns: the Discord history restores them.
+            fresh = not session.messages
             session.start_context(self._system_text(name, memory, session.summary, rules_block))
+            if fresh:
+                channel = self.bot.get_channel(channel_id)
+                if channel is not None:
+                    for turn in await self._backfill_turns(channel, name, message_id):
+                        session.append(turn["role"], turn["content"])
         session.touch()
         speaker = user_name or "User"
         additions = []
@@ -566,6 +623,7 @@ class Eliza(commands.Cog):
                 , bot_name=bot_name
                 , user_name=message.author.display_name
                 , is_owner=is_owner
+                , message_id=message.id
             )
         if reply is None:
             # The agent refused to reply with the no-reply tag.
