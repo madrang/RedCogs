@@ -1,0 +1,22 @@
+{
+    "author": [
+        "Madrang"
+    ]
+    , "install_msg": "Installed AgentEliza from [RedCogs repository](https://github.com/madrang/RedCogs). Load the cog, set the API key with `[p]eliza setkey`, then check the connection with `[p]eliza status`"
+    , "name": "AgentEliza"
+    , "disabled": false
+    , "short": "AI agent harness for Discord, over an OpenAI-compatible chat API."
+    , "description": "Connects AI agents to Discord servers. Replies to mentions and direct messages with answers generated through an OpenAI-compatible chat API. Defaults to Kimi Code (api.kimi.com); the host, model, and key are configurable. MCP servers give the agent tools."
+    , "tags": [
+        "eliza"
+        , "ai"
+        , "agent"
+    ]
+    , "min_bot_version": "3.5.0"
+    , "min_python_version": [ 3, 11, 0 ]
+    , "requirements": [
+        "mcp>=2"
+    ]
+    , "hidden": false
+    , "end_user_data_statement": "This cog stores per-user long-term memory, conversation summaries, usage stats, and rate windows, managed by the AI agent and the bot admins. All of it is deleted on an end-user data request."
+}
