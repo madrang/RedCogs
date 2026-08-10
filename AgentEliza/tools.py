@@ -146,7 +146,7 @@ class HarnessTools:
                     , "description": (
                         "Replace the long-term memory of one scope: server, channel, or user. Read the "
                         "scope first and merge when you want to keep the old content. An empty content "
-                        f"erases the scope. Content over {MEMORY_MAX_CHARS} characters is truncated."
+                        f"erases the scope. The harness truncates content over {MEMORY_MAX_CHARS} characters."
                     )
                     , "parameters": {
                         "type": "object"
@@ -167,8 +167,8 @@ class HarnessTools:
                     "name": "memory_append"
                     , "description": (
                         "Add text at the end of the long-term memory of one scope: server, channel, or "
-                        "user. Use it for one new fact. The result warns when the scope is full and part "
-                        "of the content was dropped."
+                        "user. Use this tool for one new fact. The result warns when the scope is full "
+                        "and part of the content did not fit."
                     )
                     , "parameters": {
                         "type": "object"
@@ -188,8 +188,8 @@ class HarnessTools:
                 , "function": {
                     "name": "web_search"
                     , "description": (
-                        "Search the web with DuckDuckGo. Returns a numbered list of results: title, "
-                        "URL, and snippet. Use web_fetch on a result URL to read the full page."
+                        "Search the web with DuckDuckGo. The result is a numbered list. Each entry has "
+                        "a title, a URL, and a snippet. Use web_fetch on a result URL to read the full page."
                     )
                     , "parameters": {
                         "type": "object"
@@ -208,8 +208,8 @@ class HarnessTools:
                 , "function": {
                     "name": "web_fetch"
                     , "description": (
-                        "Fetch one web page and return its readable text. HTML pages are stripped to "
-                        "their text. Long pages are truncated."
+                        "Fetch one web page and return its readable text. The tool strips an HTML page "
+                        "to its text. The tool truncates a long page."
                     )
                     , "parameters": {
                         "type": "object"

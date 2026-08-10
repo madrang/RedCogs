@@ -32,20 +32,21 @@ SYSTEM_PROMPT = (
     "- A user message starts with the sender name and a colon, for example 'Alice: hello'.\n"
     "- A memory note starts with '[memory NAME]' and ends with '[/memory]'. It shows the stored memory of that user.\n"
     "  The harness adds it before the first message of a user in this context.\n"
-    "- The system message can end with a conversation summary. The summary condenses the older turns of this session.\n"
+    "- A harness request can ask to condense the older turns. The assistant message that answers it\n"
+    "  is the summary of those turns.\n"
     "\n"
     "Memory rules:\n"
     "- You have three memory scopes: server, channel, and user.\n"
     "- Use memory_read to read a scope. Use memory_write to replace the text of a scope.\n"
     "- Read a scope before you write it. A write replaces the full text. Merge the old content that you want to keep.\n"
-    f"- A memory text can hold {MEMORY_MAX_CHARS} characters. A longer write is truncated.\n"
+    f"- A memory text can hold {MEMORY_MAX_CHARS} characters. The harness truncates a longer write.\n"
     "- Put facts that must survive in memory. Older turns leave the context. Only a summary stays.\n"
     "- One server shares one conversation across all its channels.\n"
     "- An empty message is a poke. The user wants your attention and says nothing.\n"
     "- To stay silent, answer with only '[no-reply]'. The harness then sends nothing.\n"
-    "- A memory you write is visible in this context at once. The system message shows it again when the context restarts."
+    "- This context shows a memory you write at once. The system message shows it again when the context restarts."
 )
-MCP_TOOL_ROUNDS = 5
+MCP_TOOL_ROUNDS = 6
 USER_AGENT = "RedBot Chat Cog"
 USAGE_CACHE_SECONDS = 300
 # The reply sent when the model returns no content at all.
@@ -62,8 +63,12 @@ RULES_MAX_CHARS = 2000
 # MCP server names become tool names `<name>__<tool>`: the API accepts only these characters.
 MCP_SERVER_NAME_RE = re.compile(r"^[a-zA-Z0-9_-]{1,32}$")
 # Context backfill of a fresh session: recent channel messages from Discord.
-BACKFILL_MESSAGES = 20
+BACKFILL_MESSAGES = 16
 BACKFILL_MAX_CHARS = 8000
+# Cap of the raw messages scanned to find the qualifying ones. The scan
+# pages deeper into the history until it has BACKFILL_MESSAGES messages of
+# the conversation with the agent, or this cap.
+BACKFILL_SCAN_MAX = 99
 
 
 class Eliza(commands.Cog):
@@ -182,6 +187,9 @@ class Eliza(commands.Cog):
         summary = message.get("content") or ""
         summary = summary[:SUMMARY_MAX_CHARS]
         session.apply_compaction(summary, len(old))
+        # The summary joins the context as the compaction exchange: the harness
+        # request and the agent answer. It is not repeated in the system message.
+        session.inject_summary()
         await self.memory.store_summary(session.scope, session_id, summary)
         session.error = None
         return data.get("usage") or {}
@@ -230,16 +238,14 @@ class Eliza(commands.Cog):
             except Exception as e:
                 session.error = f"{type(e).__name__}: {e}"
 
-    def _system_text(self, bot_name: str, memory_entries: list, summary: str, rules_block: str = "") -> str:
-        """The system message of a context: prompt, clock, rules, memory blocks, conversation summary."""
+    def _system_text(self, bot_name: str, memory_entries: list, rules_block: str = "") -> str:
+        """The system message of a context: prompt, clock, rules, memory blocks."""
         text = SYSTEM_PROMPT.format(name=bot_name)
         text += f"\n\nCurrent date and time (UTC): {datetime.now(timezone.utc):%Y-%m-%d %H:%M}."
         if rules_block:
             text += f"\n\n{rules_block}"
         for label, memory in memory_entries:
             text += f"\n\n{label} memory:\n{memory}"
-        if summary:
-            text += f"\n\nConversation summary:\n{summary}"
         return text
 
     async def _rate_limits(self) -> dict:
@@ -395,14 +401,34 @@ class Eliza(commands.Cog):
                 message_id=message_id,
             )
 
+    def _participates(self, message: discord.Message, bot_id: int) -> bool:
+        """True when the message speaks to the bot: a direct mention, or a reply to the bot.
+
+        A guild message of a user that does not address the bot stays out of
+        the context: the user is not part of the conversation with the agent.
+        In a direct message every message speaks to the bot.
+        """
+        if message.guild is None:
+            return True
+        if self.bot.user is not None and self.bot.user in message.mentions:
+            return True
+        if message.type != discord.MessageType.reply:
+            return False
+        resolved = message.reference.resolved if message.reference else None
+        return isinstance(resolved, discord.Message) and resolved.author.id == bot_id
+
     async def _backfill_turns(self, channel, bot_name: str, skip_id: int | None) -> list:
         """Recent channel messages as context turns: users as user role, the bot as assistant.
 
         A fresh session has lost the verbatim turns (reload, restart). The
         Discord history still holds them, so the new context starts with the
-        recent exchange instead of only a summary. Consecutive bot messages
-        (pagified replies) merge into one assistant turn. Returns [] on any
-        failure: the backfill never breaks a reply.
+        recent exchange instead of only a summary. Only the messages of the
+        conversation with the agent are kept: the bot replies, and the user
+        messages that mention the bot or reply to it. The scan pages deeper
+        into the history until it has BACKFILL_MESSAGES qualifying messages,
+        or until BACKFILL_SCAN_MAX raw messages are scanned. Consecutive bot
+        messages (pagified replies) merge into one assistant turn. Return an
+        empty list on any failure: the backfill never breaks a reply.
         """
         if self.bot.user is None:
             return []
@@ -415,24 +441,29 @@ class Eliza(commands.Cog):
         except Exception:
             prefixes = ()
         try:
-            history = [message async for message in channel.history(limit=BACKFILL_MESSAGES)]
+            qualifying = []
+            async for message in channel.history(limit=BACKFILL_SCAN_MAX):
+                if message.id == skip_id:
+                    # The triggering message joins the context as the new user turn.
+                    continue
+                if not message.content.strip() or (prefixes and message.content.strip().startswith(prefixes)):
+                    continue
+                if message.author.id != bot_id:
+                    if message.author.bot or not self._participates(message, bot_id):
+                        continue
+                qualifying.append(message)
+                if len(qualifying) >= BACKFILL_MESSAGES:
+                    break
         except (discord.Forbidden, discord.HTTPException):
             return []
         turns = []
-        for message in reversed(history):
-            if message.id == skip_id:
-                # The triggering message joins the context as the new user turn.
-                continue
+        for message in reversed(qualifying):
             content = message.content.strip()
-            if not content or (prefixes and content.startswith(prefixes)):
-                continue
             if message.author.id == bot_id:
                 if turns and turns[-1]["role"] == "assistant":
                     turns[-1]["content"] += "\n" + content
                 else:
                     turns.append({"role": "assistant", "content": content})
-                continue
-            if message.author.bot:
                 continue
             for form in (f"<@{bot_id}>", f"<@!{bot_id}>"):
                 content = content.replace(form, bot_name)
@@ -446,9 +477,9 @@ class Eliza(commands.Cog):
         preset = await self._current_preset()
         cache_ttl = (preset.cache_ttl if preset is not None else None) or DEFAULT_CACHE_TTL
         usage = {"prompt_tokens": 0, "completion_tokens": 0, "cached_tokens": 0}
-        # Context expiry: idle past the cache lifetime, or a compaction. Only then
-        # is the system message rebuilt (prompt, memory, summary). An agent memory
-        # update is already in the context as a tool call, so no reload between.
+        # Context expiry: idle past the cache lifetime, or a compaction.
+        # Only then is the system message rebuilt (prompt, memory, summary).
+        # An agent memory update is already in the context as a tool call, so no reload between.
         expired = not session.messages or session.idle() >= cache_ttl
         if session.messages and self.history.needs_compaction(session, cache_ttl):
             compact_usage = await self._compact(session_id, session, api_key, preset)
@@ -457,9 +488,9 @@ class Eliza(commands.Cog):
                     usage[key] += compact_usage.get(key) or 0
                 expired = True
         if expired:
-            # Snapshot the shared scopes only. The user scope is injected per
-            # user before their first message of the context, so the system
-            # message never duplicates it.
+            # Snapshot the shared scopes only.
+            # user scope is injected per user before their first message of the context,
+            # so the system message never duplicates it.
             memory = await self.memory.recall(guild_id, channel_id, None)
             name = bot_name or (self.bot.user.name if self.bot.user else "Eliza")
             if guild_id is not None:
@@ -470,8 +501,11 @@ class Eliza(commands.Cog):
                 rules_block = f"You talk to a limited user. User rules:\n{await self.config.dm_rules()}"
             # A fresh session lost its verbatim turns: the Discord history restores them.
             fresh = not session.messages
-            session.start_context(self._system_text(name, memory, session.summary, rules_block))
+            session.start_context(self._system_text(name, memory, rules_block))
             if fresh:
+                # The persisted summary joins as the compaction exchange, before the backfilled turns it summarizes.
+                if session.summary:
+                    session.inject_summary()
                 channel = self.bot.get_channel(channel_id)
                 if channel is not None:
                     for turn in await self._backfill_turns(channel, name, message_id):

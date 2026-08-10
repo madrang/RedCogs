@@ -19,27 +19,35 @@ COMPACT_PROMPT = (
     "Condense this conversation into a short summary. "
     "Keep names, facts, decisions, and open questions. Drop small talk. "
     "Keep the character of the exchange too: the tone, the mood of each person, "
-    "the state of the relationship, and the shared references that give it continuity. "
-    "Merge it with the summary so far when one is given."
+    "the state of the relationship, and the shared references that give the conversation continuity. "
+    "When the input has a summary so far, merge its content into the new summary."
 )
+# The user-role turn that introduces the summary inside a session: the
+# harness request, answered by the agent with the summary as its own reply.
+COMPACT_NOTE = "(harness request: condense the older turns of this conversation into a summary.)"
+# Recent turns kept verbatim through a compaction.
+COMPACTION_KEEP_TURNS = 4
 
 
 class Session:
     """One conversation context: a guild session, or the DM session of a user.
 
-    messages[0] is the system message of the context: the system prompt,
-    the memory blocks, and the conversation summary. It is written when the
-    context starts and rebuilt only when the context expires (idle past the
-    cache lifetime) or after a compaction. The rest of messages holds the
-    turns kept verbatim. size counts the characters of all messages, not
-    their number: many small messages and a few giant ones do not cost the
-    same context. scope is the Memory scope the session belongs to: guild,
-    or user for a DM. summary is the condensed form of the compacted turns;
-    it persists in the Memory store of the scope, so a reboot loses only
-    the verbatim turns, never the summary. seen_users tracks which users
-    got their memory injected in this context, so it happens once per user
-    per context. last_prompt_tokens is the real prompt size of the last
-    API answer, 0 when unknown.
+    messages[0] is the system message of the context: the system prompt
+    and the memory blocks. It is written when the context starts and
+    rebuilt only when the context expires (idle past the cache lifetime)
+    or after a compaction. The rest of messages holds the turns kept
+    verbatim. The summary joins the context as a turn, not in the system
+    message: inject_summary places it after the system message as the
+    compaction exchange (harness request, agent answer), so a rebuilt
+    context keeps it without repeating it. size counts the characters of
+    all messages, not their number: many small messages and a few giant
+    ones do not cost the same context. scope is the Memory scope the
+    session belongs to: guild, or user for a DM. summary is the condensed
+    form of the compacted turns; it persists in the Memory store of the
+    scope, so a reboot loses only the verbatim turns, never the summary.
+    seen_users tracks the users with an injected memory note in this
+    context, so the note appears once per user per context. last_prompt_tokens
+    is the real prompt size of the last API answer, 0 when unknown.
     """
 
     def __init__(self, scope: str):
@@ -79,8 +87,19 @@ class Session:
         return time.monotonic() - self.last_active
 
     def plan_compaction(self):
-        """The block to summarize: every turn after the system message."""
-        return self.messages[1:]
+        """The block to summarize: every turn after the system message, minus the recent tail."""
+        if len(self.messages) <= 1 + COMPACTION_KEEP_TURNS:
+            return []
+        return self.messages[1:-COMPACTION_KEEP_TURNS]
+
+    def inject_summary(self) -> None:
+        """Place the summary into the turns as the compaction exchange, after the system message."""
+        trace = [
+            {"role": "user", "content": COMPACT_NOTE},
+            {"role": "assistant", "content": self.summary},
+        ]
+        self.messages[1:1] = trace
+        self.size += sum(len(turn["content"]) for turn in trace)
 
     def apply_compaction(self, summary: str, dropped: int) -> None:
         """Drop the summarized turns and store the summary.
