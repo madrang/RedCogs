@@ -506,13 +506,15 @@ class Eliza(commands.Cog):
         if message.author.bot:
             return
         is_dm = message.guild is None
-        mentioned = self.bot.user is not None and self.bot.user.mentioned_in(message)
+        # Direct user mention only: mentioned_in also matches @everyone pings.
+        mentioned = self.bot.user is not None and self.bot.user in message.mentions
         if not (is_dm or mentioned):
             return
-        # Skip command traffic: get_valid_prefixes covers the guild prefixes and the mention forms (`@Bot command`),
-        # so a command never doubles as a chat message. A bare mention without a command falls through to the AI.
-        prefixes = await self.bot.get_valid_prefixes(message.guild)
-        if any(message.content.startswith(prefix) for prefix in prefixes):
+        # Skip real commands only. get_valid_prefixes contains the mention forms
+        # with a trailing space, so "@Bot hello" looks like a prefix match. Only
+        # get_context knows whether a command name follows the prefix.
+        ctx = await self.bot.get_context(message)
+        if ctx.valid:
             return
         content = message.content
         # The name users address the bot by: the guild nickname when set, else the account name.
