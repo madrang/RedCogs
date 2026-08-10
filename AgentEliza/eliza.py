@@ -44,7 +44,11 @@ SYSTEM_PROMPT = (
     "- One server shares one conversation across all its channels.\n"
     "- An empty message is a poke. The user wants your attention and says nothing.\n"
     "- To stay silent, answer with only '[no-reply]'. The harness then sends nothing.\n"
-    "- This context shows a memory you write at once. The system message shows it again when the context restarts."
+    "- This context shows a memory you write at once. The system message shows it again when the context restarts.\n"
+    "\n"
+    "Discord renders your answers. You can use markdown: **bold**, *italics*, `code`, code blocks, quotes, and lists.\n"
+    "You can also use the Discord forms: ||spoiler||, -# subtext, [masked links](https://url), and <t:UNIX:R> timestamps.\n"
+    "A mention pings its target: <@USER_ID> for a user, <@&ROLE_ID> for a role, @here for the online members."
 )
 MCP_TOOL_ROUNDS = 6
 USER_AGENT = "RedBot Chat Cog"
@@ -663,7 +667,8 @@ class Eliza(commands.Cog):
             # The agent refused to reply with the no-reply tag.
             return
         for page in pagify(reply):
-            await message.channel.send(page, allowed_mentions=discord.AllowedMentions.none())
+            # The agent may mention: its answer is the sender's intent.
+            await message.channel.send(page, allowed_mentions=discord.AllowedMentions.all())
 
     #
     # Admin commands
