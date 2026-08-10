@@ -16,8 +16,10 @@ HISTORY_MAX_CHARS = CONTEXT_TOKENS // 2 * CHARS_PER_TOKEN
 SUMMARY_MAX_CHARS = 4000
 
 COMPACT_PROMPT = (
-    "Condense this conversation into a short factual summary. "
+    "Condense this conversation into a short summary. "
     "Keep names, facts, decisions, and open questions. Drop small talk. "
+    "Keep the character of the exchange too: the tone, the mood of each person, "
+    "the state of the relationship, and the shared references that give it continuity. "
     "Merge it with the summary so far when one is given."
 )
 
