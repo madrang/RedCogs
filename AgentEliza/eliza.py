@@ -10,6 +10,7 @@ import discord
 from discord.ext import tasks
 from redbot.core import commands, Config
 from redbot.core.utils.chat_formatting import pagify
+from redbot.core.utils.mod import is_admin_or_superior
 
 from .history import (
     COMPACT_PROMPT,
@@ -822,18 +823,30 @@ class Eliza(commands.Cog):
         )
 
     @eliza_group.group(name="memory", invoke_without_command=True)
-    @commands.admin()
     async def eliza_memory(self, ctx: commands.Context) -> None:
-        """Inspect and clear the long-term memory and summaries per scope."""
+        """Inspect and clear the long-term memory and summaries per scope.
+
+        `show` is open to every user: admins see every scope, other users
+        see only their own user scope. `clear` is admin-only.
+        """
         await ctx.send_help()
 
     @eliza_memory.command(name="show")
     async def memory_show(self, ctx: commands.Context, scope: str = "all", member: discord.Member = None) -> None:
-        """Show the memory and summary of a scope: server, channel, user, or all (the default)."""
+        """Show the memory and summary of a scope: server, channel, user, or all (the default).
+
+        Admins see every scope and every member. Other users see only their
+        own user scope.
+        """
         scope = scope.lower()
         if scope not in ("server", "channel", "user", "all"):
             await ctx.send("Give a scope: `server`, `channel`, `user`, or `all`.")
             return
+        if not await is_admin_or_superior(self.bot, ctx.author):
+            if (member is not None and member != ctx.author) or scope not in ("user", "all"):
+                await ctx.send("You can only see your own user memory. Use `eliza memory show user`.")
+                return
+            scope = "user"
         targets = []
         if scope in ("server", "all") and ctx.guild is not None:
             targets.append(("guild", ctx.guild.id, "Server"))
@@ -857,6 +870,7 @@ class Eliza(commands.Cog):
             await ctx.send(page, allowed_mentions=discord.AllowedMentions.none())
 
     @eliza_memory.command(name="clear")
+    @commands.admin()
     async def memory_clear(self, ctx: commands.Context, scope: str, member: discord.Member = None) -> None:
         """Clear the memory and the summary of one scope, and drop its live session."""
         internal = {"server": "guild", "channel": "channel", "user": "user"}.get(scope.lower())
