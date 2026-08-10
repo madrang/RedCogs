@@ -71,6 +71,8 @@ class Eliza(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.session: aiohttp.ClientSession | None = None
+        # When closed, the agent ignores every message until the cog is reloaded.
+        self._closed = False
         # Usage endpoint cache: (monotonic timestamp, rows) or None.
         self._usage_cache = None
         # Init config. The identifier must stay unique and stable.
@@ -509,6 +511,8 @@ class Eliza(commands.Cog):
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message) -> None:
+        if self._closed:
+            return
         if message.author.bot:
             return
         is_dm = message.guild is None
@@ -692,6 +696,8 @@ class Eliza(commands.Cog):
             f"\nMCP servers: {len(servers)} configured, "
             f"{self.mcp.connected_count()} connected, {self.mcp.tool_count()} tools."
         )
+        if self._closed:
+            description += "\n**The agent is closed.** Reload the cog to start Eliza again."
         errored = sum(1 for session in self.history.sessions.values() if session.error)
         if errored:
             description += f"\nSessions with a compaction error: {errored}."
@@ -791,6 +797,29 @@ class Eliza(commands.Cog):
             return
         await self.config.dm_rules.set(text)
         await ctx.send("The direct-message rules are set. They load at the start of the next context.")
+
+    @eliza_group.command(name="close")
+    @commands.admin()
+    async def eliza_close(self, ctx: commands.Context) -> None:
+        """Close the agent: compact and drop every session, then ignore all messages until the cog is reloaded.
+
+        Every session is summarized and the summary persists, like on a cog
+        unload. The agent then answers nothing and starts no new session, so
+        the settings can be changed without new activity. A cog reload starts
+        the agent again.
+        """
+        if self._closed:
+            await ctx.send("The agent is already closed. Reload the cog to start it again.")
+            return
+        # Closed first: no new reply starts while the compaction runs.
+        self._closed = True
+        count = len(self.history.sessions)
+        await self._compact_all()
+        self.history.sessions.clear()
+        await ctx.send(
+            f"The agent is closed. {count} session(s) compacted and dropped. "
+            "I ignore all messages until the cog is reloaded."
+        )
 
     @eliza_group.group(name="memory", invoke_without_command=True)
     @commands.admin()
