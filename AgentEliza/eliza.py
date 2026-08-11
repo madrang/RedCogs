@@ -1,6 +1,7 @@
 import asyncio
 import contextlib
 import json
+import logging
 import re
 import time
 from datetime import datetime, timezone
@@ -13,6 +14,7 @@ from redbot.core.utils.chat_formatting import pagify
 from redbot.core.utils.mod import is_admin_or_superior
 
 from .history import (
+    BACKFILL_MESSAGES,
     COMPACT_PROMPT,
     DEFAULT_CACHE_TTL,
     SUMMARY_MAX_CHARS,
@@ -25,11 +27,14 @@ from .providers import DEFAULT_PROVIDER, PROVIDERS, provider_for, provider_named
 from .stats import ScopeStats
 from .tools import HarnessTools
 
+log = logging.getLogger("red.agenteliza")
+
 SYSTEM_PROMPT = (
     "You are {name}, an AI agent on a Discord chat. Write short and clear answers.\n"
     "\n"
     "The harness marks the context with simple delimiters:\n"
-    "- A user message starts with the sender name and a colon, for example 'Alice: hello'.\n"
+    "- A user message starts with the sender name, the mention id, and a colon, for example 'Madrang <@491487179927978014>: hello'.\n"
+    "  The id lets you target that user with the memory tools or answer with a mention.\n"
     "- A memory note starts with '[memory NAME]' and ends with '[/memory]'. It shows the stored memory of that user.\n"
     "  The harness adds it before the first message of a user in this context.\n"
     "- A harness request can ask to condense the older turns. The assistant message that answers it\n"
@@ -63,16 +68,18 @@ DEFAULT_GUILD_RULES = (
 )
 DEFAULT_DM_RULES = "Be respectful. Do not generate illegal, harmful, or explicit content."
 # Cap of the rules text an admin can set. It joins the system message of every context.
-RULES_MAX_CHARS = 2000
+RULES_MAX_CHARS = 4000
 # MCP server names become tool names `<name>__<tool>`: the API accepts only these characters.
 MCP_SERVER_NAME_RE = re.compile(r"^[a-zA-Z0-9_-]{1,32}$")
 # Context backfill of a fresh session: recent channel messages from Discord.
-BACKFILL_MESSAGES = 16
-BACKFILL_MAX_CHARS = 8000
+# The message count is BACKFILL_MESSAGES from history.py: the compaction
+# keeps the same count verbatim. The size cap is in characters, the context
+# counts tokens: 128K characters is about 32K tokens at 4 per token.
+BACKFILL_MAX_CHARS = 131_072
 # Cap of the raw messages scanned to find the qualifying ones. The scan
 # pages deeper into the history until it has BACKFILL_MESSAGES messages of
 # the conversation with the agent, or this cap.
-BACKFILL_SCAN_MAX = 99
+BACKFILL_SCAN_MAX = 199
 
 
 class Eliza(commands.Cog):
@@ -106,7 +113,9 @@ class Eliza(commands.Cog):
         self.mcp = MCPManager(self.config)
         # Long-term memory lives in Config. The harness tools let the agent control it.
         self.memory = Memory(self.config)
-        self.harness_tools = HarnessTools(self.memory, self._get_session)
+        self.harness_tools = HarnessTools(
+            self.memory, self._get_session, bot.get_guild, bot.get_channel, lambda: bot.user.id if bot.user else None
+        )
         self._harness_tool_names = {tool["function"]["name"] for tool in self.harness_tools.tools()}
         # Usage stats and rate windows per scope, in Config.
         self.scope_stats = ScopeStats(self.config)
@@ -213,10 +222,11 @@ class Eliza(commands.Cog):
             return
         preset = await self._current_preset()
         cache_ttl = (preset.cache_ttl if preset is not None else None) or DEFAULT_CACHE_TTL
+        context_length = await self._context_length(preset)
         for session_id, session in list(self.history.sessions.items()):
             if session.last_compaction >= session.last_active:
                 continue
-            if not self.history.needs_compaction(session, cache_ttl):
+            if not self.history.needs_compaction(session, cache_ttl, context_length):
                 continue
             # A failed compaction marks the session. The loop task survives.
             try:
@@ -242,10 +252,31 @@ class Eliza(commands.Cog):
             except Exception as e:
                 session.error = f"{type(e).__name__}: {e}"
 
-    def _system_text(self, bot_name: str, memory_entries: list, rules_block: str = "") -> str:
-        """The system message of a context: prompt, clock, rules, memory blocks."""
+    def _place_block(self, guild_id, channel_id) -> str:
+        """The location lines of the system message: server and channel, names and descriptions."""
+        lines = []
+        if guild_id is not None:
+            guild = self.bot.get_guild(guild_id)
+            if guild is not None:
+                line = f"Server: {guild.name}"
+                if guild.description:
+                    line += f" — {' '.join(guild.description.split())}"
+                lines.append(line)
+        channel = self.bot.get_channel(channel_id)
+        if isinstance(channel, discord.abc.GuildChannel):
+            line = f"Channel: #{channel.name}"
+            topic = getattr(channel, "topic", None)
+            if topic:
+                line += f" — {' '.join(topic.split())}"
+            lines.append(line)
+        return "\n".join(lines)
+
+    def _system_text(self, bot_name: str, memory_entries: list, rules_block: str = "", place_block: str = "") -> str:
+        """The system message of a context: prompt, clock, place, rules, memory blocks."""
         text = SYSTEM_PROMPT.format(name=bot_name)
         text += f"\n\nCurrent date and time (UTC): {datetime.now(timezone.utc):%Y-%m-%d %H:%M}."
+        if place_block:
+            text += f"\n\n{place_block}"
         if rules_block:
             text += f"\n\n{rules_block}"
         for label, memory in memory_entries:
@@ -269,6 +300,12 @@ class Eliza(commands.Cog):
     async def _current_preset(self):
         """The provider matching the configured base URL, or None for a custom provider."""
         return provider_for(await self._base_url())
+
+    async def _context_length(self, preset) -> int | None:
+        """The context size of the configured model, None when unknown."""
+        if preset is None:
+            return None
+        return preset.context_length(await self._model_name())
 
     async def _fetch_usage(self):
         """Query the active provider usage endpoint. Return (rows, error_message)."""
@@ -471,7 +508,7 @@ class Eliza(commands.Cog):
                 continue
             for form in (f"<@{bot_id}>", f"<@!{bot_id}>"):
                 content = content.replace(form, bot_name)
-            turns.append({"role": "user", "content": f"{message.author.display_name}: {content.strip()}"})
+            turns.append({"role": "user", "content": f"{message.author.display_name} <@{message.author.id}>: {content.strip()}"})
         while turns and sum(len(turn["content"]) for turn in turns) > BACKFILL_MAX_CHARS:
             turns.pop(0)
         return turns
@@ -485,7 +522,7 @@ class Eliza(commands.Cog):
         # Only then is the system message rebuilt (prompt, memory, summary).
         # An agent memory update is already in the context as a tool call, so no reload between.
         expired = not session.messages or session.idle() >= cache_ttl
-        if session.messages and self.history.needs_compaction(session, cache_ttl):
+        if session.messages and self.history.needs_compaction(session, cache_ttl, await self._context_length(preset)):
             compact_usage = await self._compact(session_id, session, api_key, preset)
             if compact_usage is not None:
                 for key in usage:
@@ -505,7 +542,7 @@ class Eliza(commands.Cog):
                 rules_block = f"You talk to a limited user. User rules:\n{await self.config.dm_rules()}"
             # A fresh session lost its verbatim turns: the Discord history restores them.
             fresh = not session.messages
-            session.start_context(self._system_text(name, memory, rules_block))
+            session.start_context(self._system_text(name, memory, rules_block, self._place_block(guild_id, channel_id)))
             if fresh:
                 # The persisted summary joins as the compaction exchange, before the backfilled turns it summarizes.
                 if session.summary:
@@ -516,6 +553,7 @@ class Eliza(commands.Cog):
                         session.append(turn["role"], turn["content"])
         session.touch()
         speaker = user_name or "User"
+        tag = f"{speaker} <@{user_id}>" if user_id is not None else speaker
         additions = []
         if user_id is not None and user_id not in session.seen_users:
             user_memory = await self.memory.read("user", user_id)
@@ -524,7 +562,7 @@ class Eliza(commands.Cog):
                     "role": "user"
                     , "content": f"[memory {speaker}]\n{user_memory}\n[/memory]"
                 })
-        additions.append({"role": "user", "content": f"{speaker}: {content}"})
+        additions.append({"role": "user", "content": f"{tag}: {content}"})
         messages = [*session.messages, *additions]
         tools, routes = await self.mcp.gather_tools()
         # Harness tools come first: their list is stable, MCP tools may vary.
@@ -605,6 +643,24 @@ class Eliza(commands.Cog):
     # Listener
     #
 
+    async def _discord_call(self, action, what: str):
+        """Run one Discord API call, retrying transient failures (DNS, connection, 5xx).
+
+        discord.py already retries a 5xx answer a few times: a failure that
+        reaches the cog exhausted them, so the retry waits longer. Returns
+        None when every attempt fails. Permanent errors (4xx) raise.
+        """
+        delay = 4
+        for attempt in range(4):
+            try:
+                return await action()
+            except (aiohttp.ClientError, asyncio.TimeoutError, discord.DiscordServerError) as e:
+                if attempt == 3:
+                    log.warning("%s failed after %d attempts: %s", what, attempt + 1, e)
+                    return None
+                await asyncio.sleep(delay)
+                delay *= 2
+
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message) -> None:
         if self._closed:
@@ -650,9 +706,15 @@ class Eliza(commands.Cog):
                 , limits=await self._rate_limits()
             )
             if refused:
-                await message.channel.send(refused, allowed_mentions=discord.AllowedMentions.none())
+                await self._discord_call(
+                    lambda: message.channel.send(refused, allowed_mentions=discord.AllowedMentions.none()), "The rate-limit notice"
+                )
                 return
-        async with message.channel.typing():
+        async with contextlib.AsyncExitStack() as stack:
+            # The typing indicator is cosmetic: a transient Discord failure
+            # on it must not skip the reply. Answer without the indicator then.
+            with contextlib.suppress(aiohttp.ClientError, asyncio.TimeoutError, discord.HTTPException):
+                await stack.enter_async_context(message.channel.typing())
             reply = await self.generate_reply(
                 message.channel.id
                 , content
@@ -668,7 +730,15 @@ class Eliza(commands.Cog):
             return
         for page in pagify(reply):
             # The agent may mention: its answer is the sender's intent.
-            await message.channel.send(page, allowed_mentions=discord.AllowedMentions.all())
+            try:
+                sent = await self._discord_call(
+                    lambda: message.channel.send(page, allowed_mentions=discord.AllowedMentions.all()), "The reply send"
+                )
+            except discord.HTTPException as e:
+                log.warning("The reply send failed permanently: %s", e)
+                break
+            if sent is None:
+                break
 
     #
     # Admin commands

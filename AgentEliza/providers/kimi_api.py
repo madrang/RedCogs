@@ -6,6 +6,8 @@ class KimiApiProvider(Provider):
     name = "Kimi API"
     base_url = "https://api.moonshot.ai/v1"
     models = ["kimi-k2.6", "kimi-k2.5", "kimi-k3", "kimi-k2.7-code", "kimi-k2.7-code-highspeed", "moonshot-v1-auto"]
+    # moonshot-v1-auto routes across the legacy 8k/32k/128k set: 128k worst case.
+    context_lengths = {"moonshot-v1-auto": 131_072}
     # Documented balance endpoint.
     usage_url = "https://api.moonshot.ai/v1/users/me/balance"
 

@@ -5,13 +5,17 @@ import time
 # 5 minutes gives a user time to type a reply. A provider overrides this
 # with its `cache_ttl` class attribute once the real value is known.
 DEFAULT_CACHE_TTL = 300
-# Smallest agent context among the providers: 256K tokens.
+# Fallback context assumption for a model with no known context size:
+# 256K tokens, of which the history gets about half. A known context size
+# (provider context_lengths) replaces this with the CONTEXT_FILL fraction.
 CONTEXT_TOKENS = 256_000
 CHARS_PER_TOKEN = 4
-# The history gets about half of the context. The real token count is the
-# trigger when the API reports one. The character count is the fallback.
+# The real token count is the trigger when the API reports one. The
+# character count is the fallback.
 HISTORY_MAX_TOKENS = CONTEXT_TOKENS // 2
 HISTORY_MAX_CHARS = CONTEXT_TOKENS // 2 * CHARS_PER_TOKEN
+# Fraction of a known model context the session may fill before compaction.
+CONTEXT_FILL = 0.8
 # Cap of the rolling summary text.
 SUMMARY_MAX_CHARS = 4000
 
@@ -25,8 +29,12 @@ COMPACT_PROMPT = (
 # The user-role turn that introduces the summary inside a session: the
 # harness request, answered by the agent with the summary as its own reply.
 COMPACT_NOTE = "(harness request: condense the older turns of this conversation into a summary.)"
-# Recent turns kept verbatim through a compaction.
-COMPACTION_KEEP_TURNS = 4
+# Context backfill target of a fresh session: recent channel messages from
+# Discord. eliza.py scans the channel history for them.
+BACKFILL_MESSAGES = 64
+# Recent turns kept verbatim through a compaction: as many as the backfill
+# restores on a fresh session.
+COMPACTION_KEEP_TURNS = BACKFILL_MESSAGES
 
 
 class Session:
@@ -137,20 +145,28 @@ class History:
             session.summary = await self.memory.read_summary(scope, session_id)
         return session
 
-    def needs_compaction(self, session: Session, cache_ttl: int) -> bool:
+    def needs_compaction(self, session: Session, cache_ttl: int, context_tokens: int | None = None) -> bool:
         """True when the session should be compacted.
 
         Size trigger: the real prompt token count of the last answer when
-        the API reports one, the character estimate otherwise. Idle trigger:
-        the session went idle past half the provider cache lifetime, so
-        compacting still hits the warm prompt cache for the summarization
-        call. Used by the reply path and by the background sweeper.
+        the API reports one, the character estimate otherwise. The budget is
+        CONTEXT_FILL of the model context when context_tokens is known, the
+        HISTORY_MAX fallback otherwise. Idle trigger: the session went idle
+        past half the provider cache lifetime, so compacting still hits the
+        warm prompt cache for the summarization call. Used by the reply path
+        and by the background sweeper.
         """
         if len(session.messages) <= 1:
             return False
+        if context_tokens:
+            max_tokens = int(context_tokens * CONTEXT_FILL)
+            max_chars = max_tokens * CHARS_PER_TOKEN
+        else:
+            max_tokens = HISTORY_MAX_TOKENS
+            max_chars = HISTORY_MAX_CHARS
         if session.last_prompt_tokens:
-            if session.last_prompt_tokens >= HISTORY_MAX_TOKENS:
+            if session.last_prompt_tokens >= max_tokens:
                 return True
-        elif session.size >= HISTORY_MAX_CHARS:
+        elif session.size >= max_chars:
             return True
         return session.idle() >= cache_ttl / 2

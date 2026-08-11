@@ -4,6 +4,8 @@ class ZaiProvider(Provider):
     """Z.AI quota monitor (undocumented, reverse-engineered; may change)."""
 
     usage_url = "https://api.z.ai/api/monitor/usage/quota/limit"
+    # Reported by the owner: glm-5.2 runs a 1M-token context.
+    context_lengths = {"glm-5.2": 1_048_576}
 
     def parse_usage(self, data: dict) -> list:
         payload = data.get("data") if isinstance(data.get("data"), dict) else data

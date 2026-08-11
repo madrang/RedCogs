@@ -6,6 +6,8 @@ class KimiCodeProvider(Provider):
     name = "Kimi Code"
     base_url = "https://api.kimi.com/coding/v1"
     models = ["k3-256k", "k3", "kimi-for-coding", "kimi-for-coding-highspeed"]
+    # The official CLI assumes 262144 tokens; k3-256k carries it in the name.
+    context_lengths = {"k3-256k": 262_144}
     # Undocumented endpoint, used by the official CLI.
     usage_url = "https://api.kimi.com/coding/v1/usages"
 

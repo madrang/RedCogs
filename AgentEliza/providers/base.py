@@ -17,6 +17,14 @@ class Provider:
     # Documented prompt-cache lifetime in seconds. None: undocumented, the
     # harness assumes DEFAULT_CACHE_TTL from history.py instead.
     cache_ttl: int | None = None
+    # Context size in tokens per model. A model without an entry is unknown:
+    # the harness falls back to its default budget (CONTEXT_TOKENS in
+    # history.py, of which the history uses half).
+    context_lengths: dict = {}
+
+    def context_length(self, model_name: str) -> int | None:
+        """The context size of a model in tokens, None when unknown."""
+        return self.context_lengths.get(model_name)
 
     def extra_payload(self, session_id: int) -> dict:
         """Extra fields for the chat completions payload."""
