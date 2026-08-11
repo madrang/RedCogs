@@ -385,7 +385,8 @@ class Eliza(commands.Cog):
                     return None, f"The API returned an error (HTTP {response.status}): {data}"
                 return data, None
         except (aiohttp.ClientError, asyncio.TimeoutError) as e:
-            return None, f"The connection to the API failed: {e}"
+            log.warning("The API request failed: %s: %s", type(e).__name__, e)
+            return None, f"The connection to the API failed: {type(e).__name__}: {e}"
 
     @staticmethod
     def _message_of(data: dict) -> dict | None:
