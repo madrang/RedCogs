@@ -362,31 +362,44 @@ class Eliza(commands.Cog):
         return None
 
     async def _chat_request(self, api_key: str, payload: dict):
-        """One POST to the chat API. Return (data, error_message)."""
+        """One POST to the chat API. Return (data, error_message).
+
+        A stalled connect (flaky DNS, dead route) raises a ClientError or a
+        TimeoutError. Retry those like the Discord calls: 4 attempts, 4/8/16 s
+        backoff. An HTTP error answer is a real reply of the API: not retried.
+        """
         if self.session is None or self.session.closed:
             self.session = self._new_session()
         base_url = await self._base_url()
-        try:
-            async with self.session.post(
-                f"{base_url}/chat/completions",
-                headers={"Authorization": f"Bearer {api_key}"},
-                json=payload,
-                timeout=aiohttp.ClientTimeout(total=60),
-            ) as response:
-                try:
-                    data = await response.json(content_type=None)
-                except Exception:
-                    data = None
-                if response.status == 401:
-                    return None, "The API rejected the API key (401). An admin can check it with the `eliza status` command."
-                if response.status == 429:
-                    return None, "The API rate limit is reached. Try again later."
-                if response.status != 200 or not data:
-                    return None, f"The API returned an error (HTTP {response.status}): {data}"
-                return data, None
-        except (aiohttp.ClientError, asyncio.TimeoutError) as e:
-            log.warning("The API request failed: %s: %s", type(e).__name__, e)
-            return None, f"The connection to the API failed: {type(e).__name__}: {e}"
+        delay = 4
+        for attempt in range(4):
+            try:
+                async with self.session.post(
+                    f"{base_url}/chat/completions",
+                    headers={"Authorization": f"Bearer {api_key}"},
+                    json=payload,
+                    # total caps the whole request; sock_connect fails a
+                    # stalled connect fast so the retry probes again sooner.
+                    timeout=aiohttp.ClientTimeout(total=60, sock_connect=15),
+                ) as response:
+                    try:
+                        data = await response.json(content_type=None)
+                    except Exception:
+                        data = None
+                    if response.status == 401:
+                        return None, "The API rejected the API key (401). An admin can check it with the `eliza status` command."
+                    if response.status == 429:
+                        return None, "The API rate limit is reached. Try again later."
+                    if response.status != 200 or not data:
+                        return None, f"The API returned an error (HTTP {response.status}): {data}"
+                    return data, None
+            except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+                if attempt == 3:
+                    log.warning("The API request failed after %d attempts: %s: %s", attempt + 1, type(e).__name__, e)
+                    return None, f"The connection to the API failed: {type(e).__name__}: {e}"
+                log.info("The API request failed, attempt %d: %s: %s", attempt + 1, type(e).__name__, e)
+                await asyncio.sleep(delay)
+                delay *= 2
 
     @staticmethod
     def _message_of(data: dict) -> dict | None:
