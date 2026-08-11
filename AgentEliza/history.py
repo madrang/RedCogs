@@ -28,7 +28,8 @@ COMPACT_PROMPT = (
 )
 # The user-role turn that introduces the summary inside a session: the
 # harness request, answered by the agent with the summary as its own reply.
-COMPACT_NOTE = "(harness request: condense the older turns of this conversation into a summary.)"
+# Harness messages use the same square-bracket tags as the memory notes.
+COMPACT_NOTE = "[harness] condense the older part of this conversation into a summary. [/harness]"
 # Context backfill target of a fresh session: recent channel messages from
 # Discord. eliza.py scans the channel history for them.
 BACKFILL_MESSAGES = 64
