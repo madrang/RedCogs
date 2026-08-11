@@ -1,6 +1,7 @@
 import asyncio
 import contextlib
 import json
+import logging
 import time
 from contextlib import AsyncExitStack
 
@@ -22,6 +23,10 @@ MCP_TOOL_RESULT_MAX_CHARS = 8000
 # Cap of the connect and tool-list phase of a server. A hung stdio process
 # must not block a reply forever.
 MCP_CONNECT_TIMEOUT = 30
+# Cap of the tool arguments in the log line.
+MCP_LOG_ARGS_MAX_CHARS = 500
+
+log = logging.getLogger("red.agenteliza.mcp")
 
 
 class MCPConnection:
@@ -101,12 +106,18 @@ class MCPConnection:
         """Run one tool on this server and return its output as text."""
         client = await self.get_client()
         if client is None:
+            log.info("Tool call %s.%s skipped: the server is unavailable: %s", self.name, tool_name, self.error or "unknown error")
             return f"Error: MCP server {self.name} is unavailable: {self.error or 'unknown error'}"
+        args_text = json.dumps(arguments, default=str)
+        if len(args_text) > MCP_LOG_ARGS_MAX_CHARS:
+            args_text = args_text[:MCP_LOG_ARGS_MAX_CHARS] + "..."
+        log.info("Tool call %s.%s(%s)", self.name, tool_name, args_text)
         try:
             result = await client.call_tool(tool_name, arguments)
         except Exception as e:
             # Drop the session so the next call reconnects.
             await self.close()
+            log.warning("Tool call %s.%s failed: %s: %s", self.name, tool_name, type(e).__name__, e)
             return f"Error: the tool call failed: {e}"
         parts = [block.text for block in result.content if isinstance(block, TextContent)]
         text = "\n".join(parts)
@@ -116,6 +127,10 @@ class MCPConnection:
             dropped = len(text) - MCP_TOOL_RESULT_MAX_CHARS
             text = text[:MCP_TOOL_RESULT_MAX_CHARS] + f"\n[truncated: {dropped} characters dropped]"
         if result.is_error:
+            error_text = text
+            if len(error_text) > MCP_LOG_ARGS_MAX_CHARS:
+                error_text = error_text[:MCP_LOG_ARGS_MAX_CHARS] + "..."
+            log.warning("Tool call %s.%s returned an error: %s", self.name, tool_name, error_text)
             return f"Error: {text}"
         return text or "(no output)"
 
