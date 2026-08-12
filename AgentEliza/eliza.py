@@ -66,7 +66,7 @@ SYSTEM_PROMPT = (
     "You can also use the Discord forms: ||spoiler||, -# subtext, [masked links](https://url), and <t:UNIX:R> timestamps.\n"
     "A mention pings its target: <@USER_ID> for a user, <@&ROLE_ID> for a role, @here for the online members."
 )
-MCP_TOOL_ROUNDS = 6
+MCP_TOOL_ROUNDS = 16
 USER_AGENT = "RedBot Chat Cog"
 USAGE_CACHE_SECONDS = 300
 # The reply sent when the model returns no content at all.
