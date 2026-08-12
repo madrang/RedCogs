@@ -18,14 +18,28 @@ SCOPE_ALIASES = {
     "user": "user",
 }
 # Cap of one web tool result. A giant page can fill the context in one call.
-WEB_TOOL_RESULT_MAX_CHARS = 8000
+WEB_TOOL_RESULT_MAX_CHARS = 32_000
 # Cap of the bytes read from one fetched page.
 WEB_FETCH_MAX_BYTES = 1_000_000
 WEB_TIMEOUT = aiohttp.ClientTimeout(total=30)
 WEB_SEARCH_URL = "https://html.duckduckgo.com/html/?q="
 WEB_SEARCH_MAX_RESULTS = 8
-# DuckDuckGo answers the default aiohttp agent with an anomaly page (202).
-BROWSER_USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0"
+# DuckDuckGo answers a non-browser request with an anomaly page (202). The
+# check scores the full header set: the User-Agent alone passes only
+# sometimes. No brotli in Accept-Encoding: the Brotli package is not a
+# dependency.
+BROWSER_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.5",
+    "Accept-Encoding": "gzip, deflate",
+    "DNT": "1",
+    "Upgrade-Insecure-Requests": "1",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+    "Sec-Fetch-User": "?1",
+}
 # Tags whose content is not page text.
 _SKIP_TAGS = {"script", "style", "noscript", "template", "head"}
 # Caps of the history_read tool: the raw messages scanned, and the
@@ -649,7 +663,7 @@ class HarnessTools:
         try:
             async with self.session_getter().get(
                 WEB_SEARCH_URL + quote_plus(query)
-                , headers={"User-Agent": BROWSER_USER_AGENT}
+                , headers=BROWSER_HEADERS
                 , timeout=WEB_TIMEOUT
             ) as response:
                 if response.status != 200:
