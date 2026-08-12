@@ -91,6 +91,17 @@ BACKFILL_MAX_CHARS = 131_072
 # pages deeper into the history until it has BACKFILL_MESSAGES messages of
 # the conversation with the agent, or this cap.
 BACKFILL_SCAN_MAX = 199
+# The timeout of a user whose exchange trips the provider content filter.
+FILTER_TIMEOUT = 1800
+
+
+class ChatError(Exception):
+    """A classified API error. `kind` names the category, `raw` keeps the provider body or the original exception."""
+
+    def __init__(self, kind: str, text: str, raw=None):
+        super().__init__(text)
+        self.kind = kind
+        self.raw = raw
 
 
 class Eliza(commands.Cog):
@@ -104,6 +115,8 @@ class Eliza(commands.Cog):
         self.session: aiohttp.ClientSession | None = None
         # When closed, the agent ignores every message until the cog is reloaded.
         self._closed = False
+        # Users timed out after a content filter rejection: user id -> monotonic expiry.
+        self._filter_timeouts = {}
         # Usage endpoint cache: (monotonic timestamp, rows) or None.
         self._usage_cache = None
         # Init config. The identifier must stay unique and stable.
@@ -186,6 +199,8 @@ class Eliza(commands.Cog):
         key. The caller holds the session lock, so the session cannot change
         during the call. Returns the token usage of the call, or None on
         failure: the session then stays as it is and the next message retries.
+        A content filter rejection is permanent: the session is unloaded and
+        the error raised again for the caller.
         """
         old = session.plan_compaction()
         if not old:
@@ -202,9 +217,18 @@ class Eliza(commands.Cog):
         }
         if preset is not None:
             payload.update(preset.extra_payload(session_id))
-        data, error = await self._chat_request(api_key, payload)
-        if error:
-            return None
+        try:
+            data = await self._chat_request(api_key, payload)
+        except ChatError as e:
+            if e.kind != "content_filter":
+                return None
+            # The turns trip the provider filter: no summary is possible,
+            # and a retry sends the same rejected content. Unload the
+            # session. A fresh one starts on the next message. The caller
+            # gets the error to handle.
+            log.info("The content filter rejected a compaction: session %s is unloaded.", session_id)
+            self.history.sessions.pop(session_id, None)
+            raise
         message = self._message_of(data)
         if message is None:
             return None
@@ -372,12 +396,16 @@ class Eliza(commands.Cog):
                 )
         return None
 
-    async def _chat_request(self, api_key: str, payload: dict):
-        """One POST to the chat API. Return (data, error_message).
+    async def _chat_request(self, api_key: str, payload: dict) -> dict:
+        """One POST to the chat API. Return the answer data. Raise ChatError on any failure.
 
         A stalled connect (flaky DNS, dead route) raises a ClientError or a
         TimeoutError. Retry those like the Discord calls: 4 attempts, 4/8/16 s
         backoff. An HTTP error answer is a real reply of the API: not retried.
+        The error body follows the OpenAI-style envelope `error: {code,
+        message}` with an optional `contentFilter` array. The presence of
+        `contentFilter` marks a provider content filter rejection, whatever
+        the status code.
         """
         if self.session is None or self.session.closed:
             self.session = self._new_session()
@@ -398,17 +426,41 @@ class Eliza(commands.Cog):
                         data = await response.json(content_type=None)
                     except Exception:
                         data = None
+                    if isinstance(data, dict) and data.get("contentFilter"):
+                        log.info(
+                            "The API content filter rejected the request (HTTP %s): %s",
+                            response.status, (data.get("error") or {}).get("message"),
+                        )
+                        raise ChatError(
+                            "content_filter",
+                            "The provider content filter rejected this exchange.",
+                            raw=data,
+                        )
+                    if response.status == 400:
+                        log.warning("The API rejected the request as invalid (400): %s", data)
+                        message = (data.get("error") or {}).get("message") if isinstance(data, dict) else None
+                        detail = message or data
+                        raise ChatError("bad_request", f"The API rejected the request (400): {detail}", raw=data)
                     if response.status == 401:
-                        return None, "The API rejected the API key (401). An admin can check it with the `eliza status` command."
+                        log.warning("The API rejected the API key (401).")
+                        raise ChatError(
+                            "auth",
+                            "The API rejected the API key (401). An admin can check it with the `eliza status` command.",
+                            raw=data,
+                        )
                     if response.status == 429:
-                        return None, "The API rate limit is reached. Try again later."
+                        log.warning("The API rate limit is reached (429): %s", data)
+                        raise ChatError("rate_limit", "The API rate limit is reached. Try again later.", raw=data)
                     if response.status != 200 or not data:
-                        return None, f"The API returned an error (HTTP {response.status}): {data}"
-                    return data, None
+                        log.warning("The API request failed (HTTP %s): %s", response.status, data)
+                        message = (data.get("error") or {}).get("message") if isinstance(data, dict) else None
+                        detail = message or data
+                        raise ChatError("http", f"The API returned an error (HTTP {response.status}): {detail}", raw=data)
+                    return data
             except (aiohttp.ClientError, asyncio.TimeoutError) as e:
                 if attempt == 3:
                     log.warning("The API request failed after %d attempts: %s: %s", attempt + 1, type(e).__name__, e)
-                    return None, f"The connection to the API failed: {type(e).__name__}: {e}"
+                    raise ChatError("connection", f"The connection to the API failed: {type(e).__name__}: {e}", raw=e) from e
                 log.info("The API request failed, attempt %d: %s: %s", attempt + 1, type(e).__name__, e)
                 await asyncio.sleep(delay)
                 delay *= 2
@@ -494,8 +546,11 @@ class Eliza(commands.Cog):
         messages that mention the bot or reply to it. The scan pages deeper
         into the history until it has BACKFILL_MESSAGES qualifying messages,
         or until BACKFILL_SCAN_MAX raw messages are scanned. Consecutive bot
-        messages (pagified replies) merge into one assistant turn. Return an
-        empty list on any failure: the backfill never breaks a reply.
+        messages (pagified replies) merge into one assistant turn. A bot reply
+        is a harness notice (API error, content filter timeout), never an
+        agent answer: the notice and the message it answers stay out of the
+        context. Return an empty list on any failure: the backfill never
+        breaks a reply.
         """
         if self.bot.user is None:
             return []
@@ -509,9 +564,21 @@ class Eliza(commands.Cog):
             prefixes = ()
         try:
             qualifying = []
-            async for message in channel.history(limit=BACKFILL_SCAN_MAX):
+            skipped = set()
+            # Newest first (pinned by oldest_first=False): a reply notice is
+            # always seen before the message it answers.
+            async for message in channel.history(limit=BACKFILL_SCAN_MAX, oldest_first=False):
                 if message.id == skip_id:
                     # The triggering message joins the context as the new user turn.
+                    continue
+                if message.author.id == bot_id and message.type == discord.MessageType.reply:
+                    # A bot reply is a harness notice, never an agent answer: the
+                    # agent posts plainly. The notice and the message it answers
+                    # stay out of the context.
+                    if message.reference is not None and message.reference.message_id is not None:
+                        skipped.add(message.reference.message_id)
+                    continue
+                if message.id in skipped:
                     continue
                 if not message.content.strip() or (prefixes and message.content.strip().startswith(prefixes)):
                     continue
@@ -606,9 +673,7 @@ class Eliza(commands.Cog):
             payload["tool_choice"] = "auto"
         rounds = MCP_TOOL_ROUNDS if tools else 1
         for _ in range(rounds):
-            data, error = await self._chat_request(api_key, payload)
-            if error:
-                return error
+            data = await self._chat_request(api_key, payload)
             round_usage = data.get("usage") or {}
             for key in usage:
                 usage[key] += round_usage.get(key) or 0
@@ -649,17 +714,16 @@ class Eliza(commands.Cog):
                 })
         # The rounds are spent: one last pass without tools, so the model can answer with what it found.
         payload["tool_choice"] = "none"
-        data, error = await self._chat_request(api_key, payload)
-        if not error:
-            round_usage = data.get("usage") or {}
-            for key in usage:
-                usage[key] += round_usage.get(key) or 0
-            message = self._message_of(data)
-            if message is not None:
-                await self._record_turn(
-                    session, additions, message.get("content") or "", guild_id=guild_id, channel_id=channel_id, user_id=user_id, usage=usage
-                )
-                return self._normalize_reply(message)
+        data = await self._chat_request(api_key, payload)
+        round_usage = data.get("usage") or {}
+        for key in usage:
+            usage[key] += round_usage.get(key) or 0
+        message = self._message_of(data)
+        if message is not None:
+            await self._record_turn(
+                session, additions, message.get("content") or "", guild_id=guild_id, channel_id=channel_id, user_id=user_id, usage=usage
+            )
+            return self._normalize_reply(message)
         await self.scope_stats.record(
             guild_id=guild_id, channel_id=channel_id, user_id=user_id, usage=usage
         )
@@ -704,6 +768,20 @@ class Eliza(commands.Cog):
         ctx = await self.bot.get_context(message)
         if ctx.valid:
             return
+        expiry = self._filter_timeouts.get(message.author.id, 0)
+        if expiry > time.monotonic():
+            # The message is not processed. The reply tells the user and marks
+            # the message: the backfill keeps a message the bot answered out
+            # of the context.
+            left = int((expiry - time.monotonic() + 59) // 60)
+            await self._discord_call(
+                lambda: message.reply(
+                    f"⏳ You are timed out after a content filter rejection. {left} minutes left.",
+                    mention_author=False, allowed_mentions=discord.AllowedMentions.none(),
+                ),
+                "The timeout notice",
+            )
+            return
         content = message.content
         # The name users address the bot by: the guild nickname when set, else the account name.
         bot_name = self.bot.user.name if self.bot.user else "Eliza"
@@ -741,16 +819,37 @@ class Eliza(commands.Cog):
             # on it must not skip the reply. Answer without the indicator then.
             with contextlib.suppress(aiohttp.ClientError, asyncio.TimeoutError, discord.HTTPException):
                 await stack.enter_async_context(message.channel.typing())
-            reply = await self.generate_reply(
-                message.channel.id
-                , content
-                , guild_id=guild_id
-                , user_id=message.author.id
-                , bot_name=bot_name
-                , user_name=message.author.display_name
-                , is_owner=is_owner
-                , message_id=message.id
-            )
+            try:
+                reply = await self.generate_reply(
+                    message.channel.id
+                    , content
+                    , guild_id=guild_id
+                    , user_id=message.author.id
+                    , bot_name=bot_name
+                    , user_name=message.author.display_name
+                    , is_owner=is_owner
+                    , message_id=message.id
+                )
+            except ChatError as e:
+                # The API error reaches the user as a notice, the raw provider answer in a code block.
+                raw = e.raw
+                if isinstance(raw, (dict, list)):
+                    raw = json.dumps(raw, ensure_ascii=False)
+                detail = f"\n```\n{str(raw)[:1500]}\n```" if raw else ""
+                notice = f"⚠️ {e}{detail}"
+                if e.kind == "content_filter" and not is_owner:
+                    now = time.monotonic()
+                    self._filter_timeouts = {uid: expiry for uid, expiry in self._filter_timeouts.items() if expiry > now}
+                    self._filter_timeouts[message.author.id] = now + FILTER_TIMEOUT
+                    notice += f"\nYou are on a {FILTER_TIMEOUT // 60}-minute timeout."
+                # The notice answers the message directly: the agent only posts
+                # plainly, so a bot reply marks a filtered exchange. The backfill
+                # keeps the notice and the message it answers out of the context.
+                await self._discord_call(
+                    lambda: message.reply(notice, mention_author=False, allowed_mentions=discord.AllowedMentions.none()),
+                    "The error notice",
+                )
+                return
         if reply is None:
             # The agent refused to reply with the no-reply tag.
             return
