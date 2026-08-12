@@ -61,12 +61,16 @@ SYSTEM_PROMPT = (
     "Conversation rules:\n"
     "- An empty message is a poke. The user wants your attention and said nothing.\n"
     "- To stay silent, answer with only '[no-reply]'. The harness then sends nothing.\n"
+    "- When a user mentions a past event that you do not know, use the history_read tool to find the exchange.\n"
+    "- After 10 tool calls in one answer, finish the answer in text without tools.\n"
     "\n"
     "Discord renders your answers. You can use markdown: **bold**, *italics*, `code`, code blocks, quotes, and lists.\n"
     "You can also use the Discord forms: ||spoiler||, -# subtext, [masked links](https://url), and <t:UNIX:R> timestamps.\n"
     "A mention pings its target: <@USER_ID> for a user, <@&ROLE_ID> for a role, @here for the online members."
 )
 MCP_TOOL_ROUNDS = 16
+# The system prompt tells the agent a limit of 10 tool calls. The gap gives
+# slack when the agent miscounts its own calls.
 USER_AGENT = "RedBot Chat Cog"
 USAGE_CACHE_SECONDS = 300
 # The reply sent when the model returns no content at all.
