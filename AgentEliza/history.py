@@ -5,6 +5,10 @@ import time
 # 5 minutes gives a user time to type a reply. A provider overrides this
 # with its `cache_ttl` class attribute once the real value is known.
 DEFAULT_CACHE_TTL = 300
+# The sweeper compacts a session at this fraction of the cache lifetime,
+# while the provider prompt cache is still warm for the summarization call.
+# 0.8 of 5 minutes is 4 minutes.
+COMPACTION_AT = 0.8
 # Fallback context assumption for a model with no known context size:
 # 256K tokens, of which the history gets about half. A known context size
 # (provider context_lengths) replaces this with the CONTEXT_FILL fraction.
@@ -153,9 +157,9 @@ class History:
         the API reports one, the character estimate otherwise. The budget is
         CONTEXT_FILL of the model context when context_tokens is known, the
         HISTORY_MAX fallback otherwise. Idle trigger: the session went idle
-        past half the provider cache lifetime, so compacting still hits the
-        warm prompt cache for the summarization call. Used by the reply path
-        and by the background sweeper.
+        past COMPACTION_AT of the provider cache lifetime, so compacting
+        still hits the warm prompt cache for the summarization call. Used by
+        the reply path and by the background sweeper.
         """
         if len(session.messages) <= 1:
             return False
@@ -170,4 +174,4 @@ class History:
                 return True
         elif session.size >= max_chars:
             return True
-        return session.idle() >= cache_ttl / 2
+        return session.idle() >= cache_ttl * COMPACTION_AT

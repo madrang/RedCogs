@@ -690,8 +690,16 @@ class Eliza(commands.Cog):
                     session, additions, message.get("content") or "", guild_id=guild_id, channel_id=channel_id, user_id=user_id, usage=usage
                 )
                 return self._normalize_reply(message)
-            # Rebuild the echo: provider-specific fields can be rejected on the next request.
+            # Rebuild the echo instead of reusing the inbound message: most
+            # provider-specific fields can be rejected on the next request.
+            # Reasoning is the exception: Kimi accepts reasoning_content back,
+            # the newer vLLM dialect uses reasoning. Echo the field the
+            # provider sent, so the model keeps its thinking across the tool
+            # rounds of this reply.
             echo = {"role": "assistant", "content": message.get("content") or ""}
+            for key in ("reasoning_content", "reasoning"):
+                if message.get(key):
+                    echo[key] = message[key]
             echo["tool_calls"] = tool_calls
             messages.append(echo)
             for call in tool_calls:
