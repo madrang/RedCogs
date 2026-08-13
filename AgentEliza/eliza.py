@@ -25,7 +25,7 @@ from .mcp_manager import MCPManager
 from .memory import MEMORY_MAX_CHARS, Memory
 from .providers import DEFAULT_PROVIDER, PROVIDERS, provider_for, provider_named
 from .stats import ScopeStats
-from .tools import HarnessTools
+from .tools import HarnessTools, MESSAGE_TIME_FORMAT
 
 log = logging.getLogger("red.agenteliza")
 
@@ -33,7 +33,7 @@ SYSTEM_PROMPT = (
     "You are {name}, an AI agent on a Discord chat. Write short and clear answers.\n"
     "\n"
     "The harness marks the context with simple delimiters:\n"
-    "- A user message starts with the sender name, the mention id, and a colon, for example 'Madrang <@491487179927978014>: hello'.\n"
+    "- A user message starts with the UTC time, the sender name, the mention id, and a colon, for example '2026-08-12T14:30Z Madrang <@491487179927978014>: hello'.\n"
     "  The id lets you target that user with the memory tools or answer with a mention.\n"
     "- A memory note starts with '[memory NAME]' and ends with '[/memory]'. It shows the stored memory of that user.\n"
     "  The harness adds it before the first message of a user in this context.\n"
@@ -311,9 +311,8 @@ class Eliza(commands.Cog):
         return "\n".join(lines)
 
     def _system_text(self, bot_name: str, memory_entries: list, rules_block: str = "", place_block: str = "") -> str:
-        """The system message of a context: prompt, clock, place, rules, memory blocks."""
+        """The system message of a context: prompt, place, rules, memory blocks."""
         text = SYSTEM_PROMPT.format(name=bot_name)
-        text += f"\n\nCurrent date and time (UTC): {datetime.now(timezone.utc):%Y-%m-%d %H:%M}."
         if place_block:
             text += f"\n\n{place_block}"
         if rules_block:
@@ -605,7 +604,8 @@ class Eliza(commands.Cog):
                 continue
             for form in (f"<@{bot_id}>", f"<@!{bot_id}>"):
                 content = content.replace(form, bot_name)
-            turns.append({"role": "user", "content": f"{message.author.display_name} <@{message.author.id}>: {content.strip()}"})
+            stamp = f"{message.created_at:{MESSAGE_TIME_FORMAT}}"
+            turns.append({"role": "user", "content": f"{stamp} {message.author.display_name} <@{message.author.id}>: {content.strip()}"})
         while turns and sum(len(turn["content"]) for turn in turns) > BACKFILL_MAX_CHARS:
             turns.pop(0)
         return turns
@@ -659,7 +659,12 @@ class Eliza(commands.Cog):
                     "role": "user"
                     , "content": f"[memory {speaker}]\n{user_memory}\n[/memory]"
                 })
-        additions.append({"role": "user", "content": f"{tag}: {content}"})
+        if message_id is not None:
+            # The message snowflake carries the send time of the message.
+            stamp = f"{discord.utils.snowflake_time(message_id):{MESSAGE_TIME_FORMAT}}"
+        else:
+            stamp = f"{datetime.now(timezone.utc):{MESSAGE_TIME_FORMAT}}"
+        additions.append({"role": "user", "content": f"{stamp} {tag}: {content}"})
         messages = [*session.messages, *additions]
         tools, routes = await self.mcp.gather_tools()
         # Harness tools come first: their list is stable, MCP tools may vary.

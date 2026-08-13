@@ -50,6 +50,9 @@ HISTORY_READ_MAX_RESULTS = 64
 HISTORY_READ_DEFAULT_RESULTS = 20
 # Cap of one message text in a history_read result.
 HISTORY_READ_MESSAGE_MAX_CHARS = 1000
+# The message time format everywhere: turn stamps in the context, history_read
+# output, history_read after/before input. ISO 8601, UTC, minute precision.
+MESSAGE_TIME_FORMAT = "%Y-%m-%dT%H:%MZ"
 # Base Discord upload limit (25 MiB), for direct messages. A guild channel
 # reports its own limit in guild.filesize_limit (boosted servers get more).
 FILE_SEND_DM_MAX_BYTES = 26_214_400
@@ -271,14 +274,14 @@ class HarnessTools:
                             , "after": {
                                 "type": "string"
                                 , "description": (
-                                    "Optional. A UTC date or date-time, for example 2026-08-11 or 2026-08-11 14:30. "
+                                    "Optional. A UTC date or date-time, for example 2026-08-11 or 2026-08-11T14:30Z. "
                                     "With before, the messages between the two times. Alone, the messages around that time."
                                 )
                             }
                             , "before": {
                                 "type": "string"
                                 , "description": (
-                                    "Optional. A UTC date or date-time, for example 2026-08-11 or 2026-08-11 14:30. "
+                                    "Optional. A UTC date or date-time, for example 2026-08-11 or 2026-08-11T14:30Z. "
                                     "With after, the messages between the two times. Alone, the messages around that time."
                                 )
                             }
@@ -555,11 +558,11 @@ class HarnessTools:
         if value is None:
             return None, None
         if not isinstance(value, str) or not value.strip():
-            return None, f"Error: the {name} time must be a string, for example 2026-08-11 or 2026-08-11 14:30."
+            return None, f"Error: the {name} time must be a string, for example 2026-08-11 or 2026-08-11T14:30Z."
         try:
             parsed = datetime.fromisoformat(value.strip())
         except ValueError:
-            return None, f"Error: cannot read the {name} time {value!r}. Use a UTC date or date-time, for example 2026-08-11 14:30."
+            return None, f"Error: cannot read the {name} time {value!r}. Use a UTC date or date-time, for example 2026-08-11T14:30Z."
         if parsed.tzinfo is None:
             parsed = parsed.replace(tzinfo=timezone.utc)
         return parsed, None
@@ -635,7 +638,7 @@ class HarnessTools:
             content = " ".join(message.content.split())
             if len(content) > HISTORY_READ_MESSAGE_MAX_CHARS:
                 content = content[:HISTORY_READ_MESSAGE_MAX_CHARS] + " [...]"
-            lines.append(f"{message.created_at:%Y-%m-%d %H:%M} {message.author.display_name} <@{message.author.id}>: {content}")
+            lines.append(f"{message.created_at:{MESSAGE_TIME_FORMAT}} {message.author.display_name} <@{message.author.id}>: {content}")
         return _cap("\n".join(lines))
 
     async def _tool_file_send(self, arguments: dict, *, guild_id, channel_id, user_id) -> str:
