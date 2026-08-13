@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+import io
 import json
 import logging
 import re
@@ -102,6 +103,11 @@ BACKFILL_MAX_CHARS = 131_072
 BACKFILL_SCAN_MAX = 199
 # The timeout of a user whose exchange trips the provider content filter.
 FILTER_TIMEOUT = 1800
+# An extremely long answer must not flood the channel: past
+# LONG_REPLY_MAX_CHARS (4 pages) it posts only the head (2 pages) inline and
+# the full text as a file.
+LONG_REPLY_MAX_CHARS = 8_000
+LONG_REPLY_HEAD_CHARS = 3800
 
 
 class ChatError(Exception):
@@ -917,6 +923,31 @@ class Eliza(commands.Cog):
                 return
         if reply is None:
             # The agent refused to reply with the no-reply tag.
+            return
+        if len(reply) > LONG_REPLY_MAX_CHARS:
+            # An extremely long answer does not flood the channel: two pages
+            # inline, the full text as a file. A failed upload posts the two
+            # pages with a note instead.
+            head = reply[:LONG_REPLY_HEAD_CHARS]
+            file = discord.File(io.BytesIO(reply.encode("utf-8")), filename=f"eliza-reply-{message.id}.txt")
+            pages = list(pagify(head + "\n[...] the answer continues in the attached file"))
+            sent = await self._discord_call(
+                lambda: message.channel.send(pages[0], file=file, allowed_mentions=discord.AllowedMentions.all()),
+                "The reply file send",
+            )
+            if sent is None:
+                pages = list(pagify(head + "\n[...] the full answer could not be attached: the file upload failed"))
+                for page in pages:
+                    await self._discord_call(
+                        lambda: message.channel.send(page, allowed_mentions=discord.AllowedMentions.all()),
+                        "The reply page send",
+                    )
+            else:
+                for page in pages[1:]:
+                    await self._discord_call(
+                        lambda: message.channel.send(page, allowed_mentions=discord.AllowedMentions.all()),
+                        "The reply page send",
+                    )
             return
         for page in pagify(reply):
             # The agent may mention: its answer is the sender's intent.
