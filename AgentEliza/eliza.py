@@ -711,7 +711,13 @@ class Eliza(commands.Cog):
         # the API sent them. The session keeps them until a compaction.
         exchange = []
         for _ in range(rounds):
-            data = await self._chat_request(api_key, payload)
+            try:
+                data = await self._chat_request(api_key, payload)
+            finally:
+                # The idle and cache clock counts from the last provider
+                # contact, not from the user message: a long generation or a
+                # tool round re-warms the cache when its answer arrives.
+                session.touch()
             round_usage = data.get("usage") or {}
             for key in usage:
                 usage[key] += round_usage.get(key) or 0
@@ -762,7 +768,10 @@ class Eliza(commands.Cog):
                 exchange.append(result)
         # The rounds are spent: one last pass without tools, so the model can answer with what it found.
         payload["tool_choice"] = "none"
-        data = await self._chat_request(api_key, payload)
+        try:
+            data = await self._chat_request(api_key, payload)
+        finally:
+            session.touch()
         round_usage = data.get("usage") or {}
         for key in usage:
             usage[key] += round_usage.get(key) or 0
