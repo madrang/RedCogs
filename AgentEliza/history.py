@@ -23,17 +23,18 @@ CONTEXT_FILL = 0.8
 # Cap of the rolling summary text.
 SUMMARY_MAX_CHARS = 4000
 
-COMPACT_PROMPT = (
-    "Condense this conversation into a short summary. "
+# The harness request that asks for the summary. It goes to the API as a
+# user message after the untouched session, and it introduces the summary
+# inside the session as the compaction exchange: the harness request,
+# answered by the agent with the summary as its own reply. Harness messages
+# use the same square-bracket tags as the memory notes.
+COMPACT_REQUEST = (
+    "[harness] condense this conversation into a short summary. "
     "Keep names, facts, decisions, and open questions. Drop small talk. "
     "Keep the character of the exchange too: the tone, the mood of each person, "
     "the state of the relationship, and the shared references that give the conversation continuity. "
-    "When the input has a summary so far, merge its content into the new summary."
+    "When the conversation holds a summary from an earlier condense, merge its content into the new summary. [/harness]"
 )
-# The user-role turn that introduces the summary inside a session: the
-# harness request, answered by the agent with the summary as its own reply.
-# Harness messages use the same square-bracket tags as the memory notes.
-COMPACT_NOTE = "[harness] condense the older part of this conversation into a summary. [/harness]"
 # Context backfill target of a fresh session: recent channel messages from
 # Discord. eliza.py scans the channel history for them.
 BACKFILL_MESSAGES = 64
@@ -49,7 +50,9 @@ class Session:
     and the memory blocks. It is written when the context starts and
     rebuilt only when the context expires (idle past the cache lifetime)
     or after a compaction. The rest of messages holds the turns kept
-    verbatim. The summary joins the context as a turn, not in the system
+    verbatim. Tool exchanges (the assistant calls and the tool results) and
+    the reasoning fields stay in the turns until a compaction summarizes
+    them. The summary joins the context as a turn, not in the system
     message: inject_summary places it after the system message as the
     compaction exchange (harness request, agent answer), so a rebuilt
     context keeps it without repeating it. size counts the characters of
@@ -83,13 +86,24 @@ class Session:
         """Open or refresh the context: replace the system message, keep the turns."""
         turns = self.messages[1:] if self.messages else []
         self.messages = [{"role": "system", "content": system_text}, *turns]
-        self.size = len(system_text) + sum(len(message["content"]) for message in turns)
+        self.size = len(system_text) + sum(self._size_of(message) for message in turns)
         self.seen_users.clear()
         self.touch()
 
     def append(self, role: str, content: str) -> None:
         self.messages.append({"role": role, "content": content})
         self.size += len(content)
+        self.touch()
+
+    @staticmethod
+    def _size_of(message: dict) -> int:
+        """The size of one turn: the content, plus the reasoning when the turn keeps it."""
+        return len(message.get("content") or "") + len(message.get("reasoning_content") or "") + len(message.get("reasoning") or "")
+
+    def append_message(self, message: dict) -> None:
+        """Store one turn as the API sent it: role, content, and the extra fields (tool calls, reasoning)."""
+        self.messages.append(message)
+        self.size += self._size_of(message)
         self.touch()
 
     def touch(self) -> None:
@@ -99,20 +113,32 @@ class Session:
         """Seconds since the last activity."""
         return time.monotonic() - self.last_active
 
-    def plan_compaction(self):
-        """The block to summarize: every turn after the system message, minus the recent tail."""
-        if len(self.messages) <= 1 + COMPACTION_KEEP_TURNS:
+    def plan_compaction(self, keep: int = COMPACTION_KEEP_TURNS):
+        """The block to summarize: the turns after the system message, minus the recent tail.
+
+        A session that unloads compacts every turn: keep=0. The boundary
+        never splits a tool exchange: a tool result without its call breaks
+        the next request. The boundary moves back to the exchange start.
+        """
+        if len(self.messages) <= 1 + keep:
             return []
-        return self.messages[1:-COMPACTION_KEEP_TURNS]
+        if not keep:
+            return self.messages[1:]
+        cut = len(self.messages) - keep
+        while cut > 1 and self.messages[cut].get("role") == "tool":
+            cut -= 1
+        if cut <= 1:
+            return []
+        return self.messages[1:cut]
 
     def inject_summary(self) -> None:
         """Place the summary into the turns as the compaction exchange, after the system message."""
         trace = [
-            {"role": "user", "content": COMPACT_NOTE},
+            {"role": "user", "content": COMPACT_REQUEST},
             {"role": "assistant", "content": self.summary},
         ]
         self.messages[1:1] = trace
-        self.size += sum(len(turn["content"]) for turn in trace)
+        self.size += sum(self._size_of(turn) for turn in trace)
 
     def apply_compaction(self, summary: str, dropped: int) -> None:
         """Drop the summarized turns and store the summary.
@@ -122,7 +148,7 @@ class Session:
         """
         dropped = min(dropped, len(self.messages) - 1)
         self.messages = self.messages[:1] + self.messages[1 + dropped:]
-        self.size = sum(len(message["content"]) for message in self.messages)
+        self.size = sum(self._size_of(message) for message in self.messages)
         self.summary = summary
         self.seen_users.clear()
         self.last_compaction = time.monotonic()

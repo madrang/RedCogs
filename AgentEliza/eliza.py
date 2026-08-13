@@ -15,7 +15,8 @@ from redbot.core.utils.mod import is_admin_or_superior
 
 from .history import (
     BACKFILL_MESSAGES,
-    COMPACT_PROMPT,
+    COMPACTION_KEEP_TURNS,
+    COMPACT_REQUEST,
     DEFAULT_CACHE_TTL,
     SUMMARY_MAX_CHARS,
     History,
@@ -38,7 +39,7 @@ SYSTEM_PROMPT = (
     "- A memory note starts with '[memory NAME]' and ends with '[/memory]'. It shows the stored memory of that user.\n"
     "  The harness adds it before the first message of a user in this context.\n"
     "- A harness request starts with '[harness]' and ends with '[/harness]'. It arrives as a user message.\n"
-    "  When the request asks to condense the older part of the conversation, answer with a summary of the conversation so far.\n"
+    "  When the request asks to condense the conversation, answer with a summary of the conversation so far.\n"
     "\n"
     "Memory rules:\n"
     "- You have three memory scopes: server, channel, and user.\n"
@@ -46,7 +47,7 @@ SYSTEM_PROMPT = (
     "  Use memory_append to add one new fact at the end of a scope.\n"
     "- Read a scope before you write it. A write replaces the full text. Merge the old content that you want to keep.\n"
     f"- A memory text can hold {MEMORY_MAX_CHARS} characters. The harness truncates a longer write.\n"
-    "- One server shares one conversation across all its channels.\n"
+    "- The harness keeps the summaries of the channels and the users. The server summary changes only when you update it.\n"
     "\n"
     "The summary and the memory:\n"
     "- The summary condenses the older part of the conversation. You write it when the harness asks.\n"
@@ -71,6 +72,10 @@ SYSTEM_PROMPT = (
 MCP_TOOL_ROUNDS = 16
 # The system prompt tells the agent a limit of 10 tool calls. The gap gives
 # slack when the agent miscounts its own calls.
+# Cap of parallel conversation sessions (channels and direct messages
+# together). A new session over the cap is refused: every live session is a
+# provider cache entry and a summarization load.
+MAX_SESSIONS = 3
 USER_AGENT = "RedBot Chat Cog"
 USAGE_CACHE_SECONDS = 300
 # The reply sent when the model returns no content at all.
@@ -196,7 +201,7 @@ class Eliza(commands.Cog):
             self.session = self._new_session()
         return self.session
 
-    async def _compact(self, session_id: int, session: Session, api_key: str, preset) -> dict | None:
+    async def _compact(self, session_id: int, session: Session, api_key: str, preset, keep: int = COMPACTION_KEEP_TURNS) -> dict | None:
         """Summarize the turns of a session and persist the summary.
 
         Runs while the provider cache is still warm, with the session cache
@@ -206,17 +211,16 @@ class Eliza(commands.Cog):
         A content filter rejection is permanent: the session is unloaded and
         the error raised again for the caller.
         """
-        old = session.plan_compaction()
+        old = session.plan_compaction(keep)
         if not old:
             return None
-        prompt = [{"role": "system", "content": COMPACT_PROMPT}]
-        if session.summary:
-            prompt.append({"role": "user", "content": f"Summary so far:\n{session.summary}"})
-        prompt.extend(old)
-        prompt.append({"role": "user", "content": "Write the new summary now."})
+        # The session goes to the API as it is: the same system message and
+        # the untouched turns, so the compaction reads the context the agent
+        # worked with. Only the harness request joins, as a user message.
+        # An earlier summary is already in the turns as the compaction exchange.
         payload = {
             "model": await self._model_name(),
-            "messages": prompt,
+            "messages": [session.messages[0], *old, {"role": "user", "content": COMPACT_REQUEST}],
             "stream": False,
         }
         if preset is not None:
@@ -275,7 +279,11 @@ class Eliza(commands.Cog):
                 session.error = f"{type(e).__name__}: {e}"
 
     async def _compact_all(self) -> None:
-        """Compact every session with turns. A reboot loses the RAM history, not the summaries."""
+        """Compact every session with turns. A reboot loses the RAM history, not the summaries.
+
+        An unload summarizes every turn, not only the older block: no kept
+        tail survives the unload anyway.
+        """
         api_key = await self.config.api_key()
         if not api_key:
             return
@@ -287,7 +295,7 @@ class Eliza(commands.Cog):
                 continue
             try:
                 async with session.lock:
-                    await self._compact(session_id, session, api_key, preset)
+                    await self._compact(session_id, session, api_key, preset, keep=0)
             except Exception as e:
                 session.error = f"{type(e).__name__}: {e}"
 
@@ -486,11 +494,23 @@ class Eliza(commands.Cog):
             return None
         return content
 
-    async def _record_turn(self, session: Session, additions: list, reply: str, *, guild_id, channel_id, user_id, usage: dict) -> None:
-        """Store a completed turn in the session and record its token usage."""
+    async def _record_turn(self, session: Session, additions: list, exchange: list, message: dict, *, guild_id, channel_id, user_id, usage: dict) -> None:
+        """Store a completed turn in the session and record its token usage.
+
+        The exchange holds the tool rounds: the assistant calls and the tool
+        results, as the API sent them. They stay in the context until a
+        compaction summarizes them. Every assistant turn keeps its reasoning
+        field for the same reason.
+        """
         for addition in additions:
             session.append(addition["role"], addition["content"])
-        session.append("assistant", reply)
+        for part in exchange:
+            session.append_message(part)
+        final = {"role": "assistant", "content": message.get("content") or ""}
+        for key in ("reasoning_content", "reasoning"):
+            if message.get(key):
+                final[key] = message[key]
+        session.append_message(final)
         if user_id is not None:
             # The turn landed in the context: the memory note does not repeat.
             session.seen_users.add(user_id)
@@ -499,9 +519,9 @@ class Eliza(commands.Cog):
     async def generate_reply(self, channel_id: int, content: str, *, guild_id: int | None = None, user_id: int | None = None, bot_name: str | None = None, user_name: str | None = None, is_owner: bool = False, message_id: int | None = None) -> str | None:
         """Send one user message to the chat API and return the reply text.
 
-        The conversation session is the guild, or the user in DMs: the
-        history and the provider cache key follow the session, so a server
-        runs one shared agent context instead of one per channel. Each
+        The conversation session is the channel, or the user in DMs: the
+        history and the provider cache key follow the session, so a channel
+        runs one agent context. Each
         stored user turn carries the speaker name as `name: content`.
         The first turn of a user in a context gets their user memory
         injected before it, once per context. Returns None when the agent
@@ -514,8 +534,14 @@ class Eliza(commands.Cog):
         blocked = await self._usage_blocked()
         if blocked:
             return blocked
-        session_id = guild_id if guild_id is not None else user_id
-        session = await self.history.get(session_id, "guild" if guild_id is not None else "user")
+        session_id = channel_id if guild_id is not None else user_id
+        if session_id not in self.history.sessions:
+            preset = await self._current_preset()
+            cache_ttl = (preset.cache_ttl if preset is not None else None) or DEFAULT_CACHE_TTL
+            active = sum(1 for other in self.history.sessions.values() if other.idle() < cache_ttl)
+            if active >= MAX_SESSIONS:
+                return "The agent is already busy in other conversations. Try again later."
+        session = await self.history.get(session_id, "channel" if guild_id is not None else "user")
         async with session.lock:
             return await self._generate_locked(
                 session, session_id, channel_id, content, api_key=api_key,
@@ -681,6 +707,9 @@ class Eliza(commands.Cog):
             payload["tools"] = tools
             payload["tool_choice"] = "auto"
         rounds = MCP_TOOL_ROUNDS if tools else 1
+        # The tool rounds of this reply: assistant calls and tool results, as
+        # the API sent them. The session keeps them until a compaction.
+        exchange = []
         for _ in range(rounds):
             data = await self._chat_request(api_key, payload)
             round_usage = data.get("usage") or {}
@@ -696,21 +725,21 @@ class Eliza(commands.Cog):
             if not tool_calls:
                 # The session records what the model said. The caller gets the normalized form.
                 await self._record_turn(
-                    session, additions, message.get("content") or "", guild_id=guild_id, channel_id=channel_id, user_id=user_id, usage=usage
+                    session, additions, exchange, message, guild_id=guild_id, channel_id=channel_id, user_id=user_id, usage=usage
                 )
                 return self._normalize_reply(message)
             # Rebuild the echo instead of reusing the inbound message: most
             # provider-specific fields can be rejected on the next request.
             # Reasoning is the exception: Kimi accepts reasoning_content back,
             # the newer vLLM dialect uses reasoning. Echo the field the
-            # provider sent, so the model keeps its thinking across the tool
-            # rounds of this reply.
+            # provider sent, so the session keeps it until a compaction.
             echo = {"role": "assistant", "content": message.get("content") or ""}
             for key in ("reasoning_content", "reasoning"):
                 if message.get(key):
                     echo[key] = message[key]
             echo["tool_calls"] = tool_calls
             messages.append(echo)
+            exchange.append(echo)
             for call in tool_calls:
                 function = call.get("function", {})
                 try:
@@ -724,11 +753,13 @@ class Eliza(commands.Cog):
                     )
                 else:
                     result_text = await self.mcp.run_tool(name, arguments, routes)
-                messages.append({
+                result = {
                     "role": "tool",
                     "tool_call_id": call.get("id", ""),
                     "content": result_text,
-                })
+                }
+                messages.append(result)
+                exchange.append(result)
         # The rounds are spent: one last pass without tools, so the model can answer with what it found.
         payload["tool_choice"] = "none"
         data = await self._chat_request(api_key, payload)
@@ -738,7 +769,7 @@ class Eliza(commands.Cog):
         message = self._message_of(data)
         if message is not None:
             await self._record_turn(
-                session, additions, message.get("content") or "", guild_id=guild_id, channel_id=channel_id, user_id=user_id, usage=usage
+                session, additions, exchange, message, guild_id=guild_id, channel_id=channel_id, user_id=user_id, usage=usage
             )
             return self._normalize_reply(message)
         await self.scope_stats.record(
@@ -1008,6 +1039,10 @@ class Eliza(commands.Cog):
         )
         if self._closed:
             description += "\n**The agent is closed.** Reload the cog to start Eliza again."
+        preset = await self._current_preset()
+        cache_ttl = (preset.cache_ttl if preset is not None else None) or DEFAULT_CACHE_TTL
+        active = sum(1 for session in self.history.sessions.values() if session.idle() < cache_ttl)
+        description += f"\nActive sessions: {active} of {MAX_SESSIONS}."
         errored = sum(1 for session in self.history.sessions.values() if session.error)
         if errored:
             description += f"\nSessions with a compaction error: {errored}."
@@ -1178,9 +1213,9 @@ class Eliza(commands.Cog):
             summary = await self.memory.read_summary(internal, scope_id)
             updated = await self.memory.last_updated(internal, scope_id)
             stamp = f" (updated <t:{updated}:R>)" if updated else ""
-            lines.append(f"**{label} memory**{stamp}\n{memory or '(empty)'}")
-            lines.append(f"**{label} summary**\n{summary or '(empty)'}")
-        for page in pagify("\n".join(lines)):
+            lines.append(f"## {label} memory{stamp}\n{memory or '(empty)'}")
+            lines.append(f"## {label} summary\n{summary or '(empty)'}")
+        for page in pagify("\n\n".join(lines)):
             await ctx.send(page, allowed_mentions=discord.AllowedMentions.none())
 
     @eliza_memory.command(name="clear")
@@ -1205,6 +1240,10 @@ class Eliza(commands.Cog):
         # Snowflakes are unique across Discord entities: a live session under this id can only
         # belong to this scope. Dropping it starts the next reply with a fresh context.
         self.history.sessions.pop(scope_id, None)
+        if internal == "guild":
+            # Sessions live per channel: drop every live session of this server.
+            for channel in [*ctx.guild.text_channels, *ctx.guild.threads]:
+                self.history.sessions.pop(channel.id, None)
         await ctx.send(f"The {scope.lower()} memory and summary are cleared.")
 
     @eliza_group.command(name="setlimit")

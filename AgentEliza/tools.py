@@ -9,6 +9,7 @@ from urllib.parse import parse_qs, quote_plus, urlparse
 import aiohttp
 import discord
 
+from .history import SUMMARY_MAX_CHARS
 from .memory import MEMORY_MAX_CHARS, Memory
 
 # Agent-facing scope name -> internal Memory scope.
@@ -173,6 +174,11 @@ class HarnessTools:
                 "Names resolve only inside a server. The server scope ignores this parameter."
             )
         }
+        kind_property = {
+            "type": "string"
+            , "enum": ["memory", "summary"]
+            , "description": "Optional. Select the summary of the scope instead of the memory. Default: memory."
+        }
         return [
             {
                 "type": "function"
@@ -181,11 +187,12 @@ class HarnessTools:
                     , "description": (
                         "Read the long-term memory of one scope: server (facts shared by the whole Discord server), "
                         "channel (facts of the current channel), or user (facts about the person talking to you). "
+                        "Set kind to summary to read the conversation summary of the scope. "
                         "The optional target selects another channel or user of this server."
                     )
                     , "parameters": {
                         "type": "object"
-                        , "properties": {"scope": scope_property, "target": target_property}
+                        , "properties": {"scope": scope_property, "target": target_property, "kind": kind_property}
                         , "required": ["scope"]
                     }
                 }
@@ -198,6 +205,7 @@ class HarnessTools:
                         "Replace the long-term memory of one scope: server, channel, or user. Read the "
                         "scope first and merge when you want to keep the old content. An empty content "
                         f"erases the scope. The harness truncates content over {MEMORY_MAX_CHARS} characters. "
+                        "Set kind to summary to replace the conversation summary of the scope. "
                         "The optional target selects another channel or user of this server."
                     )
                     , "parameters": {
@@ -205,6 +213,7 @@ class HarnessTools:
                         , "properties": {
                             "scope": scope_property
                             , "target": target_property
+                            , "kind": kind_property
                             , "content": {
                                 "type": "string"
                                 , "description": "The new memory text."
@@ -221,7 +230,8 @@ class HarnessTools:
                     , "description": (
                         "Add text at the end of the long-term memory of one scope: server, channel, or "
                         "user. Use this tool for one new fact. The result warns when the scope is full "
-                        "and part of the content did not fit. "
+                        "and part of the content did not fit. Set kind to summary to add to the summary "
+                        "of the scope. "
                         "The optional target selects another channel or user of this server."
                     )
                     , "parameters": {
@@ -229,6 +239,7 @@ class HarnessTools:
                         , "properties": {
                             "scope": scope_property
                             , "target": target_property
+                            , "kind": kind_property
                             , "content": {
                                 "type": "string"
                                 , "description": "The text to add."
@@ -442,6 +453,11 @@ class HarnessTools:
         if error:
             return error
         target = f" for {name}" if name else ""
+        if arguments.get("kind") == "summary":
+            text = await self.memory.read_summary(scope, scope_id)
+            if not text:
+                return f"(no summary stored for the {label.lower()} scope{target})"
+            return text
         text = await self.memory.read(scope, scope_id)
         if not text:
             return f"(no memory stored for the {label.lower()} scope{target})"
@@ -458,6 +474,17 @@ class HarnessTools:
         content = arguments.get("content")
         if not isinstance(content, str):
             return "Error: the content must be a string."
+        if arguments.get("kind") == "summary":
+            stored = content[:SUMMARY_MAX_CHARS]
+            await self.memory.store_summary(scope, scope_id, stored)
+            if not stored:
+                return f"The {label.lower()} summary{target} has been erased."
+            if len(stored) < len(content):
+                return (
+                    f"Warning: the content was truncated to {len(stored)} characters. "
+                    f"The {label.lower()} summary{target} now ends mid-text. Read it and rewrite it shorter."
+                )
+            return f"The {label.lower()} summary{target} has been updated ({len(stored)} characters)."
         stored = await self.memory.store(scope, scope_id, content)
         if not stored:
             return f"The {label.lower()} memory{target} has been erased."
@@ -480,6 +507,18 @@ class HarnessTools:
         content = arguments.get("content")
         if not isinstance(content, str) or not content.strip():
             return "Error: the content must be a non-empty string."
+        if arguments.get("kind") == "summary":
+            current = await self.memory.read_summary(scope, scope_id)
+            combined = f"{current}\n{content}" if current else content
+            stored = combined[:SUMMARY_MAX_CHARS]
+            await self.memory.store_summary(scope, scope_id, stored)
+            if len(stored) < len(combined):
+                dropped = len(combined) - len(stored)
+                return (
+                    f"Warning: the {label.lower()} summary{target} is full. Only part of the content was added: "
+                    f"the last {dropped} characters were dropped. Read the scope and rewrite it shorter."
+                )
+            return f"The {label.lower()} summary{target} now holds {len(stored)} characters."
         current = await self.memory.read(scope, scope_id)
         combined = f"{current}\n{content}" if current else content
         stored = await self.memory.store(scope, scope_id, combined)
