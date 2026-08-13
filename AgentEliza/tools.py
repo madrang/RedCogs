@@ -495,13 +495,15 @@ class HarnessTools:
 
         The same rule as the context backfill, plus the messages of the bot
         itself: its own messages, the user messages that mention it, the
-        replies to it. Other bots stay out. A direct message always
-        qualifies.
+        replies to it. Other bots stay out, also in a direct message. A
+        direct message always qualifies.
         """
-        if message.author.id == bot_id or message.guild is None:
+        if message.author.id == bot_id:
             return True
         if message.author.bot:
             return False
+        if message.guild is None:
+            return True
         if any(user.id == bot_id for user in message.mentions):
             return True
         if message.type != discord.MessageType.reply:
@@ -594,21 +596,36 @@ class HarnessTools:
         elif after is not None or before is not None:
             # around accepts a limit of at most 101, capped to 100 by discord.py.
             window.update(around=after if after is not None else before, oldest_first=True, limit=100)
-        messages = []
+        raw = []
+        skipped = set()
         try:
+            # The whole window is collected before the filter: a bounded
+            # window reads oldest first, so a notice can come after the
+            # message it answers. The skip set must be complete first.
             async for message in channel.history(**window):
-                if not self._involves_bot(message, bot_id):
+                if message.author.id == bot_id and message.type == discord.MessageType.reply:
+                    # A bot reply is a harness notice, never an agent answer.
+                    # It and the message it answers stay out of the result.
+                    if message.reference is not None and message.reference.message_id is not None:
+                        skipped.add(message.reference.message_id)
                     continue
-                content = message.content.strip()
-                if not content:
-                    continue
-                if query and query not in content.casefold():
-                    continue
-                messages.append(message)
-                if len(messages) >= limit:
-                    break
+                raw.append(message)
         except (discord.Forbidden, discord.HTTPException) as e:
             return f"Error: the history read failed: {e}"
+        messages = []
+        for message in raw:
+            if message.id in skipped:
+                continue
+            if not self._involves_bot(message, bot_id):
+                continue
+            content = message.content.strip()
+            if not content:
+                continue
+            if query and query not in content.casefold():
+                continue
+            messages.append(message)
+            if len(messages) >= limit:
+                break
         if not bounded and not window.get("oldest_first"):
             messages.reverse()
         if not messages:
