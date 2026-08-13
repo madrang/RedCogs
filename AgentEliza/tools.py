@@ -152,7 +152,7 @@ class HarnessTools:
         self.session_getter = session_getter
         # Callable returning the guild object of an id, for target name resolution.
         self.guild_getter = guild_getter
-        # Callable returning the channel object of an id, for the history tool.
+        # Async callable returning the channel of an id, cache first then the API, for the history tool.
         self.channel_getter = channel_getter
         # Callable returning the bot user id, for the involvement filter.
         self.bot_id_getter = bot_id_getter
@@ -553,7 +553,7 @@ class HarnessTools:
         resolved = message.reference.resolved if message.reference else None
         return isinstance(resolved, discord.Message) and resolved.author.id == bot_id
 
-    def _resolve_channel(self, target, *, guild_id, channel_id):
+    async def _resolve_channel(self, target, *, guild_id, channel_id):
         """Resolve the optional target of history_read to (channel, label, error text).
 
         A blank target keeps the current channel or direct message. An id,
@@ -562,7 +562,7 @@ class HarnessTools:
         """
         text = str(target or "").strip()
         if not text:
-            channel = self.channel_getter(channel_id) if self.channel_getter else None
+            channel = await self.channel_getter(channel_id) if self.channel_getter else None
             if channel is None:
                 return None, None, "Error: the current channel is unknown."
             label = f"#{channel.name}" if isinstance(channel, discord.abc.GuildChannel) else "this direct message"
@@ -607,7 +607,7 @@ class HarnessTools:
         return parsed, None
 
     async def _tool_history_read(self, arguments: dict, *, guild_id, channel_id, user_id) -> str:
-        channel, label, error = self._resolve_channel(arguments.get("target"), guild_id=guild_id, channel_id=channel_id)
+        channel, label, error = await self._resolve_channel(arguments.get("target"), guild_id=guild_id, channel_id=channel_id)
         if error:
             return error
         bot_id = self.bot_id_getter() if self.bot_id_getter else None

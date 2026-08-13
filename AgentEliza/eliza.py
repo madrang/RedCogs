@@ -147,7 +147,7 @@ class Eliza(commands.Cog):
         # Long-term memory lives in Config. The harness tools let the agent control it.
         self.memory = Memory(self.config)
         self.harness_tools = HarnessTools(
-            self.memory, self._get_session, bot.get_guild, bot.get_channel, lambda: bot.user.id if bot.user else None
+            self.memory, self._get_session, bot.get_guild, self._get_channel, lambda: bot.user.id if bot.user else None
         )
         self._harness_tool_names = {tool["function"]["name"] for tool in self.harness_tools.tools()}
         # Usage stats and rate windows per scope, in Config.
@@ -200,6 +200,14 @@ class Eliza(commands.Cog):
         if self.session is None or self.session.closed:
             self.session = self._new_session()
         return self.session
+
+    async def _get_channel(self, channel_id: int):
+        """The channel of an id: the cache first, the API on a miss. A direct message channel can be absent from the cache."""
+        channel = self.bot.get_channel(channel_id)
+        if channel is None:
+            with contextlib.suppress(discord.NotFound, discord.Forbidden, discord.HTTPException):
+                channel = await self.bot.fetch_channel(channel_id)
+        return channel
 
     async def _compact(self, session_id: int, session: Session, api_key: str, preset, keep: int = COMPACTION_KEEP_TURNS) -> dict | None:
         """Summarize the turns of a session and persist the summary.
