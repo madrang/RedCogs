@@ -7,6 +7,8 @@ from contextlib import AsyncExitStack
 
 from discord.ext import tasks
 
+from .tools import TOOL_RESULT_MAX_CHARS
+
 try:
     from mcp import Client, StdioServerParameters
     from mcp.client.stdio import stdio_client
@@ -18,8 +20,6 @@ except ImportError:
     TextContent = None
 
 MCP_IDLE_TIMEOUT = 600
-# Cap of one tool result. A giant result can fill the context in one call.
-MCP_TOOL_RESULT_MAX_CHARS = 8000
 # Cap of the connect and tool-list phase of a server. A hung stdio process
 # must not block a reply forever.
 MCP_CONNECT_TIMEOUT = 30
@@ -123,9 +123,9 @@ class MCPConnection:
         text = "\n".join(parts)
         if not text and result.structured_content:
             text = json.dumps(result.structured_content, default=str)
-        if len(text) > MCP_TOOL_RESULT_MAX_CHARS:
-            dropped = len(text) - MCP_TOOL_RESULT_MAX_CHARS
-            text = text[:MCP_TOOL_RESULT_MAX_CHARS] + f"\n[truncated: {dropped} characters dropped]"
+        if len(text) > TOOL_RESULT_MAX_CHARS:
+            dropped = len(text) - TOOL_RESULT_MAX_CHARS
+            text = text[:TOOL_RESULT_MAX_CHARS] + f"\n[truncated: {dropped} characters dropped]"
         if result.is_error:
             error_text = text
             if len(error_text) > MCP_LOG_ARGS_MAX_CHARS:

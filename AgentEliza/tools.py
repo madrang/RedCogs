@@ -18,8 +18,9 @@ SCOPE_ALIASES = {
     "channel": "channel",
     "user": "user",
 }
-# Cap of one web tool result. A giant page can fill the context in one call.
-WEB_TOOL_RESULT_MAX_CHARS = 32_000
+# Cap of one tool result, uniform across the harness tools and the MCP
+# results. 64K characters holds a full history_read page of 64 messages.
+TOOL_RESULT_MAX_CHARS = 64_000
 # Cap of the bytes read from one fetched page.
 WEB_FETCH_MAX_BYTES = 1_000_000
 WEB_TIMEOUT = aiohttp.ClientTimeout(total=30)
@@ -128,9 +129,9 @@ class _TextExtractor(HTMLParser):
 
 def _cap(text: str) -> str:
     """Truncate a web tool result to the context-friendly cap."""
-    if len(text) > WEB_TOOL_RESULT_MAX_CHARS:
-        dropped = len(text) - WEB_TOOL_RESULT_MAX_CHARS
-        text = text[:WEB_TOOL_RESULT_MAX_CHARS] + f"\n[truncated: {dropped} characters dropped]"
+    if len(text) > TOOL_RESULT_MAX_CHARS:
+        dropped = len(text) - TOOL_RESULT_MAX_CHARS
+        text = text[:TOOL_RESULT_MAX_CHARS] + f"\n[truncated: {dropped} characters dropped]"
     return text
 
 
@@ -614,8 +615,10 @@ class HarnessTools:
         if bot_id is None:
             return "Error: the bot user is not ready."
         try:
-            limit = max(1, min(int(arguments.get("limit") or HISTORY_READ_DEFAULT_RESULTS), HISTORY_READ_MAX_RESULTS))
+            requested = int(arguments.get("limit") or HISTORY_READ_DEFAULT_RESULTS)
+            limit = max(1, min(requested, HISTORY_READ_MAX_RESULTS))
         except (TypeError, ValueError):
+            requested = HISTORY_READ_DEFAULT_RESULTS
             limit = HISTORY_READ_DEFAULT_RESULTS
         after, error = self._history_time(arguments.get("after"), "after")
         if error:
@@ -655,6 +658,8 @@ class HarnessTools:
         except (discord.Forbidden, discord.HTTPException) as e:
             return f"Error: the history read failed: {e}"
         messages = []
+        qualifying = 0
+        matched = 0
         for message in raw:
             if message.id in skipped:
                 continue
@@ -663,16 +668,31 @@ class HarnessTools:
             content = message.content.strip()
             if not content:
                 continue
+            qualifying += 1
             if query and query not in content.casefold():
                 continue
-            messages.append(message)
-            if len(messages) >= limit:
-                break
+            matched += 1
+            if len(messages) < limit:
+                messages.append(message)
         if not bounded and not window.get("oldest_first"):
             messages.reverse()
+        scanned = len(raw)
         if not messages:
-            return f"(no matching messages in {label})"
-        lines = [f"({len(messages)} messages of {label}, oldest first)"]
+            note = f", 0 of {qualifying} matched the query" if query else ""
+            return f"(no matching messages in {label}: {scanned} raw messages scanned{note})"
+        # The header states every internal limit the result hit: the model
+        # trusts a count it can explain.
+        parts = [f"{len(messages)} messages of {label}, oldest first"]
+        if query:
+            parts.append(f"{matched} of {qualifying} matched the query")
+        if requested != limit:
+            parts.append(f"the requested limit was capped to {limit}")
+        if matched > len(messages):
+            end = "earliest" if window.get("oldest_first") else "most recent"
+            parts.append(f"the limit is {limit}: only the {end} {len(messages)} of {matched} are shown")
+        if scanned >= window["limit"]:
+            parts.append(f"the scan window of {window['limit']} raw messages was reached: older messages were not read: use a narrower time range with after and before")
+        lines = ["(" + ". ".join(parts) + ")"]
         for message in messages:
             content = " ".join(message.content.split())
             if len(content) > HISTORY_READ_MESSAGE_MAX_CHARS:
