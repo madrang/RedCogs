@@ -253,9 +253,12 @@ class Eliza(commands.Cog):
                     # a stalled connect fast so the retry probes again sooner.
                     timeout=aiohttp.ClientTimeout(total=900, sock_connect=15),
                 ) as response:
+                    body = await response.text()
                     try:
-                        data = await response.json(content_type=None)
-                    except Exception:
+                        data = json.loads(body)
+                    except ValueError:
+                        # A 200 with a non-JSON body is opaque without the text.
+                        log.warning("The API answer is not JSON (HTTP %s): %s", response.status, body[:500])
                         data = None
                     if isinstance(data, dict) and data.get("contentFilter"):
                         log.info(
