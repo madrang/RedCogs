@@ -4,8 +4,11 @@ class ZaiProvider(Provider):
     """Z.AI quota monitor (undocumented, reverse-engineered; may change)."""
 
     usage_url = "https://api.z.ai/api/monitor/usage/quota/limit"
-    # Reported by the owner: glm-5.2 runs a 1M-token context.
-    context_lengths = {"glm-5.2": 1_048_576}
+    # Reported by the owner: glm-5.3 and glm-5.2 run a 1M-token context.
+    context_lengths = {
+        "glm-5.3": 1_048_576
+      , "glm-5.2": 1_048_576
+    }
 
     def parse_usage(self, data: dict) -> list:
         payload = data.get("data") if isinstance(data.get("data"), dict) else data
@@ -40,7 +43,10 @@ class ZaiCodeProvider(ZaiProvider):
 
     name = "Z.AI Code"
     base_url = "https://api.z.ai/api/coding/paas/v4"
-    models = ["glm-5.2"]
+    models = [
+        "glm-5.3"
+      , "glm-5.2"
+    ]
 
 
 class ZaiApiProvider(ZaiProvider):
@@ -48,4 +54,7 @@ class ZaiApiProvider(ZaiProvider):
 
     name = "Z.AI API"
     base_url = "https://api.z.ai/api/paas/v4"
-    models = ["glm-5.2"]
+    models = [
+        "glm-5.3"
+      , "glm-5.2"
+    ]
