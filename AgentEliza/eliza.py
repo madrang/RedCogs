@@ -442,10 +442,10 @@ class Eliza(commands.Cog):
                     f"{base_url}/chat/completions",
                     headers={"Authorization": f"Bearer {api_key}"},
                     json=payload,
-                    # total caps the whole request: a long generation needs
-                    # minutes. sock_connect fails a stalled connect fast so
-                    # the retry probes again sooner.
-                    timeout=aiohttp.ClientTimeout(total=300, sock_connect=15),
+                    # total caps the whole request: a long generation on a
+                    # large context needs several minutes. sock_connect fails
+                    # a stalled connect fast so the retry probes again sooner.
+                    timeout=aiohttp.ClientTimeout(total=900, sock_connect=15),
                 ) as response:
                     try:
                         data = await response.json(content_type=None)
