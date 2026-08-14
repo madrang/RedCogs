@@ -1,5 +1,7 @@
 """The system message of a context: base prompt, place lines, rules, memory blocks."""
 
+import contextlib
+
 import discord
 
 from .memory import MEMORY_MAX_CHARS
@@ -25,13 +27,13 @@ SYSTEM_PROMPT = (
     "\n"
     "The summary and the memory:\n"
     "- The summary condenses the older part of the conversation. You write it when the harness asks.\n"
-    "  It keeps the thread of the talk.\n"
+    "  It keeps the thread of the conversation.\n"
     "- The memory holds the facts that you choose to keep. You write it at any time with the memory tools.\n"
     "  It survives across conversations.\n"
-    "- Put a durable fact in the memory. Let the summary keep the flow of the talk.\n"
+    "- Put a durable fact in the memory. Let the summary keep the flow of the conversation.\n"
     "- Do not copy memory content into a summary. The context already shows the memory notes.\n"
     "  A copy wastes context space.\n"
-    "- This context shows a memory you write at once. The system message shows it again when the context restarts.\n"
+    "- A memory that you write shows immediately in this context. The system message shows it again when the context restarts.\n"
     "\n"
     "Conversation rules:\n"
     "- An empty message is a poke. The user wants your attention and said nothing.\n"
@@ -45,17 +47,24 @@ SYSTEM_PROMPT = (
 )
 
 
-def place_block(bot, guild_id, channel_id) -> str:
+async def place_block(bot, guild_id, channel_id) -> str:
     """The location lines of the system message: server and channel, names and descriptions."""
+    if guild_id is None:
+        # A direct message has no server or channel object to describe.
+        return "Direct message: a private conversation with the user."
     lines = []
-    if guild_id is not None:
-        guild = bot.get_guild(guild_id)
-        if guild is not None:
-            line = f"Server: {guild.name}"
-            if guild.description:
-                line += f" — {' '.join(guild.description.split())}"
-            lines.append(line)
+    guild = bot.get_guild(guild_id)
+    if guild is not None:
+        line = f"Server: {guild.name}"
+        if guild.description:
+            line += f" — {' '.join(guild.description.split())}"
+        lines.append(line)
     channel = bot.get_channel(channel_id)
+    if channel is None:
+        # A cache miss must not drop the line: ask the API. A lookup
+        # failure only drops the channel line, never the context build.
+        with contextlib.suppress(discord.NotFound, discord.Forbidden, discord.HTTPException):
+            channel = await bot.fetch_channel(channel_id)
     if isinstance(channel, discord.abc.GuildChannel):
         line = f"Channel: #{channel.name}"
         topic = getattr(channel, "topic", None)

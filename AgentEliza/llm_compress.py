@@ -1,6 +1,8 @@
 """Session compaction: summarize the older turns while the provider cache is warm."""
 
 import logging
+import re
+from datetime import datetime, timezone
 
 from discord.ext import tasks
 
@@ -12,8 +14,26 @@ from .history import (
     Session,
 )
 from .llm_chat import ChatError
+from .tools import MESSAGE_TIME_FORMAT
 
 log = logging.getLogger("red.agenteliza")
+
+# A chained summary holds one entry per compaction, oldest first. A header
+# line in the user-message format (UTC time, agent name, mention id) starts
+# each entry, stamped when the summary was added. The header is the
+# delimiter of the chain: the roll drops the text up to a header.
+_SUMMARY_HEADER_RE = re.compile(r"(?m)^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}Z [^\n]+ <@[^>\n]+>:)$")
+
+
+def _summary_entries(text: str) -> list:
+    """Split a chained summary into its entries. A text without headers is one entry."""
+    parts = _SUMMARY_HEADER_RE.split(text)
+    entries = []
+    if parts[0].strip():
+        entries.append(parts[0].strip())
+    for header, body in zip(parts[1::2], parts[2::2]):
+        entries.append(f"{header}\n{body.strip()}")
+    return entries
 
 
 class Compressor:
@@ -70,7 +90,22 @@ class Compressor:
         if message is None:
             return None
         summary = message.get("content") or ""
-        summary = summary[:SUMMARY_MAX_CHARS]
+        bot_user = self.api.bot.user
+        name = bot_user.name if bot_user else "Eliza"
+        mention = f"<@{bot_user.id}>" if bot_user else f"<@{name}>"
+        stamp = f"{datetime.now(timezone.utc):{MESSAGE_TIME_FORMAT}}"
+        header = f"{stamp} {name} {mention}:"
+        entries = _summary_entries(session.summary) if session.summary else []
+        entries.append(f"{header}\n{summary}")
+        # The chain rolls: the oldest complete summaries leave first.
+        while len(entries) > 1 and len("\n\n".join(entries)) > SUMMARY_MAX_CHARS:
+            entries.pop(0)
+        summary = "\n\n".join(entries)
+        if len(summary) > SUMMARY_MAX_CHARS and summary.startswith(header):
+            # A single big note: the header is optional. The content keeps the space.
+            summary = summary[len(header) + 1:]
+        # An over-long note loses its start, never its end.
+        summary = summary[-SUMMARY_MAX_CHARS:]
         session.apply_compaction(summary, len(old))
         # The summary joins the context as the compaction exchange: the harness
         # request and the agent answer. It is not repeated in the system message.

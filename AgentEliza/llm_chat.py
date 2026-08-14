@@ -203,12 +203,21 @@ class ChatEngine:
             if guild_id is not None:
                 rules_block = f"Server rules:\n{await self.config.guild_from_id(guild_id).rules()}"
             elif is_owner:
-                rules_block = "You talk to the bot owner. The owner has all rights."
+                rules_block = (
+                    "You talk to the bot owner. The owner has all rights. "
+                    "The memory tools reach the user memory and the channel memory of this conversation."
+                )
             else:
-                rules_block = f"You talk to a limited user. User rules:\n{await self.config.dm_rules()}"
+                rules_block = (
+                    f"You talk to a limited user. User rules:\n{await self.config.dm_rules()}\n"
+                    "The memory tools reach only the user memory of this conversation."
+                )
+            # The summary storage follows the scope of the conversation.
+            summary_scope = "channel" if guild_id is not None else "user"
+            rules_block += f"\nWhenever this conversation becomes idle, you always update the {summary_scope} summary, and the conversation resumes from it later."
             # A fresh session lost its verbatim turns: the Discord history restores them.
             fresh = not session.messages
-            session.start_context(system_text(name, memory, rules_block, place_block(self.bot, guild_id, channel_id)))
+            session.start_context(system_text(name, memory, rules_block, await place_block(self.bot, guild_id, channel_id)))
             if fresh:
                 # The persisted summary joins as the compaction exchange, before the backfilled turns it summarizes.
                 if session.summary:
