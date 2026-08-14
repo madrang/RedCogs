@@ -372,11 +372,20 @@ class HarnessTools:
             }
         ]
 
-    async def run(self, name: str, arguments: dict, *, guild_id, channel_id, user_id) -> str:
+    async def run(self, name: str, arguments: dict, *, guild_id, channel_id, user_id, is_owner: bool = False) -> str:
         """Run one harness tool and return its output as text."""
         handler = getattr(self, f"_tool_{name}", None)
         if handler is None:
             return f"Error: unknown harness tool {name}"
+        if name.startswith("memory_") and guild_id is None and not is_owner:
+            # A direct message has no server boundary: a non-owner reaches
+            # only their own user memory (a blank target), nothing shared.
+            own_user = SCOPE_ALIASES.get(arguments.get("scope", "")) == "user" and not str(arguments.get("target") or "").strip()
+            if not own_user:
+                return (
+                    "Error: in a direct message the memory tools reach only the user memory of this conversation. "
+                    "Use scope user with no target. Every other scope answers only the bot owner."
+                )
         return await handler(arguments, guild_id=guild_id, channel_id=channel_id, user_id=user_id)
 
     def _scope_ids(self, scope: str, guild_id, channel_id, user_id):
