@@ -716,7 +716,7 @@ class HarnessTools:
             return "Error: the caption must be a string."
         if caption and len(caption) > 2000:
             return "Error: the caption is over 2000 characters, the Discord message limit."
-        channel = self.channel_getter(channel_id) if self.channel_getter else None
+        channel = await self.channel_getter(channel_id) if self.channel_getter else None
         if channel is None:
             return "Error: the current channel is unknown."
         guild = getattr(channel, "guild", None)

@@ -767,12 +767,17 @@ class Eliza(commands.Cog):
                 except json.JSONDecodeError:
                     arguments = {}
                 name = function.get("name", "")
-                if name in self._harness_tool_names:
-                    result_text = await self.harness_tools.run(
-                        name, arguments, guild_id=guild_id, channel_id=channel_id, user_id=user_id
-                    )
-                else:
-                    result_text = await self.mcp.run_tool(name, arguments, routes)
+                try:
+                    if name in self._harness_tool_names:
+                        result_text = await self.harness_tools.run(
+                            name, arguments, guild_id=guild_id, channel_id=channel_id, user_id=user_id
+                        )
+                    else:
+                        result_text = await self.mcp.run_tool(name, arguments, routes)
+                except Exception as e:
+                    # A tool failure must not kill the reply: the model gets the error as the tool result.
+                    log.exception("The tool %s failed:", name)
+                    result_text = f"Error: the tool {name} failed: {type(e).__name__}: {e}"
                 result = {
                     "role": "tool",
                     "tool_call_id": call.get("id", ""),
@@ -919,6 +924,18 @@ class Eliza(commands.Cog):
                 await self._discord_call(
                     lambda: message.reply(notice, mention_author=False, allowed_mentions=discord.AllowedMentions.none()),
                     "The error notice",
+                )
+                return
+            except Exception:
+                # An unexpected failure still answers: discord.py only logs a
+                # listener exception, the user would see silence otherwise.
+                log.exception("The reply failed for message %s:", message.id)
+                await self._discord_call(
+                    lambda: message.reply(
+                        "⚠️ The reply failed with an internal error. The bot log has the traceback.",
+                        mention_author=False, allowed_mentions=discord.AllowedMentions.none(),
+                    ),
+                    "The failure notice",
                 )
                 return
         if reply is None:
