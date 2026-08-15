@@ -343,12 +343,25 @@ class Eliza(commands.Cog):
     async def on_message(self, message: discord.Message) -> None:
         if self._closed:
             return
-        if message.author.bot:
+        if self.bot.user is not None and message.author.id == self.bot.user.id:
             return
         is_dm = message.guild is None
         # Direct user mention only: mentioned_in also matches @everyone pings.
         mentioned = self.bot.user is not None and self.bot.user in message.mentions
-        if not (is_dm or mentioned):
+        if message.author.bot:
+            # Another bot reaches the agent in a server only: a direct
+            # mention, or a reply to a message of the agent.
+            if is_dm:
+                return
+            resolved = message.reference.resolved if message.type == discord.MessageType.reply and message.reference else None
+            answered = (
+                isinstance(resolved, discord.Message)
+                and self.bot.user is not None
+                and resolved.author.id == self.bot.user.id
+            )
+            if not (mentioned or answered):
+                return
+        elif not (is_dm or mentioned):
             return
         # Skip real commands only. get_valid_prefixes contains the mention forms
         # with a trailing space, so "@Bot hello" looks like a prefix match. Only
@@ -389,6 +402,8 @@ class Eliza(commands.Cog):
             content = "(poke: the user sent an empty message)"
         guild_id = message.guild.id if message.guild else None
         is_owner = await self.bot.is_owner(message.author)
+        # A reply to a bot never pings: a mention-reactive bot would loop with the agent.
+        mentions = discord.AllowedMentions.none() if message.author.bot else discord.AllowedMentions.all()
         # The bot owner is unlimited. Every other user counts against the per-scope limits.
         if not is_owner:
             refused = await self.scope_stats.check_and_count(
@@ -462,17 +477,17 @@ class Eliza(commands.Cog):
             pages = list(pagify(head + "\n[...] the answer continues in the attached file"))
             for page in pages[:-1]:
                 await self._discord_call(
-                    lambda: message.channel.send(page, allowed_mentions=discord.AllowedMentions.all()),
+                    lambda: message.channel.send(page, allowed_mentions=mentions),
                     "The reply page send",
                 )
             sent = await self._discord_call(
-                lambda: message.channel.send(pages[-1], file=file, allowed_mentions=discord.AllowedMentions.all()),
+                lambda: message.channel.send(pages[-1], file=file, allowed_mentions=mentions),
                 "The reply file send",
             )
             if sent is None:
                 note = list(pagify(head + "\n[...] the full answer could not be attached: the file upload failed"))[-1]
                 await self._discord_call(
-                    lambda: message.channel.send(note, allowed_mentions=discord.AllowedMentions.all()),
+                    lambda: message.channel.send(note, allowed_mentions=mentions),
                     "The reply page send",
                 )
             return
@@ -480,7 +495,7 @@ class Eliza(commands.Cog):
             # The agent may mention: its answer is the sender's intent.
             try:
                 sent = await self._discord_call(
-                    lambda: message.channel.send(page, allowed_mentions=discord.AllowedMentions.all()), "The reply send"
+                    lambda: message.channel.send(page, allowed_mentions=mentions), "The reply send"
                 )
             except discord.HTTPException as e:
                 log.warning("The reply send failed permanently: %s", e)
