@@ -42,7 +42,7 @@ MCP_SERVER_NAME_RE = re.compile(r"^[a-zA-Z0-9_-]{1,32}$")
 FILTER_TIMEOUT = 1800
 # An extremely long answer must not flood the channel: past
 # LONG_REPLY_MAX_CHARS (4 pages) it posts only the head (2 pages) inline and
-# the full text as a file.
+# the full text as a file on the last page.
 LONG_REPLY_MAX_CHARS = 8_000
 LONG_REPLY_HEAD_CHARS = 3800
 
@@ -455,28 +455,26 @@ class Eliza(commands.Cog):
             return
         if len(reply) > LONG_REPLY_MAX_CHARS:
             # An extremely long answer does not flood the channel: two pages
-            # inline, the full text as a file. A failed upload posts the two
-            # pages with a note instead.
+            # inline, the full text as a file on the last page. A failed
+            # upload replaces only the last page with a note.
             head = reply[:LONG_REPLY_HEAD_CHARS]
             file = discord.File(io.BytesIO(reply.encode("utf-8")), filename=f"eliza-reply-{message.id}.txt")
             pages = list(pagify(head + "\n[...] the answer continues in the attached file"))
+            for page in pages[:-1]:
+                await self._discord_call(
+                    lambda: message.channel.send(page, allowed_mentions=discord.AllowedMentions.all()),
+                    "The reply page send",
+                )
             sent = await self._discord_call(
-                lambda: message.channel.send(pages[0], file=file, allowed_mentions=discord.AllowedMentions.all()),
+                lambda: message.channel.send(pages[-1], file=file, allowed_mentions=discord.AllowedMentions.all()),
                 "The reply file send",
             )
             if sent is None:
-                pages = list(pagify(head + "\n[...] the full answer could not be attached: the file upload failed"))
-                for page in pages:
-                    await self._discord_call(
-                        lambda: message.channel.send(page, allowed_mentions=discord.AllowedMentions.all()),
-                        "The reply page send",
-                    )
-            else:
-                for page in pages[1:]:
-                    await self._discord_call(
-                        lambda: message.channel.send(page, allowed_mentions=discord.AllowedMentions.all()),
-                        "The reply page send",
-                    )
+                note = list(pagify(head + "\n[...] the full answer could not be attached: the file upload failed"))[-1]
+                await self._discord_call(
+                    lambda: message.channel.send(note, allowed_mentions=discord.AllowedMentions.all()),
+                    "The reply page send",
+                )
             return
         for page in pagify(reply):
             # The agent may mention: its answer is the sender's intent.
