@@ -111,6 +111,7 @@ class PollManager:
                 , "channel_id": state["channel"].id
                 , "message_id": state["message_id"]
                 , "native_id": state["native_id"]
+                , "native_expires": state.get("native_expires")
                 , "created": state["created"]
             }
         await self.config.polls.set(data)
@@ -140,11 +141,16 @@ class PollManager:
                 , "channel": channel
                 , "message_id": saved.get("message_id")
                 , "native_id": saved.get("native_id")
+                , "native_expires": saved.get("native_expires")
                 , "created": saved.get("created") or time.time()
                 , "idle_task": None
+                , "expiry_task": None
                 , "lock": asyncio.Lock()
             }
             self.active[session_id] = state
+            if state["state"] == "converted" and state["native_expires"] is not None:
+                # The natural expiry of the poll survives the reload.
+                state["expiry_task"] = asyncio.create_task(self._native_watch(session_id, state))
             if state["state"] != "active" or state["message_id"] is None:
                 continue
             # The custom ids match the buttons of the old view, so the
@@ -182,8 +188,10 @@ class PollManager:
             , "channel": channel
             , "message_id": None
             , "native_id": None
+            , "native_expires": None
             , "created": time.time()
             , "idle_task": None
+            , "expiry_task": None
             , "lock": asyncio.Lock()
         }
         view = PollView(self, session_id, answers)
@@ -309,16 +317,35 @@ class PollManager:
                 return
             state["state"] = "converted" if native_id is not None else "closed"
             state["native_id"] = native_id
+            if native_id is not None:
+                state["native_expires"] = time.time() + POLL_DURATION_HOURS * 3600
             note = "\n(the choices continue as a Discord poll)" if native_id is not None else "\n(the choices have expired)"
             await self.discord_call(
                 lambda: channel.get_partial_message(state["message_id"]).edit(content=self._text(state) + note, view=None)
                 , "The vote view close"
             )
         await self._save()
-        if state["state"] != "converted":
+        if state["state"] == "converted":
+            # The natural expiry of the poll also completes it.
+            state["expiry_task"] = asyncio.create_task(self._native_watch(session_id, state))
+        else:
             # An expiry is a completion: wake the agent with the counts. A
             # conversion is not: the agent answers when the poll completes.
             await self._fire(session_id, await self.status_text(session_id), state)
+
+    async def _native_watch(self, session_id: int, state: dict) -> None:
+        """End the native poll at its natural expiry and wake the agent with the counts."""
+        delay = max(0.0, state.get("native_expires", time.time()) - time.time())
+        try:
+            await asyncio.sleep(delay)
+        except asyncio.CancelledError:
+            return
+        if self.active.get(session_id) is not state or state["state"] != "converted":
+            return
+        try:
+            await self._fire(session_id, await self.status_text(session_id), state)
+        except Exception:
+            log.exception("The native poll expiry failed for session %s.", session_id)
 
     async def native_vote(self, message_id: int, user_id: int, added: bool) -> None:
         """Track one native poll vote. At the majority, end the poll and wake the agent."""
@@ -376,12 +403,18 @@ class PollManager:
                 , "The vote view close"
             )
         self.active.pop(session_id, None)
+        task = state.get("expiry_task")
+        if task is not None:
+            task.cancel()
+            state["expiry_task"] = None
         await self._save()
         if state["state"] == "converted" and state["native_id"] is not None:
             message = None
             try:
                 native = await state["channel"].fetch_message(state["native_id"])
-                message = await native.end_poll()
+                poll = getattr(native, "poll", None)
+                # A poll that ended on its own needs no end call.
+                message = native if poll is not None and poll.is_finalised() else await native.end_poll()
             except (discord.NotFound, discord.Forbidden, discord.HTTPException):
                 message = None
             poll = getattr(message, "poll", None)
@@ -396,8 +429,11 @@ class PollManager:
     async def drop_user(self, user_id: int) -> None:
         """Drop the votes of a user and the poll of a direct message with them (EUD)."""
         state = self.active.pop(user_id, None)
-        if state is not None and state["idle_task"] is not None:
-            state["idle_task"].cancel()
+        if state is not None:
+            for key in ("idle_task", "expiry_task"):
+                task = state.get(key)
+                if task is not None:
+                    task.cancel()
         for poll in self.active.values():
             if poll["votes"].pop(user_id, None) is None:
                 continue
@@ -409,9 +445,10 @@ class PollManager:
         await self._save()
 
     def close(self) -> None:
-        """Cancel the idle tasks and drop the RAM state. The persisted states restore on the next load."""
+        """Cancel the watch tasks and drop the RAM state. The persisted states restore on the next load."""
         for state in self.active.values():
-            task = state["idle_task"]
-            if task is not None:
-                task.cancel()
+            for key in ("idle_task", "expiry_task"):
+                task = state.get(key)
+                if task is not None:
+                    task.cancel()
         self.active.clear()
