@@ -47,7 +47,7 @@ class ChatEngine:
     usage_blocked. The cog plays this role.
     """
 
-    def __init__(self, bot, config, history, memory, mcp, harness_tools, scope_stats, compactor, api):
+    def __init__(self, bot, config, history, memory, mcp, harness_tools, scope_stats, compactor, api, polls=None):
         self.bot = bot
         self.config = config
         self.history = history
@@ -58,6 +58,7 @@ class ChatEngine:
         self.scope_stats = scope_stats
         self.compactor = compactor
         self.api = api
+        self.polls = polls
 
     async def generate_reply(self, channel_id: int, content: str, *, guild_id: int | None = None, user_id: int | None = None, bot_name: str | None = None, user_name: str | None = None, is_owner: bool = False, message_id: int | None = None) -> str | None:
         """Send one user message to the chat API and return the reply text.
@@ -230,6 +231,12 @@ class ChatEngine:
         speaker = user_name or "User"
         tag = f"{speaker} <@{user_id}>" if user_id is not None else speaker
         additions = []
+        if self.polls is not None:
+            # The vote status of the session leads the turn: the agent
+            # answers with the current counts in sight.
+            status = await self.polls.status_text(session_id)
+            if status:
+                additions.append({"role": "user", "content": f"[harness]\n{status}\n[/harness]"})
         if user_id is not None and user_id not in session.seen_users:
             user_memory = await self.memory.read("user", user_id)
             if user_memory:

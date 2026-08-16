@@ -38,7 +38,7 @@ SYSTEM_PROMPT = (
     "Conversation rules:\n"
     "- An empty message is a poke. The user wants your attention and said nothing.\n"
     "- To stay silent, answer with only '[no-reply]'. The harness then sends nothing.\n"
-    "- When a user mentions a past event that you do not know, use the history_read tool to find the exchange.\n"
+    "- When a user mentions a past event that you do not know, use the read_history tool to find the exchange.\n"
     "- After 10 tool calls in one answer, finish the answer in text without tools.\n"
     "\n"
     "Discord renders your answers. You can use markdown: **bold**, *italics*, __underline__, ~~strikethrough~~, "

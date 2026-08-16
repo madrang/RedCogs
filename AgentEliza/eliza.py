@@ -17,9 +17,10 @@ from .llm_chat import ChatEngine, ChatError, MAX_SESSIONS
 from .llm_compress import Compressor
 from .mcp_manager import MCPManager
 from .memory import Memory
+from .polls import PollManager
 from .providers import DEFAULT_PROVIDER, PROVIDERS, provider_for, provider_named
 from .stats import ScopeStats
-from .tools import HarnessTools
+from .tools import HarnessOptions, HarnessTools
 
 log = logging.getLogger("red.agenteliza")
 
@@ -74,15 +75,21 @@ class Eliza(commands.Cog):
             , limit_channel=100
             , limit_server=500
             , dm_rules=DEFAULT_DM_RULES
+            , polls={}
         )
         self.config.register_guild(rules=DEFAULT_GUILD_RULES)
         # Live MCP state lives in the manager, in memory only.
         self.mcp = MCPManager(self.config)
         # Long-term memory lives in Config. The harness tools let the agent control it.
         self.memory = Memory(self.config)
-        self.harness_tools = HarnessTools(
-            self.memory, self._get_session, bot.get_guild, self._get_channel, lambda: bot.user.id if bot.user else None
-        )
+        # The interactive votes: a button view first, a native poll after an idle time.
+        self.polls = PollManager(self._get_channel, self._discord_call, self.config)
+        tool_options = HarnessOptions(memory=self.memory, session_getter=self._get_session)
+        tool_options.guild_getter = bot.get_guild
+        tool_options.channel_getter = self._get_channel
+        tool_options.bot_id_getter = lambda: bot.user.id if bot.user else None
+        tool_options.polls = self.polls
+        self.harness_tools = HarnessTools(tool_options)
         # Usage stats and rate windows per scope, in Config.
         self.scope_stats = ScopeStats(self.config)
         # Conversation sessions: one per guild, one per user in DMs. Verbatim turns in memory only.
@@ -92,16 +99,18 @@ class Eliza(commands.Cog):
         self.compactor = Compressor(self.config, self.history, self.memory, self)
         self.engine = ChatEngine(
             bot, self.config, self.history, self.memory, self.mcp, self.harness_tools, self.scope_stats,
-            self.compactor, self,
+            self.compactor, self, polls=self.polls,
         )
 
     async def cog_load(self) -> None:
         self.session = self._new_session()
         self.mcp.start()
         self.compactor.sweep.start()
+        await self.polls.restore(self.bot.add_view)
 
     async def cog_unload(self) -> None:
         self.compactor.sweep.cancel()
+        self.polls.close()
         try:
             # Persist every session before the RAM state dies.
             await self.compactor.compact_all()
@@ -124,9 +133,10 @@ class Eliza(commands.Cog):
         return await self.config.user_from_id(user_id).all()
 
     async def red_delete_data_for_user(self, *, requester: str, user_id: int) -> None:
-        """Delete the user scope: memory, summary, stats, rate window. Also drops the live DM session."""
+        """Delete the user scope: memory, summary, stats, rate window. Also drops the live DM session and the votes."""
         await self.config.user_from_id(user_id).clear()
         self.history.sessions.pop(user_id, None)
+        await self.polls.drop_user(user_id)
 
     #
     # Chat API
