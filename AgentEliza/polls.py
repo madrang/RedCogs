@@ -309,22 +309,15 @@ class PollManager:
                 return
             state["state"] = "converted" if native_id is not None else "closed"
             state["native_id"] = native_id
-            if native_id is not None and self.on_event is not None:
-                # The first status call after a conversion stays silent (the
-                # trigger below): the native poll keeps running. The next one
-                # ends it and reports the counts.
-                state["fresh_native"] = True
             note = "\n(the choices continue as a Discord poll)" if native_id is not None else "\n(the choices have expired)"
             await self.discord_call(
                 lambda: channel.get_partial_message(state["message_id"]).edit(content=self._text(state) + note, view=None)
                 , "The vote view close"
             )
         await self._save()
-        if state["state"] == "converted":
-            if self.active.get(session_id) is state:
-                # A majority close in between (native_vote) already reported.
-                await self._fire(session_id, f"The choices on {state['question']!r} continue as a Discord poll.", state)
-        else:
+        if state["state"] != "converted":
+            # An expiry is a completion: wake the agent with the counts. A
+            # conversion is not: the agent answers when the poll completes.
             await self._fire(session_id, await self.status_text(session_id), state)
 
     async def native_vote(self, message_id: int, user_id: int, added: bool) -> None:
@@ -348,8 +341,6 @@ class PollManager:
         participants = frozenset(participants | state["votes"].keys() | native_votes)
         if not participants or len(native_votes) * 5 < len(participants) * 3:
             return
-        # The status call below owns the fresh flag from now on.
-        state.pop("fresh_native", None)
         await self._fire(session_id, await self.status_text(session_id), state)
 
     async def status_text(self, session_id: int) -> str | None:
@@ -384,10 +375,6 @@ class PollManager:
                 )
                 , "The vote view close"
             )
-        if state["state"] == "converted" and state.pop("fresh_native", False):
-            # The conversion trigger already reached the agent: this status
-            # call stays silent so the native poll keeps running.
-            return None
         self.active.pop(session_id, None)
         await self._save()
         if state["state"] == "converted" and state["native_id"] is not None:
