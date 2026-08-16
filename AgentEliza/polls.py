@@ -199,17 +199,23 @@ class PollManager:
     async def vote(self, session_id: int, interaction: discord.Interaction, index: int) -> None:
         """Record one click and answer the interaction.
 
-        The lock keeps a late click from overtaking the idle conversion:
-        the click waits, then answers expired instead of overwriting the
-        conversion note.
+        The defer acknowledges the click at once: the lock can wait behind
+        a conversion with retries, and the 3-second window of the initial
+        response is shorter than a retry. The edit then runs as the
+        original response, valid for 15 minutes.
         """
         state = self.active.get(session_id)
         if state is None:
             await interaction.response.send_message("These choices have expired.", ephemeral=True)
             return
+        try:
+            await interaction.response.defer()
+        except discord.NotFound:
+            # The click died on the way: a stalled event loop ate the window.
+            return
         async with state["lock"]:
             if state["state"] != "active":
-                await interaction.response.send_message("These choices have expired.", ephemeral=True)
+                await interaction.followup.send("These choices have expired.", ephemeral=True)
                 return
             user_id = interaction.user.id
             if state["multiple"]:
@@ -244,9 +250,14 @@ class PollManager:
                     task.cancel()
                     state["idle_task"] = None
                 state["state"] = "closed"
-                await interaction.response.edit_message(content=text + self._final_note(state, participants), view=None)
+                note = text + self._final_note(state, participants)
             else:
-                await interaction.response.edit_message(content=text)
+                note = text
+            try:
+                await interaction.edit_original_response(content=note, view=None if close_now else discord.utils.MISSING)
+            except discord.HTTPException:
+                # A dead interaction loses only the message update: the vote stands.
+                pass
         await self._save()
         if close_now:
             # A button click is no user message: wake the agent with the counts.
@@ -263,7 +274,12 @@ class PollManager:
             await asyncio.sleep(POLL_VIEW_IDLE)
         except asyncio.CancelledError:
             return
-        await self._convert(session_id, state)
+        try:
+            await self._convert(session_id, state)
+        except Exception:
+            # An unhandled failure here kills the conversion silently:
+            # the task dies and the view never converts. Log it loud.
+            log.exception("The vote conversion failed for session %s.", session_id)
 
     async def _convert(self, session_id: int, state: dict) -> None:
         """End the view phase: a native poll in a guild, an expired view elsewhere."""
@@ -279,10 +295,10 @@ class PollManager:
             poll = discord.Poll(
                 state["question"]
                 , duration=timedelta(hours=POLL_DURATION_HOURS)
-                , allow_multiselect=state["multiple"]
+                , multiple=state["multiple"]
             )
             for answer in state["answers"]:
-                poll.add_answer(answer)
+                poll.add_answer(text=answer)
             native = await self.discord_call(lambda: channel.send(poll=poll), "The vote conversion")
             if native is not None:
                 native_id = native.id
