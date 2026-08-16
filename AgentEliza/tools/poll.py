@@ -15,7 +15,7 @@ class PollTools:
                     "name": "propose_choices"
                     , "description": (
                         "Propose choices for an answer to a question: a message with one button per choice. "
-                        "The status arrives prepended to the next messages."
+                        "The status arrives prepended to the next messages. Do not repeat the choices in your answer."
                     )
                     , "parameters": {
                         "type": "object"
