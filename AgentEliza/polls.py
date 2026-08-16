@@ -60,6 +60,9 @@ class PollManager:
         # Async callback (session_id, channel, harness text): a poll event
         # without a user message wakes the agent. Wired by the cog.
         self.on_event = None
+        # Async callable (session_id) returning the ids of the active users
+        # of the conversation, for the majority rule of a guild poll.
+        self.participants_getter = None
         self.active: dict = {}
 
     def _counts(self, state: dict) -> list:
@@ -132,6 +135,14 @@ class PollManager:
             add_view(PollView(self, session_id, state["answers"]), message_id=state["message_id"])
             self._restart_idle(session_id, state)
 
+    async def _participants(self, session_id: int, state: dict) -> frozenset:
+        """The active users of a guild conversation. Empty in a direct message or without a getter."""
+        if getattr(state["channel"], "guild", None) is None:
+            return frozenset()
+        if self.participants_getter is None:
+            return frozenset()
+        return frozenset(await self.participants_getter(session_id) or ())
+
     async def _fire(self, session_id: int, text: str | None, state: dict) -> None:
         """Wake the agent with a harness text: a poll event without a user message."""
         if self.on_event is None or not text:
@@ -194,13 +205,19 @@ class PollManager:
             else:
                 # Single choice: the last click of a user is the vote.
                 state["votes"][user_id] = {index}
-            dm_final = getattr(state["channel"], "guild", None) is None and not state["multiple"]
-            if not dm_final:
+            participants = await self._participants(session_id, state)
+            single = getattr(state["channel"], "guild", None) is None or len(participants) <= 1
+            # Close at once when the single active user answers a
+            # single-choice poll (the direct message behavior), or when
+            # half of the active users or more answered.
+            close_now = (single and not state["multiple"]) or (
+                not single and len(state["votes"]) * 2 >= len(participants)
+            )
+            if not close_now:
                 self._restart_idle(session_id, state)
             text = self._text(state)
-            if dm_final:
-                # A direct message has one voter: one answer completes the
-                # choices. Close the view at once, no idle wait.
+            if close_now:
+                # The result is final: close the view at once, no idle wait.
                 task = state["idle_task"]
                 if task is not None:
                     task.cancel()
@@ -210,7 +227,7 @@ class PollManager:
             else:
                 await interaction.response.edit_message(content=text)
         await self._save()
-        if dm_final:
+        if close_now:
             # A button click is no user message: wake the agent with the counts.
             await self._fire(session_id, await self.status_text(session_id), state)
 
@@ -275,21 +292,23 @@ class PollManager:
         """The harness status of the poll of a session, or None without a poll.
 
         On an active poll: the live counts. A message is activity, so the
-        idle clock restarts. A direct message multiple-choice poll instead
-        closes: the reply of the single voter ends the choices. On a
-        converted poll: the first call ends the native poll and answers
-        the final counts. On a closed poll: the first call answers the
-        final counts of the view.
+        idle clock restarts. A multiple-choice poll with one active user
+        instead closes: the reply of the single voter ends the choices.
+        On a converted poll: the first call ends the native poll and
+        answers the final counts. On a closed poll: the first call answers
+        the final counts of the view.
         """
         state = self.active.get(session_id)
         if state is None:
             return None
         if state["state"] == "active":
-            if getattr(state["channel"], "guild", None) is not None or not state["multiple"]:
+            participants = await self._participants(session_id, state)
+            single = getattr(state["channel"], "guild", None) is None or len(participants) <= 1
+            if not (single and state["multiple"]):
                 self._restart_idle(session_id, state)
                 return f"Choices are open:\n{self._text(state)}"
-            # A direct message has one voter: the next reply of the user
-            # closes a multiple-choice poll, no idle wait.
+            # One active user answers a multiple-choice poll with a reply:
+            # the reply closes the choices, no idle wait.
             task = state["idle_task"]
             if task is not None:
                 task.cancel()

@@ -104,6 +104,13 @@ class Eliza(commands.Cog):
         # A poll event without a user message (a vote close, an idle
         # conversion) wakes the agent through the engine.
         self.polls.on_event = self._poll_trigger
+        # The majority rule of a guild poll counts the speakers of the session.
+        self.polls.participants_getter = self._poll_participants
+
+    async def _poll_participants(self, session_id: int):
+        """The active users of a poll session: the speakers of the current context."""
+        session = self.history.sessions.get(session_id)
+        return set(session.seen_users) if session is not None else set()
 
     async def cog_load(self) -> None:
         self.session = self._new_session()
