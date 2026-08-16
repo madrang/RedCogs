@@ -561,6 +561,8 @@ class Eliza(commands.Cog):
                 log.exception("The poll trigger reply failed for channel %s:", channel.id)
                 return
         if reply is None:
+            # The agent chose the no-reply tag on a poll completion.
+            log.info("The poll trigger of session %s got a no-reply answer.", session_id)
             return
         await self._post_reply(channel, reply, discord.AllowedMentions.all(), tag=f"poll-{session_id}")
 

@@ -169,6 +169,7 @@ class PollManager:
     async def _fire(self, session_id: int, text: str | None, state: dict) -> None:
         """Wake the agent with a harness text: a poll event without a user message."""
         if self.on_event is None or not text:
+            log.warning("The poll trigger of session %s was skipped: no callback or no text.", session_id)
             return
         try:
             await self.on_event(session_id, state["channel"], text)
