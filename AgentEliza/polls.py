@@ -182,9 +182,20 @@ class PollManager:
             else:
                 # Single choice: the last click of a user is the vote.
                 state["votes"][user_id] = {index}
-            self._restart_idle(session_id, state)
+            dm_final = getattr(state["channel"], "guild", None) is None and not state["multiple"]
+            if not dm_final:
+                self._restart_idle(session_id, state)
             text = self._text(state)
-            if state["multiple"]:
+            if dm_final:
+                # A direct message has one voter: one answer completes the
+                # choices. Close the view at once, no idle wait.
+                task = state["idle_task"]
+                if task is not None:
+                    task.cancel()
+                    state["idle_task"] = None
+                state["state"] = "closed"
+                await interaction.response.edit_message(content=text + "\n(final results)", view=None)
+            elif state["multiple"]:
                 picks = sorted(state["votes"].get(user_id, ()))
                 yours = ", ".join(state["answers"][pick] for pick in picks) or "nothing"
                 await interaction.response.send_message(f"Your choices: {yours}.", ephemeral=True)

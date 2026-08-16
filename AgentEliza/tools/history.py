@@ -213,12 +213,18 @@ class HistoryTools:
         if not bounded and not window.get("oldest_first"):
             messages.reverse()
         scanned = len(raw)
+        if raw:
+            first = min(message.created_at for message in raw)
+            last = max(message.created_at for message in raw)
+            span = f" from {first:{MESSAGE_TIME_FORMAT}} to {last:{MESSAGE_TIME_FORMAT}}"
+        else:
+            span = ""
         if not messages:
             note = f", 0 of {qualifying} matched the query" if query else ""
-            return f"(no matching messages in {label}: {scanned} raw messages scanned{note})"
+            return f"(no matching messages in {label}: {scanned} raw messages scanned{span}{note})"
         # The header states every internal limit the result hit: the model
         # trusts a count it can explain.
-        parts = [f"{len(messages)} messages of {label}, oldest first"]
+        parts = [f"{len(messages)} messages of {label}, oldest first", f"{scanned} raw messages scanned{span}"]
         if query:
             parts.append(f"{matched} of {qualifying} matched the query")
         if requested != limit:

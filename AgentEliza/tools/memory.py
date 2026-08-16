@@ -23,7 +23,7 @@ class MemoryTools:
         scope_property = {
             "type": "string"
             , "enum": list(SCOPE_ALIASES)
-            , "description": "The scope to target."
+            , "description": "The scope to target. \"server\" is not available in direct messages."
         }
         target_property = {
             "type": "string"
