@@ -13,8 +13,6 @@ from .base import MESSAGE_TIME_FORMAT, _cap
 HISTORY_READ_SCAN_MAX = 400
 HISTORY_READ_MAX_RESULTS = 64
 HISTORY_READ_DEFAULT_RESULTS = 20
-# Cap of one message text in a read_history result.
-HISTORY_READ_MESSAGE_MAX_CHARS = 1000
 
 
 class HistoryTools:
@@ -237,7 +235,5 @@ class HistoryTools:
         lines = ["(" + ". ".join(parts) + ")"]
         for message in messages:
             content = " ".join(message.content.split())
-            if len(content) > HISTORY_READ_MESSAGE_MAX_CHARS:
-                content = content[:HISTORY_READ_MESSAGE_MAX_CHARS] + " [...]"
             lines.append(f"{message.created_at:{MESSAGE_TIME_FORMAT}} {message.author.display_name} <@{message.author.id}>: {content}")
         return _cap("\n".join(lines))

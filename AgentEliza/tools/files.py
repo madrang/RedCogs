@@ -36,7 +36,7 @@ class FileTools:
                             }
                             , "caption": {
                                 "type": "string"
-                                , "description": "An optional message text sent with the file."
+                                , "description": "An optional text message sent with the file."
                             }
                         }
                         , "required": ["filename", "content"]

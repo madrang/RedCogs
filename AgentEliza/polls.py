@@ -224,6 +224,9 @@ class PollManager:
                 # Single choice: the last click of a user is the vote.
                 state["votes"][user_id] = {index}
             participants = await self._participants(session_id, state)
+            # A click is activity: every voter counts as an active user,
+            # also a voter who never talked to the bot.
+            participants = frozenset(participants | state["votes"].keys())
             single = getattr(state["channel"], "guild", None) is None or len(participants) <= 1
             # Close at once when the single active user answers a
             # single-choice poll (the direct message behavior), or when
@@ -321,6 +324,8 @@ class PollManager:
             return None
         if state["state"] == "active":
             participants = await self._participants(session_id, state)
+            # A voter counts as an active user, the same rule as in vote.
+            participants = frozenset(participants | state["votes"].keys())
             single = getattr(state["channel"], "guild", None) is None or len(participants) <= 1
             if not (single and state["multiple"]):
                 self._restart_idle(session_id, state)
