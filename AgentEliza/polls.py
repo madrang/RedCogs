@@ -227,9 +227,9 @@ class PollManager:
             single = getattr(state["channel"], "guild", None) is None or len(participants) <= 1
             # Close at once when the single active user answers a
             # single-choice poll (the direct message behavior), or when
-            # half of the active users or more answered.
+            # 60 percent of the active users or more answered.
             close_now = (single and not state["multiple"]) or (
-                not single and len(state["votes"]) * 2 >= len(participants)
+                not single and len(state["votes"]) * 5 >= len(participants) * 3
             )
             if not close_now:
                 self._restart_idle(session_id, state)
