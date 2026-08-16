@@ -11,7 +11,7 @@ log = logging.getLogger("red.agenteliza")
 
 # The view phase of a poll: idle this long and the vote converts to a
 # native Discord poll. Same span as the provider cache TTL: the view lives
-# while the conversation is hot. A vote or a message resets the clock.
+# while the conversation is hot. Only a vote resets the clock.
 POLL_VIEW_IDLE = 300
 # The duration of the native poll after the conversion.
 POLL_DURATION_HOURS = 24
@@ -305,19 +305,45 @@ class PollManager:
             )
         await self._save()
         if state["state"] == "converted":
-            await self._fire(session_id, f"The choices on {state['question']!r} continue as a Discord poll.", state)
+            if self.active.get(session_id) is state:
+                # A majority close in between (native_vote) already reported.
+                await self._fire(session_id, f"The choices on {state['question']!r} continue as a Discord poll.", state)
         else:
             await self._fire(session_id, await self.status_text(session_id), state)
+
+    async def native_vote(self, message_id: int, user_id: int, added: bool) -> None:
+        """Track one native poll vote. At the majority, end the poll and wake the agent."""
+        found = None
+        for session_id, state in self.active.items():
+            if state["state"] == "converted" and state["native_id"] == message_id:
+                found = (session_id, state)
+                break
+        if found is None:
+            return
+        session_id, state = found
+        native_votes = state.setdefault("native_votes", set())
+        if added:
+            native_votes.add(user_id)
+        else:
+            native_votes.discard(user_id)
+        participants = await self._participants(session_id, state)
+        # The same majority rule as the view phase: the active users and
+        # every voter, at 60 percent.
+        participants = frozenset(participants | state["votes"].keys() | native_votes)
+        if not participants or len(native_votes) * 5 < len(participants) * 3:
+            return
+        # The status call below owns the fresh flag from now on.
+        state.pop("fresh_native", None)
+        await self._fire(session_id, await self.status_text(session_id), state)
 
     async def status_text(self, session_id: int) -> str | None:
         """The harness status of the poll of a session, or None without a poll.
 
-        On an active poll: the live counts. A message is activity, so the
-        idle clock restarts. A multiple-choice poll with one active user
-        instead closes: the reply of the single voter ends the choices.
-        On a converted poll: the first call ends the native poll and
-        answers the final counts. On a closed poll: the first call answers
-        the final counts of the view.
+        On an active poll: the live counts. A multiple-choice poll with
+        one active user closes: the reply of the single voter ends the
+        choices. On a converted poll: the first call ends the native poll
+        and answers the final counts. On a closed poll: the first call
+        answers the final counts of the view.
         """
         state = self.active.get(session_id)
         if state is None:
@@ -328,7 +354,6 @@ class PollManager:
             participants = frozenset(participants | state["votes"].keys())
             single = getattr(state["channel"], "guild", None) is None or len(participants) <= 1
             if not (single and state["multiple"]):
-                self._restart_idle(session_id, state)
                 return f"Choices are open:\n{self._text(state)}"
             # One active user answers a multiple-choice poll with a reply:
             # the reply closes the choices, no idle wait.

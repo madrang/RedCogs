@@ -527,6 +527,16 @@ class Eliza(commands.Cog):
             if sent is None:
                 break
 
+    @commands.Cog.listener()
+    async def on_raw_poll_vote_add(self, payload: discord.RawPollVoteActionEvent) -> None:
+        """A vote on a native poll: the majority rule can end it early."""
+        await self.polls.native_vote(payload.message_id, payload.user_id, True)
+
+    @commands.Cog.listener()
+    async def on_raw_poll_vote_remove(self, payload: discord.RawPollVoteActionEvent) -> None:
+        """A retracted native poll vote updates the tracked voters."""
+        await self.polls.native_vote(payload.message_id, payload.user_id, False)
+
     async def _poll_trigger(self, session_id: int, channel, harness_text: str) -> None:
         """A poll event without a user message wakes the agent: the harness text in, the reply posted."""
         if self._closed:
