@@ -543,19 +543,23 @@ class Eliza(commands.Cog):
             return
         guild = getattr(channel, "guild", None)
         user = getattr(channel, "recipient", None) if guild is None else None
-        try:
-            reply = await self.engine.generate_reply(
-                channel.id
-                , harness_text
-                , guild_id=guild.id if guild is not None else None
-                , user_id=user.id if user is not None else None
-                , bot_name=self.bot.user.name if self.bot.user else "Eliza"
-                , user_name=user.display_name if user is not None else None
-                , is_owner=user is not None and await self.bot.is_owner(user)
-            )
-        except Exception:
-            log.exception("The poll trigger reply failed for channel %s:", channel.id)
-            return
+        async with contextlib.AsyncExitStack() as stack:
+            # The typing indicator is cosmetic: its failure must not skip the reply.
+            with contextlib.suppress(aiohttp.ClientError, asyncio.TimeoutError, discord.HTTPException):
+                await stack.enter_async_context(channel.typing())
+            try:
+                reply = await self.engine.generate_reply(
+                    channel.id
+                    , harness_text
+                    , guild_id=guild.id if guild is not None else None
+                    , user_id=user.id if user is not None else None
+                    , bot_name=self.bot.user.name if self.bot.user else "Eliza"
+                    , user_name=user.display_name if user is not None else None
+                    , is_owner=user is not None and await self.bot.is_owner(user)
+                )
+            except Exception:
+                log.exception("The poll trigger reply failed for channel %s:", channel.id)
+                return
         if reply is None:
             return
         await self._post_reply(channel, reply, discord.AllowedMentions.all(), tag=f"poll-{session_id}")
