@@ -420,7 +420,7 @@ class PollManager:
                 message = None
             poll = getattr(message, "poll", None)
             if poll is not None:
-                parts = [f"{answer.poll_media.text}: {getattr(answer, 'vote_count', 0)}" for answer in poll.answers]
+                parts = [f"{answer.text}: {answer.vote_count}" for answer in poll.answers]
                 return f"The choices on {state['question']!r} have expired. Final counts: {', '.join(parts)}."
             return f"The choices on {state['question']!r} have expired. The final counts are unknown."
         counts = self._counts(state)
