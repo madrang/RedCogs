@@ -57,6 +57,9 @@ class PollManager:
         self.discord_call = discord_call
         # The cog Config, for the persisted poll states. None: RAM only.
         self.config = config
+        # Async callback (session_id, channel, harness text): a poll event
+        # without a user message wakes the agent. Wired by the cog.
+        self.on_event = None
         self.active: dict = {}
 
     def _counts(self, state: dict) -> list:
@@ -129,6 +132,15 @@ class PollManager:
             add_view(PollView(self, session_id, state["answers"]), message_id=state["message_id"])
             self._restart_idle(session_id, state)
 
+    async def _fire(self, session_id: int, text: str | None, state: dict) -> None:
+        """Wake the agent with a harness text: a poll event without a user message."""
+        if self.on_event is None or not text:
+            return
+        try:
+            await self.on_event(session_id, state["channel"], text)
+        except Exception:
+            log.exception("The poll agent trigger failed for session %s.", session_id)
+
     async def create(self, session_id: int, channel, question: str, answers: list, multiple: bool) -> str | None:
         """Post the view poll of a session. Return an error text, or None on success."""
         if session_id in self.active:
@@ -198,6 +210,9 @@ class PollManager:
             else:
                 await interaction.response.edit_message(content=text)
         await self._save()
+        if dm_final:
+            # A button click is no user message: wake the agent with the counts.
+            await self._fire(session_id, await self.status_text(session_id), state)
 
     def _restart_idle(self, session_id: int, state: dict) -> None:
         task = state["idle_task"]
@@ -240,12 +255,21 @@ class PollManager:
                 return
             state["state"] = "converted" if native_id is not None else "closed"
             state["native_id"] = native_id
+            if native_id is not None and self.on_event is not None:
+                # The first status call after a conversion stays silent (the
+                # trigger below): the native poll keeps running. The next one
+                # ends it and reports the counts.
+                state["fresh_native"] = True
             note = "\n(the choices continue as a Discord poll)" if native_id is not None else "\n(the choices have expired)"
             await self.discord_call(
                 lambda: channel.get_partial_message(state["message_id"]).edit(content=self._text(state) + note, view=None)
                 , "The vote view close"
             )
         await self._save()
+        if state["state"] == "converted":
+            await self._fire(session_id, f"The choices on {state['question']!r} continue as a Discord poll.", state)
+        else:
+            await self._fire(session_id, await self.status_text(session_id), state)
 
     async def status_text(self, session_id: int) -> str | None:
         """The harness status of the poll of a session, or None without a poll.
@@ -277,6 +301,10 @@ class PollManager:
                 )
                 , "The vote view close"
             )
+        if state["state"] == "converted" and state.pop("fresh_native", False):
+            # The conversion trigger already reached the agent: this status
+            # call stays silent so the native poll keeps running.
+            return None
         self.active.pop(session_id, None)
         await self._save()
         if state["state"] == "converted" and state["native_id"] is not None:

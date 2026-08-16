@@ -101,6 +101,9 @@ class Eliza(commands.Cog):
             bot, self.config, self.history, self.memory, self.mcp, self.harness_tools, self.scope_stats,
             self.compactor, self, polls=self.polls,
         )
+        # A poll event without a user message (a vote close, an idle
+        # conversion) wakes the agent through the engine.
+        self.polls.on_event = self._poll_trigger
 
     async def cog_load(self) -> None:
         self.session = self._new_session()
@@ -478,26 +481,30 @@ class Eliza(commands.Cog):
         if reply is None:
             # The agent refused to reply with the no-reply tag.
             return
+        await self._post_reply(message.channel, reply, mentions, tag=str(message.id))
+
+    async def _post_reply(self, channel, reply: str, mentions: discord.AllowedMentions, *, tag: str) -> None:
+        """Post one reply to a channel: pagified, a long answer as a file on the last page."""
         if len(reply) > LONG_REPLY_MAX_CHARS:
             # An extremely long answer does not flood the channel: two pages
             # inline, the full text as a file on the last page. A failed
             # upload replaces only the last page with a note.
             head = reply[:LONG_REPLY_HEAD_CHARS]
-            file = discord.File(io.BytesIO(reply.encode("utf-8")), filename=f"eliza-reply-{message.id}.txt")
+            file = discord.File(io.BytesIO(reply.encode("utf-8")), filename=f"eliza-reply-{tag}.txt")
             pages = list(pagify(head + "\n[...] the answer continues in the attached file"))
             for page in pages[:-1]:
                 await self._discord_call(
-                    lambda: message.channel.send(page, allowed_mentions=mentions),
+                    lambda: channel.send(page, allowed_mentions=mentions),
                     "The reply page send",
                 )
             sent = await self._discord_call(
-                lambda: message.channel.send(pages[-1], file=file, allowed_mentions=mentions),
+                lambda: channel.send(pages[-1], file=file, allowed_mentions=mentions),
                 "The reply file send",
             )
             if sent is None:
                 note = list(pagify(head + "\n[...] the full answer could not be attached: the file upload failed"))[-1]
                 await self._discord_call(
-                    lambda: message.channel.send(note, allowed_mentions=mentions),
+                    lambda: channel.send(note, allowed_mentions=mentions),
                     "The reply page send",
                 )
             return
@@ -505,13 +512,36 @@ class Eliza(commands.Cog):
             # The agent may mention: its answer is the sender's intent.
             try:
                 sent = await self._discord_call(
-                    lambda: message.channel.send(page, allowed_mentions=mentions), "The reply send"
+                    lambda: channel.send(page, allowed_mentions=mentions), "The reply send"
                 )
             except discord.HTTPException as e:
                 log.warning("The reply send failed permanently: %s", e)
                 break
             if sent is None:
                 break
+
+    async def _poll_trigger(self, session_id: int, channel, harness_text: str) -> None:
+        """A poll event without a user message wakes the agent: the harness text in, the reply posted."""
+        if self._closed:
+            return
+        guild = getattr(channel, "guild", None)
+        user = getattr(channel, "recipient", None) if guild is None else None
+        try:
+            reply = await self.engine.generate_reply(
+                channel.id
+                , harness_text
+                , guild_id=guild.id if guild is not None else None
+                , user_id=user.id if user is not None else None
+                , bot_name=self.bot.user.name if self.bot.user else "Eliza"
+                , user_name=user.display_name if user is not None else None
+                , is_owner=user is not None and await self.bot.is_owner(user)
+            )
+        except Exception:
+            log.exception("The poll trigger reply failed for channel %s:", channel.id)
+            return
+        if reply is None:
+            return
+        await self._post_reply(channel, reply, discord.AllowedMentions.all(), tag=f"poll-{session_id}")
 
     #
     # Admin commands
