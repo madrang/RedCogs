@@ -109,6 +109,24 @@ class ChatEngine:
         resolved = message.reference.resolved if message.reference else None
         return isinstance(resolved, discord.Message) and resolved.author.id == bot_id
 
+    @staticmethod
+    def _poll_result_suffix(message: discord.Message) -> str:
+        """The results line of a poll result notification: the embed holds the outcome."""
+        for embed in message.embeds:
+            if embed.type != "poll_result":
+                continue
+            fields = {field.name: field.value for field in embed.fields}
+            if "poll_question_text" not in fields:
+                continue
+            # A tie has no victor fields.
+            victor = fields.get("victor_answer_text")
+            outcome = (
+                f"winner: {victor} ({fields.get('victor_answer_votes', '?')} votes)"
+                if victor else "no winner: a tie"
+            )
+            return f"\nPoll results for {fields['poll_question_text']!r}: {outcome}, total votes: {fields.get('total_votes', '?')}."
+        return ""
+
     async def _backfill_turns(self, channel, bot_name: str, skip_id: int | None) -> list:
         """Recent channel messages as context turns: users as user role, the bot as assistant.
 
@@ -167,6 +185,10 @@ class ChatEngine:
         for message in reversed(qualifying):
             content = message.content.strip()
             if message.author.id == bot_id:
+                if message.type == discord.MessageType.poll_result:
+                    # The poll result notification carries the outcome in its
+                    # embed: the agent learns the results of a completed poll.
+                    content += self._poll_result_suffix(message)
                 if turns and turns[-1]["role"] == "assistant":
                     turns[-1]["content"] += "\n" + content
                 else:
