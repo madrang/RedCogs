@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import time
 from datetime import timedelta
 
 import discord
@@ -81,6 +82,20 @@ class PollManager:
             lines.append(f"{index + 1}. {answer} — {counts[index]}")
         return "\n".join(lines)
 
+    def _final_note(self, state: dict, participants: frozenset) -> str:
+        """The close note of a completed poll: the vote coverage and the duration, in small text."""
+        seconds = max(0, int(time.time() - state["created"]))
+        if seconds < 60:
+            span = "1 second" if seconds == 1 else f"{seconds} seconds"
+        elif seconds < 3600:
+            minutes = max(1, round(seconds / 60))
+            span = "1 minute" if minutes == 1 else f"{minutes} minutes"
+        else:
+            hours = max(1, round(seconds / 3600))
+            span = "1 hour" if hours == 1 else f"{hours} hours"
+        head = f"{len(state['votes'])} of {len(participants)} active users voted. " if len(participants) > 1 else ""
+        return f"\n-# {head}Completed in {span}."
+
     async def _save(self) -> None:
         """Persist the active states to Config."""
         if self.config is None:
@@ -96,6 +111,7 @@ class PollManager:
                 , "channel_id": state["channel"].id
                 , "message_id": state["message_id"]
                 , "native_id": state["native_id"]
+                , "created": state["created"]
             }
         await self.config.polls.set(data)
 
@@ -124,6 +140,7 @@ class PollManager:
                 , "channel": channel
                 , "message_id": saved.get("message_id")
                 , "native_id": saved.get("native_id")
+                , "created": saved.get("created") or time.time()
                 , "idle_task": None
                 , "lock": asyncio.Lock()
             }
@@ -165,6 +182,7 @@ class PollManager:
             , "channel": channel
             , "message_id": None
             , "native_id": None
+            , "created": time.time()
             , "idle_task": None
             , "lock": asyncio.Lock()
         }
@@ -223,7 +241,7 @@ class PollManager:
                     task.cancel()
                     state["idle_task"] = None
                 state["state"] = "closed"
-                await interaction.response.edit_message(content=text + "\n(final results)", view=None)
+                await interaction.response.edit_message(content=text + self._final_note(state, participants), view=None)
             else:
                 await interaction.response.edit_message(content=text)
         await self._save()
@@ -316,7 +334,7 @@ class PollManager:
             state["state"] = "closed"
             await self.discord_call(
                 lambda: state["channel"].get_partial_message(state["message_id"]).edit(
-                    content=self._text(state) + "\n(final results)", view=None
+                    content=self._text(state) + self._final_note(state, participants), view=None
                 )
                 , "The vote view close"
             )
