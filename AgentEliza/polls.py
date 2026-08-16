@@ -195,14 +195,6 @@ class PollManager:
                     state["idle_task"] = None
                 state["state"] = "closed"
                 await interaction.response.edit_message(content=text + "\n(final results)", view=None)
-            elif state["multiple"]:
-                picks = sorted(state["votes"].get(user_id, ()))
-                yours = ", ".join(state["answers"][pick] for pick in picks) or "nothing"
-                await interaction.response.send_message(f"Your choices: {yours}.", ephemeral=True)
-                try:
-                    await interaction.message.edit(content=text)
-                except discord.HTTPException:
-                    pass
             else:
                 await interaction.response.edit_message(content=text)
         await self._save()
@@ -259,16 +251,32 @@ class PollManager:
         """The harness status of the poll of a session, or None without a poll.
 
         On an active poll: the live counts. A message is activity, so the
-        idle clock restarts. On a converted poll: the first call ends the
-        native poll and answers the final counts. On a closed poll: the
-        first call answers the final counts of the view.
+        idle clock restarts. A direct message multiple-choice poll instead
+        closes: the reply of the single voter ends the choices. On a
+        converted poll: the first call ends the native poll and answers
+        the final counts. On a closed poll: the first call answers the
+        final counts of the view.
         """
         state = self.active.get(session_id)
         if state is None:
             return None
         if state["state"] == "active":
-            self._restart_idle(session_id, state)
-            return f"Choices are open:\n{self._text(state)}"
+            if getattr(state["channel"], "guild", None) is not None or not state["multiple"]:
+                self._restart_idle(session_id, state)
+                return f"Choices are open:\n{self._text(state)}"
+            # A direct message has one voter: the next reply of the user
+            # closes a multiple-choice poll, no idle wait.
+            task = state["idle_task"]
+            if task is not None:
+                task.cancel()
+                state["idle_task"] = None
+            state["state"] = "closed"
+            await self.discord_call(
+                lambda: state["channel"].get_partial_message(state["message_id"]).edit(
+                    content=self._text(state) + "\n(final results)", view=None
+                )
+                , "The vote view close"
+            )
         self.active.pop(session_id, None)
         await self._save()
         if state["state"] == "converted" and state["native_id"] is not None:
