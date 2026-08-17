@@ -347,12 +347,15 @@ class ChatEngine:
             try:
                 async with self.api._get_session().get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=30)) as response:
                     if response.status != 200:
+                        log.warning("fetch_url got HTTP %d for %r", response.status, url[:150])
                         return None
                     content_type = response.content_type or "application/octet-stream"
                     body = await read_limited(response, NATIVE_TOOL_FETCH_MAX_BYTES + 1)
-            except (aiohttp.ClientError, asyncio.TimeoutError):
+            except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+                log.warning("fetch_url failed for %r: %s: %s", url[:150], type(e).__name__, e)
                 return None
             if len(body) > NATIVE_TOOL_FETCH_MAX_BYTES:
+                log.warning("fetch_url: the body of %r is over the %d bytes cap", url[:150], NATIVE_TOOL_FETCH_MAX_BYTES)
                 return None
             return body, content_type
         # The tool rounds of this reply: assistant calls and tool results, as
