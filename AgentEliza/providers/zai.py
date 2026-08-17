@@ -1,9 +1,12 @@
 import base64
+import logging
 from urllib.parse import urlparse
 
 from ..tools import TOOL_RESULT_MAX_CHARS
 from ..tools.base import DISCORD_FILE_HOSTS
 from .base import Provider
+
+log = logging.getLogger("red.agenteliza.providers")
 
 # The documented vision limits: png and jpg only (no webp), 5 MB per image,
 # 6000x6000 pixels.
@@ -43,6 +46,9 @@ async def _analyze_image(arguments: dict, call_api, fetch_url=None) -> str:
         }]
         , "stream": False
     }
+    # Log the exact shape sent: a live 1210 means the wire differs from the probe.
+    sent = image_part["image_url"]["url"]
+    log.info("analyze_image sends an image of %d chars, prefix %r", len(sent), sent[:80])
     data = await call_api(payload)
     choices = data.get("choices") or []
     content = (choices[0].get("message") or {}).get("content") if choices else None
