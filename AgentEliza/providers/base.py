@@ -30,6 +30,26 @@ class Provider:
         """Extra fields for the chat completions payload."""
         return {}
 
+    def native_tools(self) -> list:
+        """Tool definitions the provider implements itself, live while it is active.
+
+        Each entry: {"name", "description", "parameters", "handler"}. The
+        handler is an async callable (arguments, call_api) returning text.
+        call_api posts one chat-completions payload to the provider.
+        A native tool takes the place of a harness tool of the same name.
+        """
+        return []
+
+    def mcp_servers(self, api_key: str) -> dict:
+        """MCP server definitions of the provider, live only while the provider is active.
+
+        The shape matches the Config `mcp_servers` entries, plus two
+        optional keys: `headers` (HTTP headers of the connection) and
+        `replaces` (a harness tool name -> the provider tool that takes
+        its place).
+        """
+        return {}
+
     async def fetch_usage(self, session: aiohttp.ClientSession, api_key: str):
         """Query the usage endpoint. Return (rows, error_message)."""
         if self.usage_url is None:

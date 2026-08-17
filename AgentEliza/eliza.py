@@ -417,7 +417,8 @@ class Eliza(commands.Cog):
             for form in (f"<@{self.bot.user.id}>", f"<@!{self.bot.user.id}>"):
                 content = content.replace(form, bot_name)
         content = content.strip()
-        if not content or bare_mention:
+        attachments = [(a.filename, a.content_type, a.url) for a in message.attachments]
+        if (not content or bare_mention) and not attachments:
             # An empty poke still reaches the agent: history and memory give it meaning.
             content = "(poke: the user sent an empty message)"
         guild_id = message.guild.id if message.guild else None
@@ -452,6 +453,7 @@ class Eliza(commands.Cog):
                     , user_name=message.author.display_name
                     , is_owner=is_owner
                     , message_id=message.id
+                    , attachments=attachments
                 )
             except ChatError as e:
                 # The API error reaches the user as a notice, the raw provider answer in a code block.
@@ -956,8 +958,8 @@ class Eliza(commands.Cog):
         await ctx.send_help()
 
     @eliza_mcp.command(name="add")
-    async def mcp_add(self, ctx: commands.Context, name: str, target: str, *args: str) -> None:
-        """Add an MCP server. A target in http(s):// form is a remote server. Anything else is a stdio command with optional args."""
+    async def mcp_add(self, ctx: commands.Context, name: str, target: str) -> None:
+        """Add an MCP server. The target must be an http(s) URL of a remote server. Local commands are not allowed."""
         if not self.mcp.available:
             await ctx.send("The `mcp` package is not installed. Reinstall the cog so its requirements are installed.")
             return
@@ -967,10 +969,10 @@ class Eliza(commands.Cog):
                 "Tools are exposed as `<name>__<tool>` and the API limits tool names."
             )
             return
-        if target.startswith(("http://", "https://")):
-            spec = {"transport": "http", "url": target, "command": "", "args": []}
-        else:
-            spec = {"transport": "stdio", "command": target, "args": list(args), "url": ""}
+        if not target.startswith(("http://", "https://")):
+            await ctx.send("Only web-based MCP servers are allowed: the target must be an http(s) URL.")
+            return
+        spec = {"transport": "http", "url": target, "command": "", "args": []}
         await self.mcp.close_server(name)
         async with self.config.mcp_servers() as servers:
             servers[name] = spec

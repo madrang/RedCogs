@@ -5,8 +5,8 @@ import re
 
 import discord
 
-# Base Discord upload limit (25 MiB), for direct messages. A guild channel
-# reports its own limit in guild.filesize_limit (boosted servers get more).
+# Base Discord upload limit (25 MiB), for direct messages.
+# A guild channel reports its own limit in guild.filesize_limit (boosted servers get more).
 FILE_SEND_DM_MAX_BYTES = 26_214_400
 
 

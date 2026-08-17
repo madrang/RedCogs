@@ -234,6 +234,7 @@ class HistoryTools:
             parts.append(f"the scan window of {window['limit']} raw messages was reached: older messages were not read: use a narrower time range with after and before")
         lines = ["(" + ". ".join(parts) + ")"]
         for message in messages:
-            content = " ".join(message.content.split())
+            # The message text keeps the shape it was posted with, newlines included.
+            content = message.content.strip()
             lines.append(f"{message.created_at:{MESSAGE_TIME_FORMAT}} {message.author.display_name} <@{message.author.id}>: {content}")
         return _cap("\n".join(lines))

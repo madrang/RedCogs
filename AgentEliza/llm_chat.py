@@ -39,6 +39,14 @@ class ChatError(Exception):
         self.raw = raw
 
 
+def _attachments_text(attachments) -> str:
+    """The attachments line of a turn: name, content type, and URL per file."""
+    if not attachments:
+        return ""
+    items = ", ".join(f"{name} ({kind or 'unknown type'}) <{url}>" for name, kind, url in attachments)
+    return f"\n[attachments: {items}]"
+
+
 class ChatEngine:
     """One conversation turn: context build, chat request, tool rounds, turn record.
 
@@ -60,7 +68,7 @@ class ChatEngine:
         self.api = api
         self.polls = polls
 
-    async def generate_reply(self, channel_id: int, content: str, *, guild_id: int | None = None, user_id: int | None = None, bot_name: str | None = None, user_name: str | None = None, is_owner: bool = False, message_id: int | None = None) -> str | None:
+    async def generate_reply(self, channel_id: int, content: str, *, guild_id: int | None = None, user_id: int | None = None, bot_name: str | None = None, user_name: str | None = None, is_owner: bool = False, message_id: int | None = None, attachments: list | None = None) -> str | None:
         """Send one user message to the chat API and return the reply text.
 
         The conversation session is the channel, or the user in DMs: the
@@ -90,7 +98,7 @@ class ChatEngine:
             return await self._generate_locked(
                 session, session_id, channel_id, content, api_key=api_key,
                 guild_id=guild_id, user_id=user_id, bot_name=bot_name, user_name=user_name, is_owner=is_owner,
-                message_id=message_id,
+                message_id=message_id, attachments=attachments,
             )
 
     def _participates(self, message: discord.Message, bot_id: int) -> bool:
@@ -171,11 +179,15 @@ class ChatEngine:
                     continue
                 if message.id in skipped:
                     continue
-                if not message.content.strip() or (prefixes and message.content.strip().startswith(prefixes)):
-                    continue
-                if message.author.id != bot_id:
+                stripped = message.content.strip()
+                if message.author.id == bot_id:
+                    if not stripped and not message.attachments:
+                        continue
+                else:
                     if message.author.bot or not self._participates(message, bot_id):
                         continue
+                if stripped and prefixes and stripped.startswith(prefixes):
+                    continue
                 qualifying.append(message)
                 if len(qualifying) >= BACKFILL_MESSAGES:
                     break
@@ -184,25 +196,32 @@ class ChatEngine:
         turns = []
         for message in reversed(qualifying):
             content = message.content.strip()
+            attachment_files = [(a.filename, a.content_type, a.url) for a in message.attachments]
             if message.author.id == bot_id:
                 if message.type == discord.MessageType.poll_result:
                     # The poll result notification carries the outcome in its
                     # embed: the agent learns the results of a completed poll.
                     content += self._poll_result_suffix(message)
+                content += _attachments_text(attachment_files)
                 if turns and turns[-1]["role"] == "assistant":
                     turns[-1]["content"] += "\n" + content
                 else:
                     turns.append({"role": "assistant", "content": content})
                 continue
+            stamp = f"{message.created_at:{MESSAGE_TIME_FORMAT}}"
+            if (not content or content in (f"<@{bot_id}>", f"<@!{bot_id}>")) and not attachment_files:
+                # The live path maps an empty message to a poke: the
+                # backfill shows the same, so the agent sees the poke.
+                turns.append({"role": "user", "content": f"{stamp} {message.author.display_name} <@{message.author.id}>: (poke: the user sent an empty message)"})
+                continue
             for form in (f"<@{bot_id}>", f"<@!{bot_id}>"):
                 content = content.replace(form, bot_name)
-            stamp = f"{message.created_at:{MESSAGE_TIME_FORMAT}}"
-            turns.append({"role": "user", "content": f"{stamp} {message.author.display_name} <@{message.author.id}>: {content.strip()}"})
+            turns.append({"role": "user", "content": f"{stamp} {message.author.display_name} <@{message.author.id}>: {content.strip()}{_attachments_text(attachment_files)}"})
         while turns and sum(len(turn["content"]) for turn in turns) > BACKFILL_MAX_CHARS:
             turns.pop(0)
         return turns
 
-    async def _generate_locked(self, session: Session, session_id: int, channel_id: int, content: str, *, api_key: str, guild_id, user_id, bot_name, user_name, is_owner, message_id) -> str | None:
+    async def _generate_locked(self, session: Session, session_id: int, channel_id: int, content: str, *, api_key: str, guild_id, user_id, bot_name, user_name, is_owner, message_id, attachments=None) -> str | None:
         """The reply work of generate_reply. The caller holds the session lock."""
         preset = await self.api.current_preset()
         cache_ttl = (preset.cache_ttl if preset is not None else None) or DEFAULT_CACHE_TTL
@@ -271,11 +290,28 @@ class ChatEngine:
             stamp = f"{discord.utils.snowflake_time(message_id):{MESSAGE_TIME_FORMAT}}"
         else:
             stamp = f"{datetime.now(timezone.utc):{MESSAGE_TIME_FORMAT}}"
-        additions.append({"role": "user", "content": f"{stamp} {tag}: {content}"})
+        additions.append({"role": "user", "content": f"{stamp} {tag}: {content}{_attachments_text(attachments)}"})
         messages = [*session.messages, *additions]
-        tools, routes = await self.mcp.gather_tools()
+        tools, routes, replaced = await self.mcp.gather_tools(preset, api_key)
+        native_routes = {}
+        if preset is not None:
+            # Native provider tools (for example the Z.AI vision tool) join
+            # the MCP tools: a provider tool takes the harness name it reuses.
+            for entry in preset.native_tools():
+                native_routes[entry["name"]] = entry["handler"]
+                replaced.add(entry["name"])
+                tools.append({
+                    "type": "function"
+                    , "function": {
+                        "name": entry["name"]
+                        , "description": entry["description"]
+                        , "parameters": entry["parameters"]
+                    }
+                })
         # Harness tools come first: their list is stable, MCP tools may vary.
-        tools = self.harness_tools.tools() + tools
+        # A provider tool in the replaced set takes the place of the harness
+        # default of the same name.
+        tools = [tool for tool in self.harness_tools.tools() if tool["function"]["name"] not in replaced] + tools
         payload = {
             "model": await self.api.model_name(),
             "messages": messages,
@@ -288,6 +324,10 @@ class ChatEngine:
             payload["tools"] = tools
             payload["tool_choice"] = "auto"
         rounds = MCP_TOOL_ROUNDS if tools else 1
+
+        async def call_api(tool_payload):
+            """One chat-completions call on the active provider, for native provider tools."""
+            return await self.api.chat_request(api_key, tool_payload)
         # The tool rounds of this reply: assistant calls and tool results, as
         # the API sent them. The session keeps them until a compaction.
         exchange = []
@@ -335,7 +375,12 @@ class ChatEngine:
                     arguments = {}
                 name = function.get("name", "")
                 try:
-                    if name in self._harness_tool_names:
+                    if name in routes:
+                        # Routes win: a provider tool can take a harness name.
+                        result_text = await self.mcp.run_tool(name, arguments, routes)
+                    elif name in native_routes:
+                        result_text = await native_routes[name](arguments, call_api)
+                    elif name in self._harness_tool_names:
                         result_text = await self.harness_tools.run(
                             name, arguments, guild_id=guild_id, channel_id=channel_id, user_id=user_id,
                             is_owner=is_owner,
