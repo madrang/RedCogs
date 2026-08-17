@@ -88,6 +88,7 @@ class Eliza(commands.Cog):
         tool_options.guild_getter = bot.get_guild
         tool_options.channel_getter = self._get_channel
         tool_options.bot_id_getter = lambda: bot.user.id if bot.user else None
+        tool_options.bot_token_getter = lambda: bot.http.token
         tool_options.polls = self.polls
         self.harness_tools = HarnessTools(tool_options)
         # Usage stats and rate windows per scope, in Config.

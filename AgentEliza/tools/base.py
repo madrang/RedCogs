@@ -6,6 +6,9 @@ TOOL_RESULT_MAX_CHARS = 64_000
 # The message time format everywhere: turn stamps in the context, read_history
 # output, read_history after/before input. ISO 8601, UTC, minute precision.
 MESSAGE_TIME_FORMAT = "%Y-%m-%dT%H:%MZ"
+# The Discord file hosts. Their downloads take the bot token in the
+# Authorization header. Send the token to these hosts only.
+DISCORD_FILE_HOSTS = {"cdn.discordapp.com", "media.discordapp.net"}
 
 
 def _cap(text: str) -> str:

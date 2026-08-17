@@ -8,7 +8,7 @@ from urllib.parse import parse_qs, quote_plus, urlparse
 
 import aiohttp
 
-from .base import _cap
+from .base import DISCORD_FILE_HOSTS, _cap
 
 WEB_FETCH_MAX_BYTES = 1_000_000
 WEB_TIMEOUT = aiohttp.ClientTimeout(total=30)
@@ -184,8 +184,15 @@ class WebTools:
         url = url.strip()
         if not url.startswith(("http://", "https://")):
             return "Error: only http and https URLs can be fetched."
+        headers = {}
+        if urlparse(url).netloc.lower() in DISCORD_FILE_HOSTS:
+            # The Discord file hosts need an authorized request. The bot
+            # token goes to these hosts only, never to a foreign URL.
+            token = self.bot_token_getter() if self.bot_token_getter else None
+            if token:
+                headers["Authorization"] = f"Bot {token}"
         try:
-            async with self.session_getter().get(url, timeout=WEB_TIMEOUT) as response:
+            async with self.session_getter().get(url, headers=headers, timeout=WEB_TIMEOUT) as response:
                 if response.status != 200:
                     return f"Error: the page answered HTTP {response.status}."
                 content_type = (response.content_type or "").lower()

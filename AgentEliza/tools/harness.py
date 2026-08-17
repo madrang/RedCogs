@@ -24,6 +24,8 @@ class HarnessOptions:
     channel_getter: object = None
     # Callable returning the bot user id, for the involvement filter.
     bot_id_getter: object = None
+    # Callable returning the bot token, for authorized Discord file downloads.
+    bot_token_getter: object = None
     # The poll manager, for the poll tool.
     polls: object = None
 
@@ -46,6 +48,7 @@ class HarnessTools(MemoryTools, HistoryTools, FileTools, PollTools, WebTools):
         self.guild_getter = options.guild_getter
         self.channel_getter = options.channel_getter
         self.bot_id_getter = options.bot_id_getter
+        self.bot_token_getter = options.bot_token_getter
         self.polls = options.polls
 
     def tools(self) -> list:

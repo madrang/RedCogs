@@ -1,20 +1,26 @@
 """The reply engine: one user message in, the agent answer out."""
 
+import asyncio
 import json
 import logging
 from datetime import datetime, timezone
+from urllib.parse import urlparse
 
+import aiohttp
 import discord
 
 from .history import BACKFILL_MESSAGES, DEFAULT_CACHE_TTL, Session
 from .prompt import place_block, system_text
 from .tools import MESSAGE_TIME_FORMAT
+from .tools.base import DISCORD_FILE_HOSTS
 
 log = logging.getLogger("red.agenteliza")
 
 MCP_TOOL_ROUNDS = 16
 # The system prompt tells the agent a limit of 10 tool calls. The gap gives
 # slack when the agent miscounts its own calls.
+# Cap of one download of a native provider tool (an image for the vision call).
+NATIVE_TOOL_FETCH_MAX_BYTES = 10_485_760
 # Cap of parallel conversation sessions (channels and direct messages
 # together). A new session over the cap is refused: every live session is a
 # provider cache entry and a summarization load.
@@ -328,6 +334,27 @@ class ChatEngine:
         async def call_api(tool_payload):
             """One chat-completions call on the active provider, for native provider tools."""
             return await self.api.chat_request(api_key, tool_payload)
+
+        async def fetch_url(url):
+            """Download one URL with the shared session, for native provider tools."""
+            headers = {}
+            if urlparse(url).netloc.lower() in DISCORD_FILE_HOSTS:
+                # The Discord file hosts need an authorized request. The bot
+                # token goes to these hosts only, never to a foreign URL.
+                token = getattr(self.bot.http, "token", None)
+                if token:
+                    headers["Authorization"] = f"Bot {token}"
+            try:
+                async with self.api._get_session().get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=30)) as response:
+                    if response.status != 200:
+                        return None
+                    content_type = response.content_type or "application/octet-stream"
+                    body = await response.content.read(NATIVE_TOOL_FETCH_MAX_BYTES + 1)
+            except (aiohttp.ClientError, asyncio.TimeoutError):
+                return None
+            if len(body) > NATIVE_TOOL_FETCH_MAX_BYTES:
+                return None
+            return body, content_type
         # The tool rounds of this reply: assistant calls and tool results, as
         # the API sent them. The session keeps them until a compaction.
         exchange = []
@@ -379,7 +406,7 @@ class ChatEngine:
                         # Routes win: a provider tool can take a harness name.
                         result_text = await self.mcp.run_tool(name, arguments, routes)
                     elif name in native_routes:
-                        result_text = await native_routes[name](arguments, call_api)
+                        result_text = await native_routes[name](arguments, call_api, fetch_url)
                     elif name in self._harness_tool_names:
                         result_text = await self.harness_tools.run(
                             name, arguments, guild_id=guild_id, channel_id=channel_id, user_id=user_id,

@@ -34,9 +34,11 @@ class Provider:
         """Tool definitions the provider implements itself, live while it is active.
 
         Each entry: {"name", "description", "parameters", "handler"}. The
-        handler is an async callable (arguments, call_api) returning text.
-        call_api posts one chat-completions payload to the provider.
-        A native tool takes the place of a harness tool of the same name.
+        handler is an async callable (arguments, call_api, fetch_url)
+        returning text. call_api posts one chat-completions payload to the
+        provider. fetch_url downloads one URL to (bytes, content_type), or
+        None on failure. A native tool takes the place of a harness tool of
+        the same name.
         """
         return []
 
