@@ -30,6 +30,7 @@ async def _analyze_image(arguments: dict, call_api, fetch_url=None) -> str:
     url = str(arguments.get("url") or "").strip()
     if not url.startswith(("http://", "https://")):
         return "Error: the url must be the http(s) URL of an image."
+    log.info("analyze_image called with url %r", url[:150])
     question = str(arguments.get("question") or "").strip() or "Describe this image."
     image_part = {"type": "image_url", "image_url": {"url": url}}
     if fetch_url is not None and urlparse(url).netloc.lower() in DISCORD_FILE_HOSTS:
