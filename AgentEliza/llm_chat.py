@@ -12,7 +12,7 @@ import discord
 from .history import BACKFILL_MESSAGES, DEFAULT_CACHE_TTL, Session
 from .prompt import place_block, system_text
 from .tools import MESSAGE_TIME_FORMAT
-from .tools.base import DISCORD_FILE_HOSTS
+from .tools.base import DISCORD_FILE_HOSTS, read_limited
 
 log = logging.getLogger("red.agenteliza")
 
@@ -349,7 +349,7 @@ class ChatEngine:
                     if response.status != 200:
                         return None
                     content_type = response.content_type or "application/octet-stream"
-                    body = await response.content.read(NATIVE_TOOL_FETCH_MAX_BYTES + 1)
+                    body = await read_limited(response, NATIVE_TOOL_FETCH_MAX_BYTES + 1)
             except (aiohttp.ClientError, asyncio.TimeoutError):
                 return None
             if len(body) > NATIVE_TOOL_FETCH_MAX_BYTES:

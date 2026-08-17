@@ -8,7 +8,7 @@ from urllib.parse import parse_qs, quote_plus, urlparse
 
 import aiohttp
 
-from .base import DISCORD_FILE_HOSTS, _cap
+from .base import DISCORD_FILE_HOSTS, _cap, read_limited
 
 WEB_FETCH_MAX_BYTES = 1_000_000
 WEB_TIMEOUT = aiohttp.ClientTimeout(total=30)
@@ -162,7 +162,7 @@ class WebTools:
             ) as response:
                 if response.status != 200:
                     return f"Error: the search failed (HTTP {response.status})."
-                body = await response.content.read(WEB_FETCH_MAX_BYTES)
+                body = await read_limited(response, WEB_FETCH_MAX_BYTES)
         except (aiohttp.ClientError, asyncio.TimeoutError) as e:
             return f"Error: the search request failed: {e}"
         parser = _SearchParser()
@@ -196,7 +196,7 @@ class WebTools:
                 if response.status != 200:
                     return f"Error: the page answered HTTP {response.status}."
                 content_type = (response.content_type or "").lower()
-                body = await response.content.read(WEB_FETCH_MAX_BYTES)
+                body = await read_limited(response, WEB_FETCH_MAX_BYTES)
         except (aiohttp.ClientError, asyncio.TimeoutError) as e:
             return f"Error: the fetch failed: {e}"
         text = body.decode(response.charset or "utf-8", errors="replace")
