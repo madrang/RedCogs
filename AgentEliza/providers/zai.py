@@ -5,6 +5,21 @@ from ..tools import TOOL_RESULT_MAX_CHARS
 from ..tools.base import DISCORD_FILE_HOSTS
 from .base import Provider
 
+# The documented vision limits: png and jpg only (no webp), 5 MB per image,
+# 6000x6000 pixels.
+ZAI_IMAGE_MAX_BYTES = 5_000_000
+ZAI_IMAGE_TYPES = ("image/png", "image/jpeg")
+
+
+def _inline_part(body: bytes, content_type: str):
+    """The inline image part, or an error text when the vision model cannot read the image."""
+    if content_type not in ZAI_IMAGE_TYPES:
+        return None, f"Error: the image type {content_type!r} is not supported. The vision model reads png and jpg only."
+    if len(body) > ZAI_IMAGE_MAX_BYTES:
+        return None, f"Error: the image is over the 5 MB limit of the vision model ({len(body)} bytes)."
+    inline = base64.b64encode(body).decode("ascii")
+    return {"type": "image_url", "image_url": {"url": f"data:{content_type};base64,{inline}"}}, None
+
 
 async def _analyze_image(arguments: dict, call_api, fetch_url=None) -> str:
     """The analyze_image handler: one GLM-4.6V chat call with an image URL."""
@@ -13,14 +28,13 @@ async def _analyze_image(arguments: dict, call_api, fetch_url=None) -> str:
         return "Error: the url must be the http(s) URL of an image."
     question = str(arguments.get("question") or "").strip() or "Describe this image."
     image_part = {"type": "image_url", "image_url": {"url": url}}
-    inlined = False
     if fetch_url is not None and urlparse(url).netloc.lower() in DISCORD_FILE_HOSTS:
         fetched = await fetch_url(url)
         if fetched is None:
             return "Error: the download of the Discord file failed."
-        body, content_type = fetched
-        image_part["image_url"] = {"url": f"data:{content_type};base64,{base64.b64encode(body).decode('ascii')}"}
-        inlined = True
+        image_part, error = _inline_part(*fetched)
+        if error:
+            return error
     payload = {
         "model": "glm-4.6v"
         , "messages": [{
@@ -29,20 +43,7 @@ async def _analyze_image(arguments: dict, call_api, fetch_url=None) -> str:
         }]
         , "stream": False
     }
-    try:
-        data = await call_api(payload)
-    except Exception as direct:
-        raw = getattr(direct, "raw", None)
-        code = (raw.get("error") or {}).get("code") if isinstance(raw, dict) else None
-        if str(code) != "1210" or fetch_url is None or inlined:
-            raise
-        # 1210: the provider could not fetch or parse the image. Retry inline.
-        fetched = await fetch_url(url)
-        if fetched is None:
-            raise direct
-        body, content_type = fetched
-        image_part["image_url"] = {"url": f"data:{content_type};base64,{base64.b64encode(body).decode('ascii')}"}
-        data = await call_api(payload)
+    data = await call_api(payload)
     choices = data.get("choices") or []
     content = (choices[0].get("message") or {}).get("content") if choices else None
     if isinstance(content, list):
