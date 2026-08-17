@@ -13,9 +13,10 @@ log = logging.getLogger("red.agenteliza.providers")
 # 6000x6000 pixels.
 ZAI_IMAGE_MAX_BYTES = 5_000_000
 ZAI_IMAGE_TYPES = ("image/png", "image/jpeg")
-# The vision model of analyze_image, and the models known to share its
-# image_url contract. Keep the list current when a vision model is added.
-ZAI_VISION_MODEL = "glm-5v-turbo"
+
+# The vision models known compatible with the image_url contract of analyze_image.
+# Keep the list current when a vision model is added.
+# glm-5v-turbo needs a plan with access (error 1311 on the coding plan), glm-4.6v is the coding-plan model.
 ZAI_VISION_MODELS = ("glm-5v-turbo", "glm-4.6v")
 
 
@@ -29,8 +30,8 @@ def _inline_part(body: bytes, content_type: str):
     return {"type": "image_url", "image_url": {"url": f"data:{content_type};base64,{inline}"}}, None
 
 
-async def _analyze_image(arguments: dict, call_api, fetch_url=None) -> str:
-    """The analyze_image handler: one GLM-5V-Turbo chat call with an image URL."""
+async def _analyze_image(arguments: dict, call_api, fetch_url=None, model="glm-4.6v") -> str:
+    """The analyze_image handler: one vision chat call with an image URL."""
     url = str(arguments.get("url") or "").strip()
     if not url.startswith(("http://", "https://")):
         return "Error: the url must be the http(s) URL of an image."
@@ -45,7 +46,7 @@ async def _analyze_image(arguments: dict, call_api, fetch_url=None) -> str:
         if error:
             return error
     payload = {
-        "model": ZAI_VISION_MODEL
+        "model": model
         , "messages": [{
             "role": "user"
             , "content": [image_part, {"type": "text", "text": question}]
@@ -77,9 +78,13 @@ class ZaiProvider(Provider):
         "glm-5.3": 1_048_576
       , "glm-5.2": 1_048_576
     }
+    # The vision model of analyze_image on this provider.
+    vision_model = "glm-4.6v"
 
     def native_tools(self) -> list:
-        """The vision tool: image analysis through GLM-5V-Turbo, only with a Z.AI provider."""
+        """The vision tool: image analysis, only with a Z.AI provider."""
+        async def handler(arguments, call_api, fetch_url=None):
+            return await _analyze_image(arguments, call_api, fetch_url, model=self.vision_model)
         return [{
             "name": "analyze_image"
             , "description": (
@@ -162,6 +167,7 @@ class ZaiApiProvider(ZaiProvider):
 
     name = "Z.AI API"
     base_url = "https://api.z.ai/api/paas/v4"
+    vision_model = "glm-5v-turbo"
     models = [
         "glm-5.3"
       , "glm-5.2"
