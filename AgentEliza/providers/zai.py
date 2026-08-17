@@ -1,4 +1,5 @@
 import base64
+import hashlib
 import logging
 from urllib.parse import urlparse
 
@@ -48,7 +49,7 @@ async def _analyze_image(arguments: dict, call_api, fetch_url=None) -> str:
     }
     # Log the exact shape sent: a live 1210 means the wire differs from the probe.
     sent = image_part["image_url"]["url"]
-    log.info("analyze_image sends an image of %d chars, prefix %r", len(sent), sent[:80])
+    log.info("analyze_image sends an image of %d chars, sha256 %s, prefix %r", len(sent), hashlib.sha256(sent.encode()).hexdigest()[:16], sent[:80])
     data = await call_api(payload)
     choices = data.get("choices") or []
     content = (choices[0].get("message") or {}).get("content") if choices else None
