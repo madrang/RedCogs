@@ -13,6 +13,10 @@ log = logging.getLogger("red.agenteliza.providers")
 # 6000x6000 pixels.
 ZAI_IMAGE_MAX_BYTES = 5_000_000
 ZAI_IMAGE_TYPES = ("image/png", "image/jpeg")
+# The vision model of analyze_image, and the models known to share its
+# image_url contract. Keep the list current when a vision model is added.
+ZAI_VISION_MODEL = "glm-5v-turbo"
+ZAI_VISION_MODELS = ("glm-5v-turbo", "glm-4.6v")
 
 
 def _inline_part(body: bytes, content_type: str):
@@ -26,7 +30,7 @@ def _inline_part(body: bytes, content_type: str):
 
 
 async def _analyze_image(arguments: dict, call_api, fetch_url=None) -> str:
-    """The analyze_image handler: one GLM-4.6V chat call with an image URL."""
+    """The analyze_image handler: one GLM-5V-Turbo chat call with an image URL."""
     url = str(arguments.get("url") or "").strip()
     if not url.startswith(("http://", "https://")):
         return "Error: the url must be the http(s) URL of an image."
@@ -41,7 +45,7 @@ async def _analyze_image(arguments: dict, call_api, fetch_url=None) -> str:
         if error:
             return error
     payload = {
-        "model": "glm-4.6v"
+        "model": ZAI_VISION_MODEL
         , "messages": [{
             "role": "user"
             , "content": [image_part, {"type": "text", "text": question}]
@@ -75,7 +79,7 @@ class ZaiProvider(Provider):
     }
 
     def native_tools(self) -> list:
-        """The vision tool: image analysis through GLM-4.6V, only with a Z.AI provider."""
+        """The vision tool: image analysis through GLM-5V-Turbo, only with a Z.AI provider."""
         return [{
             "name": "analyze_image"
             , "description": (
