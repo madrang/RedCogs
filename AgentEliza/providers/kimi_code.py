@@ -1,4 +1,4 @@
-from .base import Provider
+from .base import Provider, analyze_image_tool
 
 class KimiCodeProvider(Provider):
     """Kimi Code subscription endpoint (managed path)."""
@@ -10,6 +10,12 @@ class KimiCodeProvider(Provider):
     context_lengths = {"k3-256k": 262_144}
     # Undocumented endpoint, used by the official CLI.
     usage_url = "https://api.kimi.com/coding/v1/usages"
+    # The vision model of analyze_image on this provider: the k3 family has image_in.
+    vision_model = "k3-256k"
+
+    def native_tools(self) -> list:
+        """The vision tool: image analysis, only with a Kimi provider."""
+        return [analyze_image_tool(self.vision_model)]
 
     def extra_payload(self, session_id: int) -> dict:
         # Kimi-specific field: enables context caching per session.

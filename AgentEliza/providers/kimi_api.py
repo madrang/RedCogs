@@ -1,4 +1,4 @@
-from .base import Provider
+from .base import Provider, analyze_image_tool
 
 class KimiApiProvider(Provider):
     """Kimi open platform (pay-as-you-go, direct path)."""
@@ -10,6 +10,12 @@ class KimiApiProvider(Provider):
     context_lengths = {"moonshot-v1-auto": 131_072}
     # Documented balance endpoint.
     usage_url = "https://api.moonshot.ai/v1/users/me/balance"
+    # The vision model of analyze_image on this provider: k3 has image_in.
+    vision_model = "kimi-k3"
+
+    def native_tools(self) -> list:
+        """The vision tool: image analysis, only with a Kimi provider."""
+        return [analyze_image_tool(self.vision_model)]
 
     def extra_payload(self, session_id: int) -> dict:
         # Kimi-specific field: enables context caching per session.
