@@ -103,10 +103,10 @@ class ZaiProvider(Provider):
         }]
 
     def mcp_servers(self, api_key: str) -> dict:
-        """The Z.AI search and reader MCP servers. Search takes the place of the
-        harness web_search. The reader joins as zai-reader__webReader: the
-        harness web_fetch stays, it reads the Discord file hosts with the bot
-        token and the reader cannot."""
+        """The Z.AI search, reader, and zread MCP servers. Search takes the place
+        of the harness web_search. The reader joins as zai-reader__webReader:
+        the harness web_fetch stays, it reads the Discord file hosts with the
+        bot token and the reader cannot. Zread joins as zai-zread__ tools."""
         if not api_key:
             return {}
         return {
@@ -119,6 +119,11 @@ class ZaiProvider(Provider):
             , "zai-reader": {
                 "transport": "http"
                 , "url": "https://api.z.ai/api/mcp/web_reader/mcp"
+                , "headers": {"Authorization": f"Bearer {api_key}"}
+            }
+            , "zai-zread": {
+                "transport": "http"
+                , "url": "https://api.z.ai/api/mcp/zread/mcp"
                 , "headers": {"Authorization": f"Bearer {api_key}"}
             }
         }
