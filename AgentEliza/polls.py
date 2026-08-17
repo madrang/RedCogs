@@ -374,11 +374,10 @@ class PollManager:
     async def status_text(self, session_id: int) -> str | None:
         """The harness status of the poll of a session, or None without a poll.
 
-        On an active poll: the live counts. A multiple-choice poll with
-        one active user closes: the reply of the single voter ends the
-        choices. On a converted poll: the first call ends the native poll
-        and answers the final counts. On a closed poll: the first call
-        answers the final counts of the view.
+        On an active poll: the live counts.
+          A multiple-choice poll with one active user closes: the reply of the single voter ends the choices.
+          On a converted poll: the first call ends the native poll and answers the final counts.
+          On a closed poll: the first call answers the final counts of the view.
         """
         state = self.active.get(session_id)
         if state is None:
@@ -419,13 +418,22 @@ class PollManager:
             except (discord.NotFound, discord.Forbidden, discord.HTTPException):
                 message = None
             poll = getattr(message, "poll", None)
-            if poll is not None:
+            if poll is not None and poll.total_votes:
                 parts = [f"{answer.text}: {answer.vote_count}" for answer in poll.answers]
-                return f"The choices on {state['question']!r} have expired. Final counts: {', '.join(parts)}."
+                victor = poll.victor_answer
+                outcome = f"The winner is {victor.text}." if victor is not None else "The result is a tie."
+                return f"The choices on {state['question']!r} are complete. Final counts: {', '.join(parts)}. {outcome}"
+            if poll is not None:
+                return f"The choices on {state['question']!r} have expired. Nobody voted."
             return f"The choices on {state['question']!r} have expired. The final counts are unknown."
         counts = self._counts(state)
+        if not any(counts):
+            return f"The choices on {state['question']!r} have expired. Nobody voted."
         parts = [f"{answer}: {counts[index]}" for index, answer in enumerate(state["answers"])]
-        return f"The choices on {state['question']!r} have expired. Final counts: {', '.join(parts)}."
+        top = max(counts)
+        winners = [answer for index, answer in enumerate(state["answers"]) if counts[index] == top]
+        outcome = f"The winner is {winners[0]}." if len(winners) == 1 else "The result is a tie."
+        return f"The choices on {state['question']!r} are complete. Final counts: {', '.join(parts)}. {outcome}"
 
     async def drop_user(self, user_id: int) -> None:
         """Drop the votes of a user and the poll of a direct message with them (EUD)."""
