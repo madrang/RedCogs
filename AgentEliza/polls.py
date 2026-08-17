@@ -294,9 +294,12 @@ class PollManager:
         """End the view phase: a native poll in a guild, an expired view elsewhere."""
         channel = state["channel"]
         guild = getattr(channel, "guild", None)
-        # Native polls are guild-only and need the send_polls permission.
+        # A view with votes completes in place: the votes are the result.
+        # Only a vote-less view converts. Native polls are guild-only and
+        # need the send_polls permission.
         can_native = (
-            guild is not None and guild.me is not None
+            not state["votes"]
+            and guild is not None and guild.me is not None
             and channel.permissions_for(guild.me).send_polls
         )
         native_id = None
