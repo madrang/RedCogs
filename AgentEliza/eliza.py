@@ -959,8 +959,10 @@ class Eliza(commands.Cog):
         await ctx.send_help()
 
     @eliza_mcp.command(name="add")
-    async def mcp_add(self, ctx: commands.Context, name: str, target: str) -> None:
-        """Add an MCP server. The target must be an http(s) URL of a remote server. Local commands are not allowed."""
+    async def mcp_add(self, ctx: commands.Context, name: str, target: str, *headers: str) -> None:
+        """Add an MCP server. The target must be an http(s) URL of a remote server. Local commands are not allowed.
+        Extra `Header: value` arguments ride every request to the server. The command message is
+        deleted when headers are given, to protect the values."""
         if not self.mcp.available:
             await ctx.send("The `mcp` package is not installed. Reinstall the cog so its requirements are installed.")
             return
@@ -973,13 +975,30 @@ class Eliza(commands.Cog):
         if not target.startswith(("http://", "https://")):
             await ctx.send("Only web-based MCP servers are allowed: the target must be an http(s) URL.")
             return
+        parsed = {}
+        for header in headers:
+            head, sep, value = header.partition(":")
+            head, value = head.strip(), value.strip()
+            if not sep or not head or not value:
+                await ctx.send("Each header must be a `Header: value` pair, quoted so it stays one argument.")
+                return
+            if "\r" in header or "\n" in header:
+                await ctx.send("A header must fit on one line.")
+                return
+            parsed[head] = value
         spec = {"transport": "http", "url": target, "command": "", "args": []}
+        if parsed:
+            spec["headers"] = parsed
         await self.mcp.close_server(name)
         async with self.config.mcp_servers() as servers:
             servers[name] = spec
+        if parsed:
+            with contextlib.suppress(discord.HTTPException):
+                await ctx.message.delete()
         await ctx.send(
-            f"MCP server `{name}` saved ({spec['transport']}). "
-            f"It connects on first use. Check it with `{ctx.prefix}eliza mcp list`."
+            f"MCP server `{name}` saved ({spec['transport']}"
+            + (f", {len(parsed)} headers" if parsed else "")
+            + f"). It connects on first use. Check it with `{ctx.prefix}eliza mcp list`."
         )
 
     @eliza_mcp.command(name="remove")
@@ -1008,7 +1027,8 @@ class Eliza(commands.Cog):
                 target = " ".join([spec["command"], *spec.get("args", [])])
             connection = self.mcp.connections.get(name)
             state = connection.state if connection else "idle"
-            lines.append(f"**{name}** ({spec['transport']}) `{target}` — {state}")
+            extra = f", {len(spec['headers'])} headers" if spec.get("headers") else ""
+            lines.append(f"**{name}** ({spec['transport']}{extra}) `{target}` — {state}")
         embed = discord.Embed(
             title="MCP servers",
             description="\n".join(lines),
