@@ -106,7 +106,13 @@ class MCPConnection:
             except Exception as e:
                 with contextlib.suppress(Exception):
                     await stack.aclose()
-                self.error = f"{type(e).__name__}: {e or 'timed out'}"
+                log.warning("MCP connect %s failed: %r", self.name, e)
+                # anyio wraps the transport error in an ExceptionGroup: the
+                # sub-exception names the failure, the group does not.
+                cause = e
+                while isinstance(cause, BaseExceptionGroup) and cause.exceptions:
+                    cause = cause.exceptions[0]
+                self.error = f"{type(cause).__name__}: {cause or 'timed out'}"
                 return None
             self.stack = stack
             self.client = client
