@@ -12,7 +12,9 @@ from .tools import TOOL_RESULT_MAX_CHARS
 log = logging.getLogger("red.agenteliza.mcp")
 
 try:
-    import httpx
+    # mcp 2 rides httpx2: the AsyncClient API is unchanged, the package
+    # name is new, and classic httpx is never installed alongside it.
+    import httpx2 as httpx
     from mcp import Client
     from mcp.client.streamable_http import streamable_http_client
     from mcp.types import TextContent
@@ -91,7 +93,7 @@ class MCPConnection:
                 async with asyncio.timeout(MCP_CONNECT_TIMEOUT):
                     headers = spec.get("headers")
                     if headers and streamable_http_client is not None and httpx is not None:
-                        # Headers ride a custom httpx client: the
+                        # Headers ride a custom httpx2 client: the
                         # transport has no headers parameter.
                         transport = streamable_http_client(
                             spec["url"], http_client=httpx.AsyncClient(headers=headers)
