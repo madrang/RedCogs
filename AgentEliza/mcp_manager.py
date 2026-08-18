@@ -41,9 +41,10 @@ class MCPConnection:
     caches the tool list, and closes after MCP_IDLE_TIMEOUT idle.
     """
 
-    def __init__(self, name: str, config):
+    def __init__(self, name: str, config, manager):
         self.name = name
         self.config = config
+        self.manager = manager
         self.stack: AsyncExitStack | None = None
         self.client: Client | None = None
         self.tools: list = []
@@ -78,19 +79,19 @@ class MCPConnection:
             if self.client is not None:
                 self.touch()
                 return self.client
-            servers = await self.config.mcp_servers()
-            # Provider servers come from the manager, refreshed per reply.
-            spec = servers.get(self.name) or self.extra_servers.get(self.name)
-            if spec is None:
-                self.error = "Not configured."
-                return None
-            if spec["transport"] != "http":
-                # Only remote web MCP servers are supported, no local commands.
-                self.error = "Only http MCP servers are supported."
-                return None
             stack = AsyncExitStack()
             try:
                 async with asyncio.timeout(MCP_CONNECT_TIMEOUT):
+                    servers = await self.config.mcp_servers()
+                    # Provider servers come from the manager, refreshed per reply.
+                    spec = servers.get(self.name) or self.manager.extra_servers.get(self.name)
+                    if spec is None:
+                        self.error = "Not configured."
+                        return None
+                    if spec.get("transport") != "http":
+                        # Only remote web MCP servers are supported, no local commands.
+                        self.error = "Only http MCP servers are supported."
+                        return None
                     headers = spec.get("headers")
                     if headers and streamable_http_client is not None and httpx is not None:
                         # Headers ride a custom httpx2 client: the
@@ -177,7 +178,7 @@ class MCPManager:
 
     def get_connection(self, name: str) -> MCPConnection:
         """Return the connection object for a server, creating it empty."""
-        return self.connections.setdefault(name, MCPConnection(name, self.config))
+        return self.connections.setdefault(name, MCPConnection(name, self.config, self))
 
     def connected_count(self) -> int:
         return sum(1 for connection in self.connections.values() if connection.client is not None)
