@@ -30,6 +30,11 @@ MCP_IDLE_TIMEOUT = 600
 # Cap of the connect and tool-list phase of a server. A hung server must
 # not block a reply forever.
 MCP_CONNECT_TIMEOUT = 30
+# Timeouts of a custom header-carrying client. The values mirror the SDK
+# default client (mcp.shared._httpx_utils, a private module): the httpx2
+# default of 5 s on all operations kills a slow tool call mid-wait.
+MCP_HTTP_TIMEOUT = 30
+MCP_SSE_READ_TIMEOUT = 300
 # Cap of the tool arguments in the log line.
 MCP_LOG_ARGS_MAX_CHARS = 500
 
@@ -95,9 +100,16 @@ class MCPConnection:
                     headers = spec.get("headers")
                     if headers and streamable_http_client is not None and httpx is not None:
                         # Headers ride a custom httpx2 client: the
-                        # transport has no headers parameter.
+                        # transport has no headers parameter. Without the
+                        # SDK timeouts a slow tool call dies as "SSE stream
+                        # ended without a response".
                         transport = streamable_http_client(
-                            spec["url"], http_client=httpx.AsyncClient(headers=headers)
+                            spec["url"]
+                            , http_client=httpx.AsyncClient(
+                                headers=headers
+                                , timeout=httpx.Timeout(MCP_HTTP_TIMEOUT, read=MCP_SSE_READ_TIMEOUT)
+                                , follow_redirects=True
+                            )
                         )
                         client = await stack.enter_async_context(Client(transport))
                     else:
