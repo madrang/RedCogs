@@ -9,12 +9,16 @@ from discord.ext import tasks
 
 from .tools import TOOL_RESULT_MAX_CHARS
 
+log = logging.getLogger("red.agenteliza.mcp")
+
 try:
     import httpx
     from mcp import Client
     from mcp.client.streamable_http import streamable_http_client
     from mcp.types import TextContent
-except ImportError:
+except ImportError as e:
+    # Not installed and a broken install both land here: the log names the cause.
+    log.warning("MCP disabled: the import failed: %s: %s", type(e).__name__, e)
     httpx = None
     Client = None
     streamable_http_client = None
@@ -26,8 +30,6 @@ MCP_IDLE_TIMEOUT = 600
 MCP_CONNECT_TIMEOUT = 30
 # Cap of the tool arguments in the log line.
 MCP_LOG_ARGS_MAX_CHARS = 500
-
-log = logging.getLogger("red.agenteliza.mcp")
 
 
 class MCPConnection:
