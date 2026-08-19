@@ -150,7 +150,13 @@ class Provider:
                     return None, f"The usage endpoint returned an error (HTTP {response.status})."
         except (aiohttp.ClientError, asyncio.TimeoutError) as e:
             return None, f"The connection to the usage endpoint failed: {e}"
-        return self.parse_usage(data), None
+        try:
+            # A malformed answer degrades to a failed check: a provider parse
+            # bug must never break the reply path.
+            return self.parse_usage(data), None
+        except Exception as e:
+            log.warning("The usage answer of %s could not be parsed: %s: %s", self.name or self.usage_url, type(e).__name__, e)
+            return None, "The usage endpoint returned an unreadable answer."
 
     def parse_usage(self, data: dict) -> list:
         raise NotImplementedError

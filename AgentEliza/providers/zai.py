@@ -66,18 +66,27 @@ class ZaiProvider(Provider):
         payload = data.get("data") if isinstance(data.get("data"), dict) else data
         rows = []
         for entry in payload.get("limits") or []:
+            if not isinstance(entry, dict):
+                continue
             percent = entry.get("percentage")
             reset_ms = entry.get("nextResetTime")
             rows.append({
                 "name": self._window_name(entry),
                 "used": self._num(entry.get("currentValue")),
                 "limit": self._num(entry.get("usage")),
-                "percent": float(percent) if percent is not None else None,
+                "percent": self._float(percent),
                 "reset": self._num(reset_ms / 1000) if isinstance(reset_ms, (int, float)) else None,
                 "text": None,
                 "exhausted": False,
             })
         return self._fill_percent(rows)
+
+    @staticmethod
+    def _float(value):
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
 
     @staticmethod
     def _window_name(entry: dict) -> str:
