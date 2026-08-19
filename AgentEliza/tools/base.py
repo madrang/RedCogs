@@ -11,6 +11,32 @@ MESSAGE_TIME_FORMAT = "%Y-%m-%dT%H:%MZ"
 DISCORD_FILE_HOSTS = {"cdn.discordapp.com", "media.discordapp.net"}
 
 
+def attachments_text(attachments) -> str:
+    """The attachments line of a message: name, content type, and URL per file."""
+    if not attachments:
+        return ""
+    items = ", ".join(f"{name} ({kind or 'unknown type'}) <{url}>" for name, kind, url in attachments)
+    return f"\n[attachments: {items}]"
+
+
+def poll_result_suffix(message) -> str:
+    """The results line of a poll result notification: the embed holds the outcome."""
+    for embed in message.embeds:
+        if embed.type != "poll_result":
+            continue
+        fields = {field.name: field.value for field in embed.fields}
+        if "poll_question_text" not in fields:
+            continue
+        # A tie has no victor fields.
+        victor = fields.get("victor_answer_text")
+        outcome = (
+            f"winner: {victor} ({fields.get('victor_answer_votes', '?')} votes)"
+            if victor else "no winner: a tie"
+        )
+        return f"\nPoll results for {fields['poll_question_text']!r}: {outcome}, total votes: {fields.get('total_votes', '?')}."
+    return ""
+
+
 async def read_limited(response, limit: int) -> bytes:
     """Read the response body up to limit bytes.
 

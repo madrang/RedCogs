@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 
 import discord
 
-from .base import MESSAGE_TIME_FORMAT, _cap
+from .base import MESSAGE_TIME_FORMAT, _cap, attachments_text, poll_result_suffix
 
 # Caps of the read_history tool: the raw messages scanned, and the
 # qualifying messages returned. Discord has no search endpoint for bots:
@@ -13,6 +13,20 @@ from .base import MESSAGE_TIME_FORMAT, _cap
 HISTORY_READ_SCAN_MAX = 400
 HISTORY_READ_MAX_RESULTS = 64
 HISTORY_READ_DEFAULT_RESULTS = 20
+
+
+def _message_text(message) -> str:
+    """The display text of one message: content, poll results, attachments.
+
+    A poll result notification has empty content: the outcome rides in its
+    embed. An attachment-only message still shows its files. The backfill of
+    a fresh session reads the same parts, so both views of history agree.
+    """
+    content = message.content.strip()
+    if message.type == discord.MessageType.poll_result:
+        content += poll_result_suffix(message)
+    content += attachments_text([(a.filename, a.content_type, a.url) for a in message.attachments])
+    return content.strip()
 
 
 class HistoryTools:
@@ -100,7 +114,7 @@ class HistoryTools:
             channel = await self.channel_getter(channel_id) if self.channel_getter else None
             if channel is None:
                 return None, None, "Error: the current channel is unknown."
-            label = f"#{channel.name}" if isinstance(channel, discord.abc.GuildChannel) else "this direct message"
+            label = f"#{channel.name}" if getattr(channel, "guild", None) is not None else "this direct message"
             return channel, label, None
         guild = self.guild_getter(guild_id) if self.guild_getter and guild_id is not None else None
         if guild is None:
@@ -199,7 +213,7 @@ class HistoryTools:
                 continue
             if not self._involves_bot(message, bot_id):
                 continue
-            content = message.content.strip()
+            content = _message_text(message)
             if not content:
                 continue
             qualifying += 1
@@ -235,6 +249,5 @@ class HistoryTools:
         lines = ["(" + ". ".join(parts) + ")"]
         for message in messages:
             # The message text keeps the shape it was posted with, newlines included.
-            content = message.content.strip()
-            lines.append(f"{message.created_at:{MESSAGE_TIME_FORMAT}} {message.author.display_name} <@{message.author.id}>: {content}")
+            lines.append(f"{message.created_at:{MESSAGE_TIME_FORMAT}} {message.author.display_name} <@{message.author.id}>: {_message_text(message)}")
         return _cap("\n".join(lines))

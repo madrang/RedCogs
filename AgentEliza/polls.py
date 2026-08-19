@@ -168,8 +168,11 @@ class PollManager:
 
     async def _fire(self, session_id: int, text: str | None, state: dict) -> None:
         """Wake the agent with a harness text: a poll event without a user message."""
-        if self.on_event is None or not text:
-            log.warning("The poll trigger of session %s was skipped: no callback or no text.", session_id)
+        if not text:
+            # A completion without votes stays silent by design.
+            return
+        if self.on_event is None:
+            log.warning("The poll trigger of session %s was skipped: no callback.", session_id)
             return
         try:
             await self.on_event(session_id, state["channel"], text)
@@ -294,31 +297,34 @@ class PollManager:
         """End the view phase: a native poll in a guild, an expired view elsewhere."""
         channel = state["channel"]
         guild = getattr(channel, "guild", None)
-        # A view with votes completes in place: the votes are the result.
-        # Only a vote-less view converts. Native polls are guild-only and
-        # need the send_polls permission.
-        can_native = (
-            not state["votes"]
-            and guild is not None and guild.me is not None
-            and channel.permissions_for(guild.me).send_polls
-        )
-        native_id = None
-        if can_native:
-            poll = discord.Poll(
-                state["question"]
-                , duration=timedelta(hours=POLL_DURATION_HOURS)
-                , multiple=state["multiple"]
-            )
-            for answer in state["answers"]:
-                poll.add_answer(text=answer)
-            native = await self.discord_call(lambda: channel.send(poll=poll), "The vote conversion")
-            if native is not None:
-                native_id = native.id
-        # The lock holds the state flip and the view edit together: a click
-        # in flight finishes first, and its counts join the final text.
+        # The lock covers the whole conversion, the native send included: a
+        # click during the send waits on it (the defer already acknowledged
+        # the click) and lands refused on the flipped state. A click that
+        # held the lock first cancels this task through _restart_idle before
+        # it enters the lock: the vote stands and the view lives on.
         async with state["lock"]:
             if state["state"] != "active" or self.active.get(session_id) is not state:
                 return
+            # A view with votes completes in place: the votes are the result.
+            # Only a vote-less view converts. Native polls are guild-only and
+            # need the send_polls permission.
+            can_native = (
+                not state["votes"]
+                and guild is not None and guild.me is not None
+                and channel.permissions_for(guild.me).send_polls
+            )
+            native_id = None
+            if can_native:
+                poll = discord.Poll(
+                    state["question"]
+                    , duration=timedelta(hours=POLL_DURATION_HOURS)
+                    , multiple=state["multiple"]
+                )
+                for answer in state["answers"]:
+                    poll.add_answer(text=answer)
+                native = await self.discord_call(lambda: channel.send(poll=poll), "The vote conversion")
+                if native is not None:
+                    native_id = native.id
             state["state"] = "converted" if native_id is not None else "closed"
             state["native_id"] = native_id
             if native_id is not None:
@@ -347,7 +353,9 @@ class PollManager:
         if self.active.get(session_id) is not state or state["state"] != "converted":
             return
         try:
-            await self._fire(session_id, await self.status_text(session_id), state)
+            # require_votes: a poll nobody answered stays silent. Its result
+            # notification still reaches the agent through the backfill.
+            await self._fire(session_id, await self.status_text(session_id, require_votes=True), state)
         except Exception:
             log.exception("The native poll expiry failed for session %s.", session_id)
 
@@ -374,69 +382,79 @@ class PollManager:
             return
         await self._fire(session_id, await self.status_text(session_id), state)
 
-    async def status_text(self, session_id: int) -> str | None:
+    async def status_text(self, session_id: int, *, require_votes: bool = False) -> str | None:
         """The harness status of the poll of a session, or None without a poll.
 
         On an active poll: the live counts.
           A multiple-choice poll with one active user closes: the reply of the single voter ends the choices.
           On a converted poll: the first call ends the native poll and answers the final counts.
           On a closed poll: the first call answers the final counts of the view.
+        require_votes: a completed poll without any vote answers None (the
+        natural expiry then stays silent).
         """
         state = self.active.get(session_id)
         if state is None:
             return None
-        if state["state"] == "active":
-            participants = await self._participants(session_id, state)
-            # A voter counts as an active user, the same rule as in vote.
-            participants = frozenset(participants | state["votes"].keys())
-            single = getattr(state["channel"], "guild", None) is None or len(participants) <= 1
-            if not (single and state["multiple"]):
-                return f"Choices are open:\n{self._text(state)}"
-            # One active user answers a multiple-choice poll with a reply:
-            # the reply closes the choices, no idle wait.
-            task = state["idle_task"]
-            if task is not None:
-                task.cancel()
-                state["idle_task"] = None
-            state["state"] = "closed"
-            await self.discord_call(
-                lambda: state["channel"].get_partial_message(state["message_id"]).edit(
-                    content=self._text(state) + self._final_note(state, participants), view=None
+        # The lock serializes against a conversion in flight: its native
+        # send holds the lock, and this flip must not interleave with it.
+        async with state["lock"]:
+            if state["state"] == "active":
+                participants = await self._participants(session_id, state)
+                # A voter counts as an active user, the same rule as in vote.
+                participants = frozenset(participants | state["votes"].keys())
+                single = getattr(state["channel"], "guild", None) is None or len(participants) <= 1
+                if not (single and state["multiple"]):
+                    return f"Choices are open:\n{self._text(state)}"
+                # One active user answers a multiple-choice poll with a reply:
+                # the reply closes the choices, no idle wait.
+                task = state["idle_task"]
+                if task is not None:
+                    task.cancel()
+                    state["idle_task"] = None
+                state["state"] = "closed"
+                await self.discord_call(
+                    lambda: state["channel"].get_partial_message(state["message_id"]).edit(
+                        content=self._text(state) + self._final_note(state, participants), view=None
+                    )
+                    , "The vote view close"
                 )
-                , "The vote view close"
-            )
-        self.active.pop(session_id, None)
-        task = state.get("expiry_task")
-        if task is not None:
-            task.cancel()
+            self.active.pop(session_id, None)
+            task = state.get("expiry_task")
             state["expiry_task"] = None
-        await self._save()
-        if state["state"] == "converted" and state["native_id"] is not None:
-            message = None
-            try:
-                native = await state["channel"].fetch_message(state["native_id"])
-                poll = getattr(native, "poll", None)
-                # A poll that ended on its own needs no end call.
-                message = native if poll is not None and poll.is_finalised() else await native.end_poll()
-            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+            # The natural expiry calls this from the expiry task itself: a
+            # cancel here would kill the caller at the next await.
+            if task is not None and task is not asyncio.current_task():
+                task.cancel()
+            await self._save()
+            if state["state"] == "converted" and state["native_id"] is not None:
                 message = None
-            poll = getattr(message, "poll", None)
-            if poll is not None and poll.total_votes:
-                parts = [f"{answer.text}: {answer.vote_count}" for answer in poll.answers]
-                victor = poll.victor_answer
-                outcome = f"The winner is {victor.text}." if victor is not None else "The result is a tie."
-                return f"The choices on {state['question']!r} are complete. Final counts: {', '.join(parts)}. {outcome}"
-            if poll is not None:
+                try:
+                    native = await state["channel"].fetch_message(state["native_id"])
+                    poll = getattr(native, "poll", None)
+                    # A poll that ended on its own needs no end call.
+                    message = native if poll is not None and poll.is_finalised() else await native.end_poll()
+                except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                    message = None
+                poll = getattr(message, "poll", None)
+                if poll is not None and poll.total_votes:
+                    parts = [f"{answer.text}: {answer.vote_count}" for answer in poll.answers]
+                    victor = poll.victor_answer
+                    outcome = f"The winner is {victor.text}." if victor is not None else "The result is a tie."
+                    return f"The choices on {state['question']!r} are complete. Final counts: {', '.join(parts)}. {outcome}"
+                if require_votes:
+                    # No vote landed, or the counts are unknown: stay silent.
+                    return None
+                if poll is not None:
+                    return f"The choices on {state['question']!r} have expired. Nobody voted."
+                return f"The choices on {state['question']!r} have expired. The final counts are unknown."
+            counts = self._counts(state)
+            if not any(counts):
                 return f"The choices on {state['question']!r} have expired. Nobody voted."
-            return f"The choices on {state['question']!r} have expired. The final counts are unknown."
-        counts = self._counts(state)
-        if not any(counts):
-            return f"The choices on {state['question']!r} have expired. Nobody voted."
-        parts = [f"{answer}: {counts[index]}" for index, answer in enumerate(state["answers"])]
-        top = max(counts)
-        winners = [answer for index, answer in enumerate(state["answers"]) if counts[index] == top]
-        outcome = f"The winner is {winners[0]}." if len(winners) == 1 else "The result is a tie."
-        return f"The choices on {state['question']!r} are complete. Final counts: {', '.join(parts)}. {outcome}"
+            parts = [f"{answer}: {counts[index]}" for index, answer in enumerate(state["answers"])]
+            top = max(counts)
+            winners = [answer for index, answer in enumerate(state["answers"]) if counts[index] == top]
+            outcome = f"The winner is {winners[0]}." if len(winners) == 1 else "The result is a tie."
+            return f"The choices on {state['question']!r} are complete. Final counts: {', '.join(parts)}. {outcome}"
 
     async def drop_user(self, user_id: int) -> None:
         """Drop the votes of a user and the poll of a direct message with them (EUD)."""
@@ -446,14 +464,17 @@ class PollManager:
                 task = state.get(key)
                 if task is not None:
                     task.cancel()
-        for poll in self.active.values():
-            if poll["votes"].pop(user_id, None) is None:
-                continue
-            if poll["state"] == "active" and poll["message_id"] is not None:
-                await self.discord_call(
-                    lambda poll=poll: poll["channel"].get_partial_message(poll["message_id"]).edit(content=self._text(poll))
-                    , "The vote count update"
-                )
+        for poll in list(self.active.values()):
+            # The per-poll lock serializes the removal against a vote in
+            # flight: a vote persists the state again after its own section.
+            async with poll["lock"]:
+                if poll["votes"].pop(user_id, None) is None:
+                    continue
+                if poll["state"] == "active" and poll["message_id"] is not None:
+                    await self.discord_call(
+                        lambda poll=poll: poll["channel"].get_partial_message(poll["message_id"]).edit(content=self._text(poll))
+                        , "The vote count update"
+                    )
         await self._save()
 
     def close(self) -> None:

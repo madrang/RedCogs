@@ -12,7 +12,7 @@ import discord
 from .history import BACKFILL_MESSAGES, DEFAULT_CACHE_TTL, Session
 from .prompt import place_block, system_text
 from .tools import MESSAGE_TIME_FORMAT
-from .tools.base import DISCORD_FILE_HOSTS, read_limited
+from .tools.base import DISCORD_FILE_HOSTS, attachments_text, poll_result_suffix, read_limited
 
 log = logging.getLogger("red.agenteliza")
 
@@ -43,14 +43,6 @@ class ChatError(Exception):
         super().__init__(text)
         self.kind = kind
         self.raw = raw
-
-
-def _attachments_text(attachments) -> str:
-    """The attachments line of a turn: name, content type, and URL per file."""
-    if not attachments:
-        return ""
-    items = ", ".join(f"{name} ({kind or 'unknown type'}) <{url}>" for name, kind, url in attachments)
-    return f"\n[attachments: {items}]"
 
 
 class ChatEngine:
@@ -123,24 +115,6 @@ class ChatEngine:
         resolved = message.reference.resolved if message.reference else None
         return isinstance(resolved, discord.Message) and resolved.author.id == bot_id
 
-    @staticmethod
-    def _poll_result_suffix(message: discord.Message) -> str:
-        """The results line of a poll result notification: the embed holds the outcome."""
-        for embed in message.embeds:
-            if embed.type != "poll_result":
-                continue
-            fields = {field.name: field.value for field in embed.fields}
-            if "poll_question_text" not in fields:
-                continue
-            # A tie has no victor fields.
-            victor = fields.get("victor_answer_text")
-            outcome = (
-                f"winner: {victor} ({fields.get('victor_answer_votes', '?')} votes)"
-                if victor else "no winner: a tie"
-            )
-            return f"\nPoll results for {fields['poll_question_text']!r}: {outcome}, total votes: {fields.get('total_votes', '?')}."
-        return ""
-
     async def _backfill_turns(self, channel, bot_name: str, skip_id: int | None) -> list:
         """Recent channel messages as context turns: users as user role, the bot as assistant.
 
@@ -187,7 +161,9 @@ class ChatEngine:
                     continue
                 stripped = message.content.strip()
                 if message.author.id == bot_id:
-                    if not stripped and not message.attachments:
+                    # A poll result notification has empty content and no
+                    # attachments: its outcome rides in the embed, read below.
+                    if not stripped and not message.attachments and message.type != discord.MessageType.poll_result:
                         continue
                 else:
                     if message.author.bot or not self._participates(message, bot_id):
@@ -207,8 +183,11 @@ class ChatEngine:
                 if message.type == discord.MessageType.poll_result:
                     # The poll result notification carries the outcome in its
                     # embed: the agent learns the results of a completed poll.
-                    content += self._poll_result_suffix(message)
-                content += _attachments_text(attachment_files)
+                    content += poll_result_suffix(message)
+                content += attachments_text(attachment_files)
+                if not content:
+                    # A poll result without a readable embed adds nothing.
+                    continue
                 if turns and turns[-1]["role"] == "assistant":
                     turns[-1]["content"] += "\n" + content
                 else:
@@ -222,7 +201,7 @@ class ChatEngine:
                 continue
             for form in (f"<@{bot_id}>", f"<@!{bot_id}>"):
                 content = content.replace(form, bot_name)
-            turns.append({"role": "user", "content": f"{stamp} {message.author.display_name} <@{message.author.id}>: {content.strip()}{_attachments_text(attachment_files)}"})
+            turns.append({"role": "user", "content": f"{stamp} {message.author.display_name} <@{message.author.id}>: {content.strip()}{attachments_text(attachment_files)}"})
         while turns and sum(len(turn["content"]) for turn in turns) > BACKFILL_MAX_CHARS:
             turns.pop(0)
         return turns
@@ -296,7 +275,7 @@ class ChatEngine:
             stamp = f"{discord.utils.snowflake_time(message_id):{MESSAGE_TIME_FORMAT}}"
         else:
             stamp = f"{datetime.now(timezone.utc):{MESSAGE_TIME_FORMAT}}"
-        additions.append({"role": "user", "content": f"{stamp} {tag}: {content}{_attachments_text(attachments)}"})
+        additions.append({"role": "user", "content": f"{stamp} {tag}: {content}{attachments_text(attachments)}"})
         messages = [*session.messages, *additions]
         tools, routes, replaced = await self.mcp.gather_tools(preset, api_key)
         native_routes = {}

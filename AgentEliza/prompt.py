@@ -67,7 +67,8 @@ async def place_block(bot, guild_id, channel_id) -> str:
         # failure only drops the channel line, never the context build.
         with contextlib.suppress(discord.NotFound, discord.Forbidden, discord.HTTPException):
             channel = await bot.fetch_channel(channel_id)
-    if isinstance(channel, discord.abc.GuildChannel):
+    # A thread is not a GuildChannel: the guild attribute covers both.
+    if getattr(channel, "guild", None) is not None:
         line = f"Channel: #{channel.name}"
         topic = getattr(channel, "topic", None)
         if topic:
