@@ -120,7 +120,11 @@ class Compressor:
 
         Compaction triggered by the next message would run after the expiry
         and pay the full prompt price. A failed sweep retries on the next
-        loop, a successful one waits for new activity.
+        loop, a successful one waits for new activity. A fully expired
+        session (idle past the cache lifetime) that was compacted leaves the
+        RAM: its summary persists in the Memory store, and a fresh session
+        backfills the recent turns on the next message. A session that was
+        never compacted stays: its verbatim turns would be lost.
         """
         api_key = await self.config.api_key()
         if not api_key:
@@ -141,6 +145,13 @@ class Compressor:
                     await self.compact(session_id, session, api_key, preset)
             except Exception as e:
                 session.error = f"{type(e).__name__}: {e}"
+        for session_id, session in list(self.history.sessions.items()):
+            if session.lock.locked():
+                continue
+            if session.last_compaction >= session.last_active and session.idle() >= cache_ttl:
+                # Expired and compacted: nothing left that the Memory store
+                # does not hold.
+                del self.history.sessions[session_id]
 
     async def compact_all(self) -> None:
         """Compact every session with turns. A reboot loses the RAM history, not the summaries.
