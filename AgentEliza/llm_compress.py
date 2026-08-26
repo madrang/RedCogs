@@ -1,5 +1,6 @@
 """Session compaction: summarize the older turns while the provider cache is warm."""
 
+import asyncio
 import logging
 import re
 from datetime import datetime, timezone
@@ -152,6 +153,11 @@ class Compressor:
                 # Expired and compacted: nothing left that the Memory store
                 # does not hold.
                 del self.history.sessions[session_id]
+        # The workspace janitor rides the sweep: folders untouched past the
+        # age cap die here. The folders of live sessions keep their files.
+        workspace = getattr(self.api, "workspace", None)
+        if workspace is not None:
+            await asyncio.to_thread(workspace.sweep)
 
     async def compact_all(self) -> None:
         """Compact every session with turns. A reboot loses the RAM history, not the summaries.

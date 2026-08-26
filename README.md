@@ -22,8 +22,8 @@ A personal repository of cogs for [Red-DiscordBot](https://github.com/Cog-Creato
 In Discord, with the prefix of your bot:
 
 ```
-[p]repo add mads-redcogs https://github.com/madrang/RedCogs
-[p]cog install mads-redcogs <CogName>
+[p]repo add Mads-RedCogs https://github.com/madrang/RedCogs
+[p]cog install Mads-RedCogs <CogName>
 [p]load <CogName>
 ```
 

@@ -21,6 +21,7 @@ from .polls import PollManager
 from .providers import DEFAULT_PROVIDER, PROVIDERS, provider_for, provider_named
 from .stats import ScopeStats
 from .tools import HarnessOptions, HarnessTools
+from .workspace import Workspace
 
 log = logging.getLogger("red.agenteliza")
 
@@ -84,12 +85,15 @@ class Eliza(commands.Cog):
         self.memory = Memory(self.config)
         # The interactive votes: a button view first, a native poll after an idle time.
         self.polls = PollManager(self._get_channel, self._discord_call, self.config)
+        # The workspace: one folder per session in the OS temp dir, for the file tools.
+        self.workspace = Workspace()
         tool_options = HarnessOptions(memory=self.memory, session_getter=self._get_session)
         tool_options.guild_getter = bot.get_guild
         tool_options.channel_getter = self._get_channel
         tool_options.bot_id_getter = lambda: bot.user.id if bot.user else None
         tool_options.bot_token_getter = lambda: bot.http.token
         tool_options.polls = self.polls
+        tool_options.workspace = self.workspace
         self.harness_tools = HarnessTools(tool_options)
         # Usage stats and rate windows per scope, in Config.
         self.scope_stats = ScopeStats(self.config)
@@ -118,6 +122,8 @@ class Eliza(commands.Cog):
         self.mcp.start()
         self.compactor.sweep.start()
         await self.polls.restore(self.bot.add_view)
+        # The janitor: folders untouched past the age cap die here and in the sweep.
+        await asyncio.to_thread(self.workspace.sweep)
 
     async def cog_unload(self) -> None:
         self.compactor.sweep.cancel()
@@ -144,10 +150,11 @@ class Eliza(commands.Cog):
         return await self.config.user_from_id(user_id).all()
 
     async def red_delete_data_for_user(self, *, requester: str, user_id: int) -> None:
-        """Delete the user scope: memory, summary, stats, rate window. Also drops the live DM session and the votes."""
+        """Delete the user scope: memory, summary, stats, rate window. Also drops the live DM session, the votes, and the workspace."""
         await self.config.user_from_id(user_id).clear()
         self.history.sessions.pop(user_id, None)
         await self.polls.drop_user(user_id)
+        await asyncio.to_thread(self.workspace.drop, user_id)
 
     #
     # Chat API
@@ -763,6 +770,7 @@ class Eliza(commands.Cog):
         await self.memory.clear("user", ctx.author.id)
         await self.memory.store_summary("user", ctx.author.id, "")
         self.history.sessions.pop(ctx.author.id, None)
+        await asyncio.to_thread(self.workspace.drop, ctx.author.id)
         await ctx.send("Your user memory and summary are cleared, and your direct-message session was dropped.")
 
     @eliza_group.command(name="setrules")
@@ -817,6 +825,7 @@ class Eliza(commands.Cog):
         count = len(self.history.sessions)
         await self.compactor.compact_all()
         self.history.sessions.clear()
+        await asyncio.to_thread(self.workspace.drop_all)
         await ctx.send(
             f"The agent is closed. {count} session(s) compacted and dropped. "
             "I ignore all messages until the cog is reloaded."

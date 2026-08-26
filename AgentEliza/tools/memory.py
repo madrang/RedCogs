@@ -6,6 +6,7 @@ import discord
 
 from ..history import SUMMARY_MAX_CHARS
 from ..memory import MEMORY_MAX_CHARS, Memory
+from .base import expected_count, guarded_replace
 
 # Agent-facing scope name -> internal Memory scope.
 SCOPE_ALIASES = {
@@ -44,11 +45,7 @@ class MemoryTools:
                 "type": "function"
                 , "function": {
                     "name": "memory_read"
-                    , "description": (
-                        "Read the memory of one scope. "
-                        "Set kind to summary to read the summary of the scope. "
-                        "The optional target selects another channel or user of this server."
-                    )
+                    , "description": "Read the memory of one scope."
                     , "parameters": {
                         "type": "object"
                         , "properties": {
@@ -66,10 +63,7 @@ class MemoryTools:
                     "name": "memory_write"
                     , "description": (
                         "Replace the full text of one memory scope. "
-                        "To keep the old content, read the scope first and merge it. "
-                        f"An empty content erases the scope. The harness truncates content over {MEMORY_MAX_CHARS} characters. "
-                        "Set kind to summary to replace the summary of the scope. "
-                        "The optional target selects another channel or user of this server."
+                        "To keep the old content, read the scope first and merge it."
                     )
                     , "parameters": {
                         "type": "object"
@@ -79,7 +73,10 @@ class MemoryTools:
                             , "kind": kind_property
                             , "content": {
                                 "type": "string"
-                                , "description": "The new memory text."
+                                , "description": (
+                                    f"The new memory text. An empty content erases the scope. "
+                                    f"The harness truncates content over {MEMORY_MAX_CHARS} characters."
+                                )
                             }
                         }
                         , "required": ["scope", "content"]
@@ -92,9 +89,7 @@ class MemoryTools:
                     "name": "memory_append"
                     , "description": (
                         "Add text at the end of the long-term memory of one scope. "
-                        "The result warns when the scope is full and a part of the content did not fit. "
-                        "Set kind to summary to add to the summary of the scope. "
-                        "The optional target selects another channel or user of this server."
+                        "The result warns when the scope is full and a part of the content did not fit."
                     )
                     , "parameters": {
                         "type": "object"
@@ -108,6 +103,37 @@ class MemoryTools:
                             }
                         }
                         , "required": ["scope", "content"]
+                    }
+                }
+            }
+            , {
+                "type": "function"
+                , "function": {
+                    "name": "memory_edit"
+                    , "description": (
+                        "Replace one passage of the text of one memory scope. "
+                        "The edit counts the matches and refuses a wrong count."
+                    )
+                    , "parameters": {
+                        "type": "object"
+                        , "properties": {
+                            "scope": scope_property
+                            , "target": target_property
+                            , "kind": kind_property
+                            , "old_text": {
+                                "type": "string"
+                                , "description": "The exact passage to find."
+                            }
+                            , "new_text": {
+                                "type": "string"
+                                , "description": "The replacement text. An empty text deletes the passage."
+                            }
+                            , "expected": {
+                                "type": "integer"
+                                , "description": "The number of matches to replace. Default: 1. Give the true count to replace every match."
+                            }
+                        }
+                        , "required": ["scope", "old_text", "new_text"]
                     }
                 }
             }
@@ -265,3 +291,46 @@ class MemoryTools:
                 "Read the scope and rewrite it shorter."
             )
         return f"The {label.lower()} memory{target} now holds {len(stored)} characters."
+
+    async def _tool_memory_edit(self, arguments: dict, *, guild_id, channel_id, user_id) -> str:
+        scope, scope_id, label, error = self._scope_ids(arguments.get("scope", ""), guild_id, channel_id, user_id)
+        if error:
+            return error
+        scope_id, name, error = self._resolve_target(scope, arguments.get("target"), guild_id=guild_id, channel_id=channel_id, user_id=user_id)
+        if error:
+            return error
+        target = f" of {name}" if name else ""
+        old_text = arguments.get("old_text")
+        if not isinstance(old_text, str) or not old_text:
+            return "Error: the old text must be a non-empty string."
+        new_text = arguments.get("new_text")
+        if not isinstance(new_text, str):
+            return "Error: the new text must be a string."
+        expected, error = expected_count(arguments)
+        if error:
+            return error
+        summary = arguments.get("kind") == "summary"
+        if summary:
+            current = await self.memory.read_summary(scope, scope_id)
+        else:
+            current = await self.memory.read(scope, scope_id)
+        replaced, count, canonical = guarded_replace(current, old_text, new_text, expected)
+        if replaced is None:
+            return f"Error: found {count} matches, expected {expected}. Nothing was written."
+        if summary:
+            stored = replaced[:SUMMARY_MAX_CHARS]
+            await self.memory.store_summary(scope, scope_id, stored)
+        else:
+            stored = await self.memory.store(scope, scope_id, replaced)
+        kind_label = "summary" if summary else "memory"
+        matches = "the match" if expected == 1 else f"{expected} matches"
+        note = " (quote-tolerant)" if canonical else ""
+        if not stored:
+            return f"Replaced {matches}{note}. The {label.lower()} {kind_label}{target} is now empty."
+        if len(stored) < len(replaced):
+            return (
+                f"Replaced {matches}{note}. Warning: the text was truncated from {len(replaced)} to {len(stored)} characters "
+                f"(Config storage limit). The {label.lower()} {kind_label}{target} now ends mid-text. "
+                "Read it and rewrite it shorter."
+            )
+        return f"Replaced {matches}{note} in the {label.lower()} {kind_label}{target}. It now holds {len(stored)} characters."
