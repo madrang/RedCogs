@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+from collections.abc import AsyncIterator
 from datetime import datetime, timezone
 from urllib.parse import urlparse
 
@@ -34,6 +35,10 @@ BACKFILL_MAX_CHARS = 131_072
 # pages deeper into the history until it has BACKFILL_MESSAGES messages of
 # the conversation with the agent, or this cap.
 BACKFILL_SCAN_MAX = 199
+# The reply sent when the model returns no content at all.
+EMPTY_REPLY = "(empty answer)"
+# The tag that lets the agent refuse to reply. The harness sends nothing.
+NO_REPLY_TAG = "[no-reply]"
 
 
 class ChatError(Exception):
@@ -49,8 +54,8 @@ class ChatEngine:
     """One conversation turn: context build, chat request, tool rounds, turn record.
 
     The api parameter is the provider surface: chat_request, message_of,
-    normalize_reply, model_name, current_preset, context_length,
-    usage_blocked. The cog plays this role.
+    model_name, current_preset, context_length, usage_blocked. The cog
+    plays this role.
     """
 
     def __init__(self, bot, config, history, memory, mcp, harness_tools, scope_stats, compactor, api, polls=None):
@@ -66,38 +71,44 @@ class ChatEngine:
         self.api = api
         self.polls = polls
 
-    async def generate_reply(self, channel_id: int, content: str, *, guild_id: int | None = None, user_id: int | None = None, bot_name: str | None = None, user_name: str | None = None, is_owner: bool = False, message_id: int | None = None, attachments: list | None = None) -> str | None:
-        """Send one user message to the chat API and return the reply text.
+    async def generate_reply(self, channel_id: int, content: str, *, guild_id: int | None = None, user_id: int | None = None, bot_name: str | None = None, user_name: str | None = None, is_owner: bool = False, message_id: int | None = None, attachments: list | None = None) -> AsyncIterator[str]:
+        """Send one user message to the chat API and yield the reply in segments.
 
         The conversation session is the channel, or the user in DMs: the
         history and the provider cache key follow the session, so a channel
         runs one agent context. Each
         stored user turn carries the speaker name as `name: content`.
         The first turn of a user in a context gets their user memory
-        injected before it, once per context. Returns None when the agent
-        refuses to reply with the no-reply tag. One chat request runs per
-        session at a time: replies and compactions queue on the session lock.
+        injected before it, once per context. Each piece of assistant text
+        is yielded as it completes: the notes the model writes alongside
+        its tool calls, then the answer. A no-reply answer yields nothing.
+        One chat request runs per session at a time: the session lock is
+        held for the whole iteration, so the caller must drain it fully.
         """
         api_key = await self.config.api_key()
         if not api_key:
-            return "The API key is not set. An admin can set it with the `eliza setkey` command."
+            yield "The API key is not set. An admin can set it with the `eliza setkey` command."
+            return
         blocked = await self.api.usage_blocked()
         if blocked:
-            return blocked
+            yield blocked
+            return
         session_id = channel_id if guild_id is not None else user_id
         if session_id not in self.history.sessions:
             preset = await self.api.current_preset()
             cache_ttl = (preset.cache_ttl if preset is not None else None) or DEFAULT_CACHE_TTL
             active = sum(1 for other in self.history.sessions.values() if other.idle() < cache_ttl)
             if active >= MAX_SESSIONS:
-                return "The agent is already busy in other conversations. Try again later."
+                yield "The agent is already busy in other conversations. Try again later."
+                return
         session = await self.history.get(session_id, "channel" if guild_id is not None else "user")
-        async with session.lock:
-            return await self._generate_locked(
+        async with session.acquire():
+            async for segment in self._generate_locked(
                 session, session_id, channel_id, content, api_key=api_key,
                 guild_id=guild_id, user_id=user_id, bot_name=bot_name, user_name=user_name, is_owner=is_owner,
                 message_id=message_id, attachments=attachments,
-            )
+            ):
+                yield segment
 
     def _participates(self, message: discord.Message, bot_id: int) -> bool:
         """True when the message speaks to the bot: a direct mention, or a reply to the bot.
@@ -206,7 +217,7 @@ class ChatEngine:
             turns.pop(0)
         return turns
 
-    async def _generate_locked(self, session: Session, session_id: int, channel_id: int, content: str, *, api_key: str, guild_id, user_id, bot_name, user_name, is_owner, message_id, attachments=None) -> str | None:
+    async def _generate_locked(self, session: Session, session_id: int, channel_id: int, content: str, *, api_key: str, guild_id, user_id, bot_name, user_name, is_owner, message_id, attachments=None) -> AsyncIterator[str]:
         """The reply work of generate_reply. The caller holds the session lock."""
         preset = await self.api.current_preset()
         cache_ttl = (preset.cache_ttl if preset is not None else None) or DEFAULT_CACHE_TTL
@@ -340,6 +351,9 @@ class ChatEngine:
         # The tool rounds of this reply: assistant calls and tool results, as
         # the API sent them. The session keeps them until a compaction.
         exchange = []
+        # True once a segment went out: a closing empty answer or no-reply
+        # tag must not replace a note the caller already posted.
+        emitted = False
         for _ in range(rounds):
             try:
                 data = await self.api.chat_request(api_key, payload)
@@ -356,14 +370,18 @@ class ChatEngine:
                 session.last_prompt_tokens = round_usage["prompt_tokens"]
             message = self.api.message_of(data)
             if message is None:
-                return f"The API returned an unexpected answer: {str(data)[:500]}"
+                yield f"The API returned an unexpected answer: {str(data)[:500]}"
+                return
             tool_calls = message.get("tool_calls") or []
             if not tool_calls:
-                # The session records what the model said. The caller gets the normalized form.
+                # The session records what the model said.
                 await self._record_turn(
                     session, additions, exchange, message, guild_id=guild_id, channel_id=channel_id, user_id=user_id, usage=usage
                 )
-                return self.api.normalize_reply(message)
+                segment = self._final_segment(message, emitted)
+                if segment is not None:
+                    yield segment
+                return
             # Rebuild the echo instead of reusing the inbound message: most
             # provider-specific fields can be rejected on the next request.
             # Reasoning is the exception: Kimi accepts reasoning_content back,
@@ -376,6 +394,12 @@ class ChatEngine:
             echo["tool_calls"] = tool_calls
             messages.append(echo)
             exchange.append(echo)
+            text = (message.get("content") or "").strip()
+            if text and text != NO_REPLY_TAG:
+                # A note the model wrote alongside its calls: the caller
+                # posts it while the tools run.
+                emitted = True
+                yield message["content"]
             for call in tool_calls:
                 function = call.get("function", {})
                 try:
@@ -421,11 +445,29 @@ class ChatEngine:
             await self._record_turn(
                 session, additions, exchange, message, guild_id=guild_id, channel_id=channel_id, user_id=user_id, usage=usage
             )
-            return self.api.normalize_reply(message)
+            segment = self._final_segment(message, emitted)
+            if segment is not None:
+                yield segment
+            return
         await self.scope_stats.record(
             guild_id=guild_id, channel_id=channel_id, user_id=user_id, usage=usage
         )
-        return "The agent made too many tool calls in a row. Try a simpler request."
+        yield "The agent made too many tool calls in a row. Try a simpler request."
+
+    @staticmethod
+    def _final_segment(message: dict, emitted: bool) -> str | None:
+        """The postable text of a closing message, or None when the stream ends silent.
+
+        The no-reply tag ends the stream with nothing more. An empty
+        message speaks only when no segment went out before: the notice
+        would replace a real answer the user already saw.
+        """
+        content = (message.get("content") or "").strip()
+        if content and content != NO_REPLY_TAG:
+            return message["content"]
+        if not content and not emitted:
+            return EMPTY_REPLY
+        return None
 
     async def _record_turn(self, session: Session, additions: list, exchange: list, message: dict, *, guild_id, channel_id, user_id, usage: dict) -> None:
         """Store a completed turn in the session and record its token usage.

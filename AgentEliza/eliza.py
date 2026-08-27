@@ -9,7 +9,6 @@ import time
 import aiohttp
 import discord
 from redbot.core import commands, Config
-from redbot.core.utils.chat_formatting import pagify
 from redbot.core.utils.mod import is_admin_or_superior
 
 from .history import DEFAULT_CACHE_TTL, History
@@ -17,6 +16,7 @@ from .llm_chat import ChatEngine, ChatError, MAX_SESSIONS
 from .llm_compress import Compressor
 from .mcp_manager import MCPManager
 from .memory import Memory
+from .pages import paginate
 from .polls import PollManager
 from .providers import DEFAULT_PROVIDER, PROVIDERS, provider_for, provider_named
 from .stats import ScopeStats
@@ -27,10 +27,6 @@ log = logging.getLogger("red.agenteliza")
 
 USER_AGENT = "RedBot Chat Cog"
 USAGE_CACHE_SECONDS = 300
-# The reply sent when the model returns no content at all.
-EMPTY_REPLY = "(empty answer)"
-# The tag that lets the agent refuse to reply. The harness sends nothing.
-NO_REPLY_TAG = "[no-reply]"
 DEFAULT_GUILD_RULES = (
     "Be respectful. Follow the Discord rules. "
     "Do not generate illegal, harmful, or explicit content."
@@ -43,10 +39,9 @@ MCP_SERVER_NAME_RE = re.compile(r"^[a-zA-Z0-9_-]{1,32}$")
 # The timeout of a user whose exchange trips the provider content filter.
 FILTER_TIMEOUT = 1800
 # An extremely long answer must not flood the channel: past
-# LONG_REPLY_MAX_CHARS (4 pages) it posts only the head (2 pages) inline and
-# the full text as a file on the last page.
-LONG_REPLY_MAX_CHARS = 8_000
-LONG_REPLY_HEAD_CHARS = 3800
+# LONG_REPLY_MAX_PAGES inline pages the rest of the text rides in a file
+# on a closing message.
+LONG_REPLY_MAX_PAGES = 4
 
 
 class Eliza(commands.Cog):
@@ -335,16 +330,6 @@ class Eliza(commands.Cog):
             return None
         return choices[0].get("message")
 
-    @staticmethod
-    def normalize_reply(message: dict | None) -> str | None:
-        """The reply text of a message. None when the agent refuses with the no-reply tag."""
-        content = (message or {}).get("content") or ""
-        if not content.strip():
-            return EMPTY_REPLY
-        if content.strip() == NO_REPLY_TAG:
-            return None
-        return content
-
     #
     # Listener
     #
@@ -452,16 +437,21 @@ class Eliza(commands.Cog):
             with contextlib.suppress(aiohttp.ClientError, asyncio.TimeoutError, discord.HTTPException):
                 await stack.enter_async_context(message.channel.typing())
             try:
-                reply = await self.engine.generate_reply(
-                    message.channel.id
-                    , content
-                    , guild_id=guild_id
-                    , user_id=message.author.id
-                    , bot_name=bot_name
-                    , user_name=message.author.display_name
-                    , is_owner=is_owner
-                    , message_id=message.id
-                    , attachments=attachments
+                await self._stream_reply(
+                    message.channel
+                    , self.engine.generate_reply(
+                        message.channel.id
+                        , content
+                        , guild_id=guild_id
+                        , user_id=message.author.id
+                        , bot_name=bot_name
+                        , user_name=message.author.display_name
+                        , is_owner=is_owner
+                        , message_id=message.id
+                        , attachments=attachments
+                    )
+                    , mentions
+                    , tag=str(message.id)
                 )
             except ChatError as e:
                 # The API error reaches the user as a notice, the raw provider answer in a code block.
@@ -495,47 +485,88 @@ class Eliza(commands.Cog):
                     "The failure notice",
                 )
                 return
-        if reply is None:
-            # The agent refused to reply with the no-reply tag.
-            return
-        await self._post_reply(message.channel, reply, mentions, tag=str(message.id))
 
-    async def _post_reply(self, channel, reply: str, mentions: discord.AllowedMentions, *, tag: str) -> None:
-        """Post one reply to a channel: pagified, a long answer as a file on the last page."""
-        if len(reply) > LONG_REPLY_MAX_CHARS:
-            # An extremely long answer does not flood the channel: two pages
-            # inline, the full text as a file on the last page. A failed
-            # upload replaces only the last page with a note.
-            head = reply[:LONG_REPLY_HEAD_CHARS]
-            file = discord.File(io.BytesIO(reply.encode("utf-8")), filename=f"eliza-reply-{tag}.txt")
-            pages = list(pagify(head + "\n[...] the answer continues in the attached file"))
-            for page in pages[:-1]:
-                await self._discord_call(
-                    lambda: channel.send(page, allowed_mentions=mentions),
-                    "The reply page send",
-                )
-            sent = await self._discord_call(
-                lambda: channel.send(pages[-1], file=file, allowed_mentions=mentions),
-                "The reply file send",
-            )
-            if sent is None:
-                note = list(pagify(head + "\n[...] the full answer could not be attached: the file upload failed"))[-1]
-                await self._discord_call(
-                    lambda: channel.send(note, allowed_mentions=mentions),
-                    "The reply page send",
-                )
-            return
-        for page in pagify(reply):
+    async def _sync_pages(self, channel, sent: list, text: str, previous: str, mentions: discord.AllowedMentions, *, final: bool) -> tuple[bool, bool]:
+        """Edit or send the pages that changed since previous. Caps the inline pages.
+
+        Returns (alive, overflow): alive False on a permanent send
+        failure, overflow True when the text has more pages than the
+        inline cap. A sealed page never changes, so in practice only the
+        last page is edited and the rest are sends.
+        """
+        pages = paginate(text, old_content=previous or None, final=final)
+        overflow = len(pages) > LONG_REPLY_MAX_PAGES
+        for index, page in enumerate(pages[:LONG_REPLY_MAX_PAGES]):
+            if not page.updated:
+                continue
             # The agent may mention: its answer is the sender's intent.
             try:
-                sent = await self._discord_call(
-                    lambda: channel.send(page, allowed_mentions=mentions), "The reply send"
+                if index < len(sent):
+                    result = await self._discord_call(
+                        lambda: sent[index].edit(content=page.content, allowed_mentions=mentions),
+                        "The reply page edit",
+                    )
+                else:
+                    result = await self._discord_call(
+                        lambda: channel.send(page.content, allowed_mentions=mentions),
+                        "The reply page send",
+                    )
+            except discord.HTTPException as e:
+                log.warning("The reply page post failed permanently: %s", e)
+                return False, overflow
+            if result is None:
+                return False, overflow
+            if index >= len(sent):
+                sent.append(result)
+        return True, overflow
+
+    async def _stream_reply(self, channel, segments, mentions: discord.AllowedMentions, *, tag: str) -> tuple[bool, bool]:
+        """Post the segments of a reply as they arrive: the open page is edited, full pages stay.
+
+        Returns (yielded, posted): yielded when the agent produced any
+        text, posted when at least one message reached the channel. A
+        permanent send failure stops the posting, but the segments are
+        drained to the end: the session record and the lock need the
+        full run.
+        """
+        sent: list[discord.Message] = []
+        parts: list[str] = []
+        previous = ""
+        alive = True
+        async for segment in segments:
+            parts.append(segment)
+            if alive:
+                text = "\n\n".join(parts)
+                alive, _ = await self._sync_pages(channel, sent, text, previous, mentions, final=False)
+                if alive:
+                    previous = text
+        if not parts:
+            return False, False
+        if not alive:
+            return True, bool(sent)
+        full = "\n\n".join(parts)
+        alive, overflow = await self._sync_pages(channel, sent, full, previous, mentions, final=True)
+        posted = bool(sent)
+        if alive and overflow:
+            # The inline pages stand as the head: the rest rides in a file.
+            file = discord.File(io.BytesIO(full.encode("utf-8")), filename=f"eliza-reply-{tag}.txt")
+            try:
+                result = await self._discord_call(
+                    lambda: channel.send("[...] the answer continues in the attached file", file=file, allowed_mentions=mentions),
+                    "The reply file send",
                 )
             except discord.HTTPException as e:
-                log.warning("The reply send failed permanently: %s", e)
-                break
-            if sent is None:
-                break
+                log.warning("The reply file send failed permanently: %s", e)
+                result = None
+            if result is None:
+                with contextlib.suppress(discord.HTTPException):
+                    await self._discord_call(
+                        lambda: channel.send("[...] the full answer could not be attached: the file upload failed", allowed_mentions=mentions),
+                        "The reply page send",
+                    )
+            else:
+                posted = True
+        return True, posted
 
     @commands.Cog.listener()
     async def on_raw_poll_vote_add(self, payload: discord.RawPollVoteActionEvent) -> None:
@@ -558,23 +589,27 @@ class Eliza(commands.Cog):
             with contextlib.suppress(aiohttp.ClientError, asyncio.TimeoutError, discord.HTTPException):
                 await stack.enter_async_context(channel.typing())
             try:
-                reply = await self.engine.generate_reply(
-                    channel.id
-                    , harness_text
-                    , guild_id=guild.id if guild is not None else None
-                    , user_id=user.id if user is not None else None
-                    , bot_name=self.bot.user.name if self.bot.user else "Eliza"
-                    , user_name=user.display_name if user is not None else None
-                    , is_owner=user is not None and await self.bot.is_owner(user)
+                yielded, _ = await self._stream_reply(
+                    channel
+                    , self.engine.generate_reply(
+                        channel.id
+                        , harness_text
+                        , guild_id=guild.id if guild is not None else None
+                        , user_id=user.id if user is not None else None
+                        , bot_name=self.bot.user.name if self.bot.user else "Eliza"
+                        , user_name=user.display_name if user is not None else None
+                        , is_owner=user is not None and await self.bot.is_owner(user)
+                    )
+                    , discord.AllowedMentions.all()
+                    , tag=f"poll-{session_id}"
                 )
             except Exception:
                 log.exception("The poll trigger reply failed for channel %s:", channel.id)
                 return
-        if reply is None:
+        if not yielded:
             # The agent chose the no-reply tag on a poll completion.
             log.info("The poll trigger of session %s got a no-reply answer.", session_id)
             return
-        await self._post_reply(channel, reply, discord.AllowedMentions.all(), tag=f"poll-{session_id}")
 
     #
     # Admin commands
@@ -880,8 +915,8 @@ class Eliza(commands.Cog):
             stamp = f" (updated <t:{updated}:R>)" if updated else ""
             lines.append(f"## {label} memory{stamp}\n{memory or '(empty)'}")
             lines.append(f"## {label} summary\n{summary or '(empty)'}")
-        for page in pagify("\n\n".join(lines)):
-            await ctx.send(page, allowed_mentions=discord.AllowedMentions.none())
+        for page in paginate("\n\n".join(lines)):
+            await ctx.send(page.content, allowed_mentions=discord.AllowedMentions.none())
 
     @eliza_memory.command(name="clear")
     @commands.admin()

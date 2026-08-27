@@ -142,7 +142,7 @@ class Compressor:
                 continue
             # A failed compaction marks the session. The loop task survives.
             try:
-                async with session.lock:
+                async with session.acquire():
                     await self.compact(session_id, session, api_key, preset)
             except Exception as e:
                 session.error = f"{type(e).__name__}: {e}"
@@ -175,7 +175,7 @@ class Compressor:
             if len(session.messages) <= 1 or session.last_compaction >= session.last_active:
                 continue
             try:
-                async with session.lock:
+                async with session.acquire():
                     await self.compact(session_id, session, api_key, preset, keep=0)
             except Exception as e:
                 session.error = f"{type(e).__name__}: {e}"

@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import time
 
 # Assumed provider prompt-cache lifetime when the provider documents none.
@@ -38,6 +39,22 @@ COMPACT_REQUEST = (
 # Context backfill target of a fresh session: recent channel messages from
 # Discord. eliza.py scans the channel history for them.
 BACKFILL_MESSAGES = 64
+# Cap of the wait for the session lock. 30 minutes is far above the
+# longest reply or compaction: a wait that long means something is
+# seriously wrong, and the waiter fails with TimeoutError instead of
+# deadlocking.
+LOCK_ACQUIRE_TIMEOUT = 1800
+
+
+@contextlib.asynccontextmanager
+async def _acquire(lock: asyncio.Lock):
+    """One lock acquisition with the timeout. The held section is not timed."""
+    async with asyncio.timeout(LOCK_ACQUIRE_TIMEOUT):
+        await lock.acquire()
+    try:
+        yield
+    finally:
+        lock.release()
 # Recent turns kept verbatim through a compaction: as many as the backfill
 # restores on a fresh session.
 COMPACTION_KEEP_TURNS = BACKFILL_MESSAGES
@@ -81,6 +98,16 @@ class Session:
         self.last_compaction = 0.0
         # The last compaction error, None when the last compaction worked.
         self.error = None
+
+    def acquire(self):
+        """The session lock with a timeout on the wait.
+
+        The wait caps at LOCK_ACQUIRE_TIMEOUT (30 minutes), far above the
+        longest reply or compaction: a timeout means something is
+        seriously wrong, and the waiter fails with TimeoutError instead of
+        deadlocking. The held section is not timed.
+        """
+        return _acquire(self.lock)
 
     def start_context(self, system_text: str) -> None:
         """Open or refresh the context: replace the system message, keep the turns."""
