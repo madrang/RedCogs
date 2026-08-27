@@ -31,7 +31,8 @@ class PollTools:
                             }
                             , "multiple": {
                                 "type": "boolean"
-                                , "description": "Set true to allow more than one choice per person. Default: false."
+                                , "default": False
+                                , "description": "Set true to allow more than one choice per person."
                             }
                         }
                         , "required": ["question", "choices"]

@@ -1,6 +1,7 @@
 """The workspace tools: the files of the per-session folder in the OS temp dir."""
 
 import asyncio
+import fnmatch
 from urllib.parse import urlparse
 
 import aiohttp
@@ -92,7 +93,8 @@ class WorkspaceTools:
                             }
                             , "expected": {
                                 "type": "integer"
-                                , "description": "The number of matches to replace. Default: 1. Give the true count to replace every match."
+                                , "default": 1
+                                , "description": "The number of matches to replace. Give the true count to replace every match."
                             }
                         }
                         , "required": ["path", "old_text", "new_text"]
@@ -116,11 +118,13 @@ class WorkspaceTools:
                             }
                             , "offset": {
                                 "type": "integer"
-                                , "description": "The byte offset to start at. Default: 0."
+                                , "default": 0
+                                , "description": "The byte offset to start at."
                             }
                             , "limit": {
                                 "type": "integer"
-                                , "description": f"The maximum bytes to read. Default and maximum: {FILE_READ_DEFAULT_BYTES}."
+                                , "default": FILE_READ_DEFAULT_BYTES
+                                , "description": f"The maximum bytes to read, at most {FILE_READ_DEFAULT_BYTES}."
                             }
                         }
                         , "required": ["path"]
@@ -157,7 +161,18 @@ class WorkspaceTools:
                 , "function": {
                     "name": "file_list"
                     , "description": "List the files of the workspace with their sizes in bytes."
-                    , "parameters": {"type": "object", "properties": {}}
+                    , "parameters": {
+                        "type": "object"
+                        , "properties": {
+                            "path": {
+                                "type": "string"
+                                , "description": (
+                                    "Optional. A glob pattern for the paths to list, for example *.txt or notes/*.md. "
+                                    "A pattern without a folder part matches file names at any depth."
+                                )
+                            }
+                        }
+                    }
                 }
             }
             , {
@@ -390,20 +405,30 @@ class WorkspaceTools:
             head += f", capped at {FILE_SEARCH_MAX_MATCHES}: refine the query or narrow the path"
         return _cap(head + ")\n" + "\n".join(lines))
 
-    async def _tool_file_list(self, _arguments: dict, *, guild_id, channel_id, user_id) -> str:
+    async def _tool_file_list(self, arguments: dict, *, guild_id, channel_id, user_id) -> str:
         session_id = self._session_id(guild_id, channel_id, user_id)
+        pattern = arguments.get("path")
+        if pattern is not None and (not isinstance(pattern, str) or not pattern.strip()):
+            return "Error: the path pattern must be a non-empty string."
 
         def _list() -> list:
             folder = self.workspace.folder(session_id)
             if not folder.exists():
                 return []
-            return sorted(
+            files = sorted(
                 (str(p.relative_to(folder)), p.stat().st_size)
                 for p in folder.rglob("*") if p.is_file()
             )
+            if pattern:
+                # The match runs on the confined relative path: a pattern
+                # can never reach outside the session folder.
+                files = [item for item in files if fnmatch.fnmatch(item[0], pattern.strip())]
+            return files
 
         files = await asyncio.to_thread(_list)
         if not files:
+            if pattern:
+                return f"(no files match {pattern.strip()!r})"
             return "(the workspace is empty)"
         lines = [f"{path} ({size} bytes)" for path, size in files[:100]]
         if len(files) > 100:

@@ -58,7 +58,8 @@ class HistoryTools:
                             }
                             , "limit": {
                                 "type": "integer"
-                                , "description": f"The optional maximum number of messages to return, 1 to {HISTORY_READ_MAX_RESULTS}. Default: {HISTORY_READ_DEFAULT_RESULTS}."
+                                , "default": HISTORY_READ_DEFAULT_RESULTS
+                                , "description": f"The maximum number of messages to return, 1 to {HISTORY_READ_MAX_RESULTS}."
                             }
                             , "after": {
                                 "type": "string"

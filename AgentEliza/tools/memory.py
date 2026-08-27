@@ -38,7 +38,8 @@ class MemoryTools:
         kind_property = {
             "type": "string"
             , "enum": ["memory", "summary"]
-            , "description": "Optionally select the summary of the scope instead of the memory. Default: memory."
+            , "default": "memory"
+            , "description": "Select the summary of the scope instead of the memory."
         }
         return [
             {
@@ -130,7 +131,8 @@ class MemoryTools:
                             }
                             , "expected": {
                                 "type": "integer"
-                                , "description": "The number of matches to replace. Default: 1. Give the true count to replace every match."
+                                , "default": 1
+                                , "description": "The number of matches to replace. Give the true count to replace every match."
                             }
                         }
                         , "required": ["scope", "old_text", "new_text"]
