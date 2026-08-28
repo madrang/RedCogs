@@ -98,6 +98,10 @@ class Session:
         self.last_compaction = 0.0
         # The last compaction error, None when the last compaction worked.
         self.error = None
+        # Consecutive compaction failures and the monotonic time the sweeper
+        # may retry: a failed compaction backs off instead of firing each loop.
+        self.compaction_failures = 0
+        self.compaction_retry_at = 0.0
 
     def acquire(self):
         """The session lock with a timeout on the wait.
@@ -141,16 +145,16 @@ class Session:
         return time.monotonic() - self.last_active
 
     def plan_compaction(self, keep: int = COMPACTION_KEEP_TURNS):
-        """The block to summarize: the turns after the system message, minus the recent tail.
+        """The block a compaction unloads: the turns after the system message, minus the recent tail.
 
-        A session that unloads compacts every turn: keep=0. The boundary
-        never splits a tool exchange: a tool result without its call breaks
-        the next request. The boundary moves back to the exchange start.
+        The compaction request still holds the whole session, so the summary
+        covers the kept tail too: a kept turn can leave later without another
+        compaction. The boundary never splits a tool exchange: a tool result
+        without its call breaks the next request. The boundary moves back to
+        the exchange start.
         """
         if len(self.messages) <= 1 + keep:
             return []
-        if not keep:
-            return self.messages[1:]
         cut = len(self.messages) - keep
         while cut > 1 and self.messages[cut].get("role") == "tool":
             cut -= 1
@@ -171,14 +175,15 @@ class Session:
         """Drop the summarized turns and store the summary.
 
         Turns that arrived after the plan stay in the session. The real
-        prompt token count is unknown again until the next answer.
+        prompt token count is unknown again until the next answer. The
+        compaction is activity too: the idle clock restarts from it.
         """
         dropped = min(dropped, len(self.messages) - 1)
         self.messages = self.messages[:1] + self.messages[1 + dropped:]
         self.size = sum(self._size_of(message) for message in self.messages)
         self.summary = summary
         self.seen_users.clear()
-        self.last_compaction = time.monotonic()
+        self.last_compaction = self.last_active = time.monotonic()
         self.last_prompt_tokens = 0
 
 
@@ -203,25 +208,27 @@ class History:
             session.summary = await self.memory.read_summary(scope, session_id)
         return session
 
-    def needs_compaction(self, session: Session, cache_ttl: int, context_tokens: int | None = None) -> bool:
+    def needs_compaction(self, session: Session, cache_ttl: int, context_tokens: int | None = None, fill: float = 1.0) -> bool:
         """True when the session should be compacted.
 
         Size trigger: the real prompt token count of the last answer when
         the API reports one, the character estimate otherwise. The budget is
         CONTEXT_FILL of the model context when context_tokens is known, the
-        HISTORY_MAX fallback otherwise. Idle trigger: the session went idle
-        past COMPACTION_AT of the provider cache lifetime, so compacting
-        still hits the warm prompt cache for the summarization call. Used by
-        the reply path and by the background sweeper.
+        HISTORY_MAX fallback otherwise. fill scales the budget down for a
+        pre-emptive pass: the reply path compacts at the full budget, the
+        sweeper just below it. Idle trigger: the session went idle past
+        COMPACTION_AT of the provider cache lifetime, so compacting still
+        hits the warm prompt cache for the summarization call. Used by the
+        reply path and by the background sweeper.
         """
         if len(session.messages) <= 1:
             return False
         if context_tokens:
-            max_tokens = int(context_tokens * CONTEXT_FILL)
+            max_tokens = int(context_tokens * CONTEXT_FILL * fill)
             max_chars = max_tokens * CHARS_PER_TOKEN
         else:
-            max_tokens = HISTORY_MAX_TOKENS
-            max_chars = HISTORY_MAX_CHARS
+            max_tokens = int(HISTORY_MAX_TOKENS * fill)
+            max_chars = int(HISTORY_MAX_CHARS * fill)
         if session.last_prompt_tokens:
             if session.last_prompt_tokens >= max_tokens:
                 return True

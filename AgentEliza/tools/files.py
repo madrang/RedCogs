@@ -74,7 +74,7 @@ class FileTools:
             session_id = channel_id if guild_id is not None else user_id
             target = self.workspace.resolve(session_id, path.strip())
             if target is None:
-                return "Error: the path escapes the workspace. Use a relative path inside it."
+                return f"Error: the path {path.strip()!r} is invalid."
             if not target.is_file():
                 return f"Error: the workspace has no file at {path!r}. List the files with file_list."
             try:
@@ -83,6 +83,7 @@ class FileTools:
                 return f"Error: the read failed: {e}."
             if not data:
                 return "Error: the workspace file is empty."
+            await asyncio.to_thread(self.workspace.touch, target)
         else:
             if not isinstance(content, str) or not content:
                 return "Error: the content must be a non-empty string, or give the workspace path of a file."

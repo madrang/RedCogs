@@ -121,6 +121,7 @@ class PollManager:
         if self.config is None:
             return
         data = await self.config.polls()
+        dead = []
         for key, saved in data.items():
             try:
                 session_id = int(key)
@@ -130,7 +131,9 @@ class PollManager:
                 continue
             channel = await self.channel_getter(saved.get("channel_id")) if self.channel_getter else None
             if channel is None:
-                # The entry stays in Config: the next _save drops it.
+                # The channel is gone: the poll can never run again. Drop the
+                # entry now, do not wait for an unrelated _save.
+                dead.append(key)
                 continue
             state = {
                 "question": saved["question"]
@@ -157,6 +160,10 @@ class PollManager:
             # clicks of the old message dispatch to this new view.
             add_view(PollView(self, session_id, state["answers"]), message_id=state["message_id"])
             self._restart_idle(session_id, state)
+        if dead:
+            async with self.config.polls() as polls:
+                for key in dead:
+                    polls.pop(key, None)
 
     async def _participants(self, session_id: int, state: dict) -> frozenset:
         """The active users of a guild conversation. Empty in a direct message or without a getter."""

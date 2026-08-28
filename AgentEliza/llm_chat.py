@@ -102,13 +102,20 @@ class ChatEngine:
                 yield "The agent is already busy in other conversations. Try again later."
                 return
         session = await self.history.get(session_id, "channel" if guild_id is not None else "user")
-        async with session.acquire():
-            async for segment in self._generate_locked(
-                session, session_id, channel_id, content, api_key=api_key,
-                guild_id=guild_id, user_id=user_id, bot_name=bot_name, user_name=user_name, is_owner=is_owner,
-                message_id=message_id, attachments=attachments,
-            ):
-                yield segment
+        while True:
+            async with session.acquire():
+                if self.history.sessions.get(session_id) is not session:
+                    # The session was unloaded while this reply waited on its
+                    # lock (sweeper unload, close): retry on the live session.
+                    session = await self.history.get(session_id, session.scope)
+                    continue
+                async for segment in self._generate_locked(
+                    session, session_id, channel_id, content, api_key=api_key,
+                    guild_id=guild_id, user_id=user_id, bot_name=bot_name, user_name=user_name, is_owner=is_owner,
+                    message_id=message_id, attachments=attachments,
+                ):
+                    yield segment
+                return
 
     def _participates(self, message: discord.Message, bot_id: int) -> bool:
         """True when the message speaks to the bot: a direct mention, or a reply to the bot.
@@ -155,6 +162,12 @@ class ChatEngine:
         try:
             qualifying = []
             skipped = set()
+            # The bot messages of the window, and the user replies whose
+            # reference the API left unresolved, as message id: reference id.
+            # After the scan, such a reply qualifies when its target is a
+            # bot message of the window.
+            bot_messages = set()
+            pending = {}
             # Newest first (pinned by oldest_first=False): a reply notice is
             # always seen before the message it answers.
             async for message in channel.history(limit=BACKFILL_SCAN_MAX, oldest_first=False):
@@ -176,9 +189,16 @@ class ChatEngine:
                     # attachments: its outcome rides in the embed, read below.
                     if not stripped and not message.attachments and message.type != discord.MessageType.poll_result:
                         continue
+                    bot_messages.add(message.id)
                 else:
-                    if message.author.bot or not self._participates(message, bot_id):
+                    if message.author.bot:
                         continue
+                    if not self._participates(message, bot_id):
+                        reference = message.reference if message.type == discord.MessageType.reply else None
+                        if reference is None or reference.message_id is None or isinstance(reference.resolved, discord.Message):
+                            # Not a reply, or provably a reply to someone else.
+                            continue
+                        pending[message.id] = reference.message_id
                 if stripped and prefixes and stripped.startswith(prefixes):
                     continue
                 qualifying.append(message)
@@ -186,6 +206,13 @@ class ChatEngine:
                     break
         except (discord.Forbidden, discord.HTTPException):
             return []
+        if pending:
+            # An unresolved reference qualifies only against a bot message of
+            # the window: the rest was a reply to someone else.
+            qualifying = [
+                message for message in qualifying
+                if message.id not in pending or pending[message.id] in bot_messages
+            ]
         turns = []
         for message in reversed(qualifying):
             content = message.content.strip()

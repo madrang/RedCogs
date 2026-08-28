@@ -18,7 +18,7 @@ ATTACHMENT_FETCH_TIMEOUT = aiohttp.ClientTimeout(total=60)
 
 
 class WorkspaceTools:
-    """The workspace tools: file_write, file_append, file_edit, file_read, file_search, file_list, attachment_fetch."""
+    """The workspace tools: file_write, file_append, file_edit, file_move, file_read, file_search, file_list, attachment_fetch."""
 
     def workspace_tools(self) -> list:
         """The OpenAI function schemas of the workspace tools."""
@@ -29,14 +29,14 @@ class WorkspaceTools:
                     "name": "file_write"
                     , "description": (
                         "Write a text file in the workspace of this conversation. Overwrites an existing file. "
-                        "The workspace is temporary: the harness deletes the folder after 7 days without use."
+                        "The workspace is temporary: files stay about 3 weeks. Past that, the older a file gets, the more likely the harness deletes it."
                     )
                     , "parameters": {
                         "type": "object"
                         , "properties": {
                             "path": {
                                 "type": "string"
-                                , "description": "The relative path inside the workspace, for example notes/draft.txt."
+                                , "description": "The path of the file in the workspace, for example notes/draft.txt or /notes/draft.txt."
                             }
                             , "content": {
                                 "type": "string"
@@ -57,7 +57,7 @@ class WorkspaceTools:
                         , "properties": {
                             "path": {
                                 "type": "string"
-                                , "description": "The relative path inside the workspace."
+                                , "description": "The path of the file in the workspace."
                             }
                             , "content": {
                                 "type": "string"
@@ -81,7 +81,7 @@ class WorkspaceTools:
                         , "properties": {
                             "path": {
                                 "type": "string"
-                                , "description": "The relative path inside the workspace."
+                                , "description": "The path of the file in the workspace."
                             }
                             , "old_text": {
                                 "type": "string"
@@ -104,6 +104,30 @@ class WorkspaceTools:
             , {
                 "type": "function"
                 , "function": {
+                    "name": "file_move"
+                    , "description": (
+                        "Move or rename a file or folder inside the workspace. "
+                        "The destination must not exist yet."
+                    )
+                    , "parameters": {
+                        "type": "object"
+                        , "properties": {
+                            "path": {
+                                "type": "string"
+                                , "description": "The current path in the workspace."
+                            }
+                            , "destination": {
+                                "type": "string"
+                                , "description": "The new path in the workspace."
+                            }
+                        }
+                        , "required": ["path", "destination"]
+                    }
+                }
+            }
+            , {
+                "type": "function"
+                , "function": {
                     "name": "file_read"
                     , "description": (
                         "Read a chunk of a workspace file. Byte offsets: file_list shows the sizes. "
@@ -114,7 +138,7 @@ class WorkspaceTools:
                         , "properties": {
                             "path": {
                                 "type": "string"
-                                , "description": "The relative path inside the workspace."
+                                , "description": "The path of the file in the workspace."
                             }
                             , "offset": {
                                 "type": "integer"
@@ -167,7 +191,7 @@ class WorkspaceTools:
                             "path": {
                                 "type": "string"
                                 , "description": (
-                                    "Optional. A glob pattern for the paths to list, for example *.txt or notes/*.md. "
+                                    "Optional. A glob pattern for the paths to list, for example *.txt or /notes/*.md. "
                                     "A pattern without a folder part matches file names at any depth."
                                 )
                             }
@@ -209,7 +233,7 @@ class WorkspaceTools:
             return None, "Error: the path must be a non-empty string."
         target = self.workspace.resolve(session_id, path.strip())
         if target is None:
-            return None, "Error: the path escapes the workspace. Use a relative path inside it."
+            return None, f"Error: the path {path.strip()!r} is invalid."
         return target, None
 
     def _session_id(self, guild_id, channel_id, user_id) -> int:
@@ -229,7 +253,6 @@ class WorkspaceTools:
                 file.write(data)
         else:
             target.write_bytes(data)
-        self.workspace.touch(session_id)
 
     async def _quota_error(self, session_id: int, target, added: int, append: bool) -> str | None:
         """The error text when added bytes break a cap, else None."""
@@ -262,7 +285,7 @@ class WorkspaceTools:
             await asyncio.to_thread(self._write, session_id, target, data, False)
         except OSError as e:
             return f"Error: the write failed: {e}."
-        return f"The file {target.name} ({len(data)} bytes) has been written."
+        return f"The file {self.workspace.relpath(session_id, target)} ({len(data)} bytes) has been written."
 
     async def _tool_file_append(self, arguments: dict, *, guild_id, channel_id, user_id) -> str:
         session_id = self._session_id(guild_id, channel_id, user_id)
@@ -280,7 +303,7 @@ class WorkspaceTools:
             await asyncio.to_thread(self._write, session_id, target, data, True)
         except OSError as e:
             return f"Error: the append failed: {e}."
-        return f"Appended {len(data)} bytes to {target.name}."
+        return f"Appended {len(data)} bytes to {self.workspace.relpath(session_id, target)}."
 
     async def _tool_file_edit(self, arguments: dict, *, guild_id, channel_id, user_id) -> str:
         session_id = self._session_id(guild_id, channel_id, user_id)
@@ -322,7 +345,37 @@ class WorkspaceTools:
             return f"Error: the write failed: {e}."
         matches = "the match" if expected == 1 else f"{expected} matches"
         note = " (quote-tolerant)" if canonical else ""
-        return f"Replaced {matches}{note} in {target.name}. The file now holds {len(new_data)} bytes."
+        return f"Replaced {matches}{note} in {self.workspace.relpath(session_id, target)}. The file now holds {len(new_data)} bytes."
+
+    async def _tool_file_move(self, arguments: dict, *, guild_id, channel_id, user_id) -> str:
+        session_id = self._session_id(guild_id, channel_id, user_id)
+        source, error = self._target(session_id, arguments.get("path"))
+        if error:
+            return error
+        destination, error = self._target(session_id, arguments.get("destination"))
+        if error:
+            return error
+        if source == destination:
+            return "Error: the source and the destination are the same path."
+        root = self.workspace.folder(session_id).resolve()
+        if source == root or destination == root:
+            return "Error: the workspace root cannot move, and nothing can take its place."
+        if not source.exists():
+            return f"Error: no file or folder at {arguments.get('path')!r} in the workspace."
+        if destination.exists():
+            return f"Error: the destination {arguments.get('destination')!r} already exists. Pick another path, or remove the file first."
+        if source in destination.parents:
+            return "Error: a path cannot move into itself."
+
+        def _move() -> None:
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            source.rename(destination)
+
+        try:
+            await asyncio.to_thread(_move)
+        except OSError as e:
+            return f"Error: the move failed: {e}."
+        return f"Moved {self.workspace.relpath(session_id, source)} to {self.workspace.relpath(session_id, destination)}."
 
     async def _tool_file_read(self, arguments: dict, *, guild_id, channel_id, user_id) -> str:
         session_id = self._session_id(guild_id, channel_id, user_id)
@@ -348,6 +401,7 @@ class WorkspaceTools:
             size = await asyncio.to_thread(target.stat)
         except OSError as e:
             return f"Error: the read failed: {e}."
+        await asyncio.to_thread(self.workspace.touch, target)
         text = data.decode("utf-8", errors="replace")
         remaining = size.st_size - offset - len(data)
         if remaining > 0:
@@ -356,7 +410,7 @@ class WorkspaceTools:
 
     @staticmethod
     def _search(folder, scope, query: str) -> list:
-        """The matching lines as (relative path, line number, byte offset, text).
+        """The matching lines as (rooted path, line number, byte offset, text).
 
         The byte offsets come from the raw split, so a decode for the
         display text never shifts them: file_read from the offset lands on
@@ -376,7 +430,7 @@ class WorkspaceTools:
             for number, line in enumerate(body.split(b"\n"), 1):
                 if query.casefold() in line.decode("utf-8", errors="replace").casefold():
                     text = " ".join(line.decode("utf-8", errors="replace").split())[:200]
-                    matches.append((str(path.relative_to(folder)), number, offset, text))
+                    matches.append(("/" + path.relative_to(folder).as_posix(), number, offset, text))
                     if len(matches) >= FILE_SEARCH_MAX_MATCHES:
                         return matches
                 offset += len(line) + 1
@@ -416,13 +470,15 @@ class WorkspaceTools:
             if not folder.exists():
                 return []
             files = sorted(
-                (str(p.relative_to(folder)), p.stat().st_size)
+                (p.relative_to(folder).as_posix(), p.stat().st_size)
                 for p in folder.rglob("*") if p.is_file()
             )
             if pattern:
                 # The match runs on the confined relative path: a pattern
-                # can never reach outside the session folder.
-                files = [item for item in files if fnmatch.fnmatch(item[0], pattern.strip())]
+                # can never reach outside the session folder. The pattern
+                # reads unix-style and rooted like every workspace path.
+                wanted = pattern.strip().replace("\\", "/").lstrip("/")
+                files = [item for item in files if fnmatch.fnmatch(item[0], wanted)]
             return files
 
         files = await asyncio.to_thread(_list)
@@ -430,7 +486,7 @@ class WorkspaceTools:
             if pattern:
                 return f"(no files match {pattern.strip()!r})"
             return "(the workspace is empty)"
-        lines = [f"{path} ({size} bytes)" for path, size in files[:100]]
+        lines = [f"/{path} ({size} bytes)" for path, size in files[:100]]
         if len(files) > 100:
             lines.append(f"[and {len(files) - 100} more]")
         return "\n".join(lines)
@@ -484,5 +540,4 @@ class WorkspaceTools:
             if written > WORKSPACE_FILE_MAX_BYTES:
                 return f"Error: the attachment is over the {WORKSPACE_FILE_MAX_BYTES}-byte file cap."
             return f"Error: the workspace of this conversation is full ({WORKSPACE_SESSION_MAX_BYTES} bytes)."
-        await asyncio.to_thread(self.workspace.touch, session_id)
-        return f"The attachment is saved as {target.name} ({written} bytes). Read it with file_read."
+        return f"The attachment is saved as {self.workspace.relpath(session_id, target)} ({written} bytes). Read it with file_read."

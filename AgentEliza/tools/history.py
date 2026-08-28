@@ -82,13 +82,15 @@ class HistoryTools:
         ]
 
     @staticmethod
-    def _involves_bot(message, bot_id: int) -> bool:
+    def _involves_bot(message, bot_id: int, bot_message_ids=()) -> bool:
         """True when the message belongs to the conversation with the agent.
 
         The same rule as the context backfill, plus the messages of the bot
         itself: its own messages, the user messages that mention it, the
         replies to it. Other bots stay out, also in a direct message. A
-        direct message always qualifies.
+        direct message always qualifies. bot_message_ids holds the bot
+        messages of the scanned window: a reply whose reference the API left
+        unresolved qualifies when its target id is one of them.
         """
         if message.author.id == bot_id:
             return True
@@ -98,10 +100,11 @@ class HistoryTools:
             return True
         if any(user.id == bot_id for user in message.mentions):
             return True
-        if message.type != discord.MessageType.reply:
+        if message.type != discord.MessageType.reply or message.reference is None:
             return False
-        resolved = message.reference.resolved if message.reference else None
-        return isinstance(resolved, discord.Message) and resolved.author.id == bot_id
+        if isinstance(message.reference.resolved, discord.Message):
+            return message.reference.resolved.author.id == bot_id
+        return message.reference.message_id in bot_message_ids
 
     async def _resolve_channel(self, target, *, guild_id, channel_id):
         """Resolve the optional target of read_history to (channel, label, error text).
@@ -206,13 +209,14 @@ class HistoryTools:
                 raw.append(message)
         except (discord.Forbidden, discord.HTTPException) as e:
             return f"Error: the history read failed: {e}"
+        bot_message_ids = {message.id for message in raw if message.author.id == bot_id}
         messages = []
         qualifying = 0
         matched = 0
         for message in raw:
             if message.id in skipped:
                 continue
-            if not self._involves_bot(message, bot_id):
+            if not self._involves_bot(message, bot_id, bot_message_ids):
                 continue
             content = _message_text(message)
             if not content:
