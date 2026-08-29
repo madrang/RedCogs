@@ -354,8 +354,6 @@ class Eliza(commands.Cog):
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message) -> None:
-        if self._closed:
-            return
         if self.bot.user is not None and message.author.id == self.bot.user.id:
             return
         is_dm = message.guild is None
@@ -381,6 +379,17 @@ class Eliza(commands.Cog):
         # get_context knows whether a command name follows the prefix.
         ctx = await self.bot.get_context(message)
         if ctx.valid:
+            return
+        if self._closed:
+            # Closed for maintenance: the messages the agent would answer get
+            # the notice as a direct reply, everything else stays ignored.
+            await self._discord_call(
+                lambda: message.reply(
+                    "🛠️ The agent is currently under maintenance. Sorry — it will be back shortly.",
+                    mention_author=False, allowed_mentions=discord.AllowedMentions.none(),
+                ),
+                "The maintenance notice",
+            )
             return
         expiry = self._filter_timeouts.get(message.author.id, 0)
         if expiry > time.monotonic():
@@ -846,15 +855,68 @@ class Eliza(commands.Cog):
         await self.config.dm_rules.set(text)
         await ctx.send("The direct-message rules are set. They load at the start of the next context.")
 
-    @eliza_group.command(name="close")
+    @eliza_group.group(name="sessions", invoke_without_command=True)
     @commands.admin()
-    async def eliza_close(self, ctx: commands.Context) -> None:
-        """Close the agent: compact and drop every session, then ignore all messages until the cog is reloaded.
+    async def eliza_sessions(self, ctx: commands.Context) -> None:
+        """List and close the live conversation sessions."""
+        await ctx.send_help()
+
+    @eliza_sessions.command(name="list")
+    async def sessions_list(self, ctx: commands.Context) -> None:
+        """List the live sessions: server and channel in a guild, the user of a direct message, with the usage stats of the scope."""
+        if not self.history.sessions:
+            note = "No live sessions."
+            if self._closed:
+                note += " The agent is closed. Reload the cog to start Eliza again."
+            await ctx.send(note)
+            return
+        preset = await self.current_preset()
+        cache_ttl = getattr(preset, "cache_ttl", None) or DEFAULT_CACHE_TTL
+        limits = await self._rate_limits()
+        lines = []
+        recent_first = sorted(self.history.sessions.items(), key=lambda item: item[1].last_active, reverse=True)
+        for session_id, session in recent_first:
+            if session.scope == "channel":
+                channel = await self._get_channel(session_id)
+                if channel is not None and channel.guild is not None:
+                    label = f"#{channel.name} — {channel.guild.name}"
+                else:
+                    label = f"channel {session_id}"
+                scope = "channel"
+            else:
+                user = self.bot.get_user(session_id)
+                if user is None:
+                    with contextlib.suppress(discord.NotFound, discord.Forbidden, discord.HTTPException):
+                        user = await self.bot.fetch_user(session_id)
+                label = f"DM — {user.display_name}" if user is not None else f"DM — user {session_id}"
+                scope = "user"
+            idle = session.idle()
+            state = "active" if idle < cache_ttl else f"idle {int(idle // 60)} min"
+            stats = await self.scope_stats.get(scope, session_id)
+            rate = await self.scope_stats.rate(scope, session_id)
+            limit = limits.get(scope) or 0
+            window = f"{rate.get('count', 0)}/{limit} this hour" if limit else "unlimited"
+            lines.append(
+                f"**{label}** ({state}) — {stats.get('messages', 0)} messages, "
+                f"{stats.get('prompt_tokens', 0):,} prompt tokens, "
+                f"{stats.get('completion_tokens', 0):,} completion tokens, "
+                f"{stats.get('cached_tokens', 0):,} cached. Interactions: {window}."
+            )
+        embed = discord.Embed(
+            title="Sessions",
+            description="\n".join(lines),
+            color=await ctx.embed_colour(),
+        )
+        await ctx.send(embed=embed)
+
+    @eliza_sessions.command(name="close")
+    async def sessions_close(self, ctx: commands.Context) -> None:
+        """Close the agent: compact and drop every session, then hold for maintenance until the cog is reloaded.
 
         Every session is summarized and the summary persists, like on a cog
-        unload. The agent then answers nothing and starts no new session, so
-        the settings can be changed without new activity. A cog reload starts
-        the agent again.
+        unload. The agent then starts no new session: a message it would
+        answer gets the maintenance notice as a direct reply. A cog reload
+        starts the agent again.
         """
         if self._closed:
             await ctx.send("The agent is already closed. Reload the cog to start it again.")
@@ -867,7 +929,7 @@ class Eliza(commands.Cog):
         await asyncio.to_thread(self.workspace.drop_all)
         await ctx.send(
             f"The agent is closed. {count} session(s) compacted and dropped. "
-            "I ignore all messages until the cog is reloaded."
+            "Messages get the maintenance notice until the cog is reloaded."
         )
 
     @eliza_group.group(name="memory", invoke_without_command=True)

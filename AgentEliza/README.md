@@ -56,7 +56,8 @@ Admin commands:
 | `[p]eliza stats [member]` | Shows token totals and the current rate window per scope. |
 | `[p]eliza setrules <text>` | Sets the server rules of the system prompt. |
 | `[p]eliza memory clear <scope> [member]` | Clears one memory scope and drops its live session. |
-| `[p]eliza close` | Compacts and drops all sessions and stops answering until a reload. |
+| `[p]eliza sessions list` | Lists the live sessions (server and channel, or the DM user) with the usage stats of each scope. |
+| `[p]eliza sessions close` | Compacts and drops all sessions, then answers the messages it would answer with a maintenance notice until a reload. |
 | `[p]eliza mcp add <name> <url> [Header: value...]` | Adds a remote HTTP MCP server. Header pairs are stored and sent on every request. A command with headers is deleted. |
 | `[p]eliza mcp remove <name>` | Removes a server definition and closes its session. |
 | `[p]eliza mcp list` | Lists the servers with their state. Header values never print. |
