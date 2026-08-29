@@ -171,7 +171,7 @@ class Compressor:
         if await self.api.usage_exhausted():
             return
         preset = await self.api.current_preset()
-        cache_ttl = (preset.cache_ttl if preset is not None else None) or DEFAULT_CACHE_TTL
+        cache_ttl = getattr(preset, "cache_ttl", None) or DEFAULT_CACHE_TTL
         context_length = await self.api.context_length(preset)
         for session_id, session in list(self.history.sessions.items()):
             if session.last_compaction >= session.last_active:

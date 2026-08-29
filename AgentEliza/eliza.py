@@ -738,9 +738,13 @@ class Eliza(commands.Cog):
         if self._closed:
             description += "\n**The agent is closed.** Reload the cog to start Eliza again."
         preset = await self.current_preset()
-        cache_ttl = (preset.cache_ttl if preset is not None else None) or DEFAULT_CACHE_TTL
+        cache_ttl = getattr(preset, "cache_ttl", None) or DEFAULT_CACHE_TTL
         active = sum(1 for session in self.history.sessions.values() if session.idle() < cache_ttl)
-        description += f"\nActive sessions: {active} of {MAX_SESSIONS}."
+        description += f"\nActive sessions: {active} of {MAX_SESSIONS}"
+        idle = len(self.history.sessions) - active
+        if idle:
+            description += f", {idle} idle"
+        description += "."
         errored = sum(1 for session in self.history.sessions.values() if session.error)
         if errored:
             description += f"\nSessions with a compaction error: {errored}."

@@ -96,7 +96,7 @@ class ChatEngine:
         session_id = channel_id if guild_id is not None else user_id
         if session_id not in self.history.sessions:
             preset = await self.api.current_preset()
-            cache_ttl = (preset.cache_ttl if preset is not None else None) or DEFAULT_CACHE_TTL
+            cache_ttl = getattr(preset, "cache_ttl", None) or DEFAULT_CACHE_TTL
             active = sum(1 for other in self.history.sessions.values() if other.idle() < cache_ttl)
             if active >= MAX_SESSIONS:
                 yield "The agent is already busy in other conversations. Try again later."
@@ -247,7 +247,7 @@ class ChatEngine:
     async def _generate_locked(self, session: Session, session_id: int, channel_id: int, content: str, *, api_key: str, guild_id, user_id, bot_name, user_name, is_owner, message_id, attachments=None) -> AsyncIterator[str]:
         """The reply work of generate_reply. The caller holds the session lock."""
         preset = await self.api.current_preset()
-        cache_ttl = (preset.cache_ttl if preset is not None else None) or DEFAULT_CACHE_TTL
+        cache_ttl = getattr(preset, "cache_ttl", None) or DEFAULT_CACHE_TTL
         usage = {"prompt_tokens": 0, "completion_tokens": 0, "cached_tokens": 0}
         # Context expiry: idle past the cache lifetime, or a compaction.
         # Only then is the system message rebuilt (prompt, memory, summary).
