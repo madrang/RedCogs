@@ -19,6 +19,12 @@ POLL_DURATION_HOURS = 24
 POLL_ANSWERS_MAX = 10
 POLL_ANSWER_MAX_CHARS = 55
 POLL_QUESTION_MAX_CHARS = 300
+# The size where a guild vote report stops naming voters: a report past
+# this many characters falls back to the bare counts.
+POLL_RESULT_MAX_CHARS = 1500
+# The voters a native poll report reads per answer (one page of the
+# voters endpoint). A bigger poll reports the counts only.
+POLL_NATIVE_VOTERS_MAX = 100
 
 
 class PollView(discord.ui.View):
@@ -74,13 +80,69 @@ class PollManager:
                 counts[index] += 1
         return counts
 
-    def _text(self, state: dict) -> str:
-        """The view message: the question and the answers with their counts."""
+    @staticmethod
+    def _voter_tag(names: dict, user_id: int, ids: bool) -> str:
+        """The name of a voter in a report: the display name, with the id tag for the agent."""
+        name = names.get(user_id) or f"user {user_id}"
+        return f"{name} <@{user_id}>" if ids else name
+
+    def _report_lines(self, answers: list, votes: dict, names: dict, counts: list, ids: bool) -> tuple:
+        """The vote report of a guild poll by size.
+
+        One line per voter while the voters stay within the number of
+        answers, one line per answer past that, the bare counts when the
+        names pass POLL_RESULT_MAX_CHARS. Returns (kind, lines).
+        """
+        counts_lines = [
+            f"{index + 1}. {answer} — {counts[index]}"
+            for index, answer in enumerate(answers)
+        ]
+        if not votes:
+            return "counts", counts_lines
+        if len(votes) <= len(answers):
+            voter_lines = [
+                f"{self._voter_tag(names, user_id, ids)} — "
+                + ", ".join(answers[index] for index in sorted(picked))
+                for user_id, picked in votes.items()
+            ]
+            if sum(len(line) + 1 for line in voter_lines) <= POLL_RESULT_MAX_CHARS:
+                return "voters", voter_lines
+        choice_lines = []
+        for index, answer in enumerate(answers):
+            picked_by = [
+                self._voter_tag(names, user_id, ids)
+                for user_id, picked in votes.items() if index in picked
+            ]
+            choice_lines.append(f"{answer} — {', '.join(picked_by)}" if picked_by else f"{answer} — nobody")
+        if sum(len(line) + 1 for line in choice_lines) <= POLL_RESULT_MAX_CHARS:
+            return "choices", choice_lines
+        return "counts", counts_lines
+
+    def _view_text(self, state: dict, ids: bool) -> str:
+        """The view message of a poll: the question and the votes.
+
+        A direct message keeps the counts: the one voter is the speaker.
+        A guild names the voters: several users share the channel, and
+        the report says who answered. ids adds the user tag of each
+        voter, the form the agent context uses.
+        """
         lines = [f"📊 **{state['question']}**"]
         counts = self._counts(state)
-        for index, answer in enumerate(state["answers"]):
-            lines.append(f"{index + 1}. {answer} — {counts[index]}")
+        if getattr(state["channel"], "guild", None) is None:
+            for index, answer in enumerate(state["answers"]):
+                lines.append(f"{index + 1}. {answer} — {counts[index]}")
+        else:
+            _, report = self._report_lines(state["answers"], state["votes"], state.get("names", {}), counts, ids=ids)
+            lines.extend(report)
         return "\n".join(lines)
+
+    def _text(self, state: dict) -> str:
+        """The view message: the question and the answers with their counts."""
+        return self._view_text(state, ids=False)
+
+    def _agent_text(self, state: dict) -> str:
+        """The live status of a poll for the agent: the view message with the voter tags."""
+        return self._view_text(state, ids=True)
 
     def _final_note(self, state: dict, participants: frozenset) -> str:
         """The close note of a completed poll: the vote coverage and the duration, in small text."""
@@ -107,6 +169,7 @@ class PollManager:
                 , "answers": state["answers"]
                 , "multiple": state["multiple"]
                 , "votes": {str(user_id): sorted(picked) for user_id, picked in state["votes"].items()}
+                , "names": {str(user_id): name for user_id, name in state.get("names", {}).items()}
                 , "state": state["state"]
                 , "channel_id": state["channel"].id
                 , "message_id": state["message_id"]
@@ -140,6 +203,7 @@ class PollManager:
                 , "answers": saved["answers"]
                 , "multiple": saved["multiple"]
                 , "votes": {int(user_id): set(picked) for user_id, picked in saved.get("votes", {}).items()}
+                , "names": {int(user_id): name for user_id, name in saved.get("names", {}).items()}
                 , "state": saved["state"]
                 , "channel": channel
                 , "message_id": saved.get("message_id")
@@ -237,6 +301,9 @@ class PollManager:
                 await interaction.followup.send("These choices have expired.", ephemeral=True)
                 return
             user_id = interaction.user.id
+            # The vote report names the voters: the interaction carries
+            # the display name, no member lookup needed.
+            state.setdefault("names", {})[user_id] = interaction.user.display_name
             if state["multiple"]:
                 picked = state["votes"].setdefault(user_id, set())
                 if index in picked:
@@ -389,6 +456,34 @@ class PollManager:
             return
         await self._fire(session_id, await self.status_text(session_id), state)
 
+    async def _native_report(self, poll) -> str | None:
+        """The vote lines of a native poll, or None when the voters stay unknown.
+
+        voters() lists the users of one answer of a message-attached
+        poll. The read stops at POLL_NATIVE_VOTERS_MAX users per answer:
+        a bigger poll answers None, and the caller reports the counts.
+        A native poll lives in a guild only, so the report names the
+        voters like any guild poll.
+        """
+        answers = [answer.text for answer in poll.answers]
+        counts = [answer.vote_count for answer in poll.answers]
+        votes = {}
+        names = {}
+        try:
+            for index, answer in enumerate(poll.answers):
+                picked = [user async for user in answer.voters(limit=POLL_NATIVE_VOTERS_MAX + 1)]
+                if len(picked) > POLL_NATIVE_VOTERS_MAX:
+                    return None
+                for user in picked:
+                    votes.setdefault(user.id, set()).add(index)
+                    names[user.id] = user.display_name
+        except (discord.HTTPException, discord.ClientException):
+            return None
+        if not votes:
+            return None
+        kind, lines = self._report_lines(answers, votes, names, counts, ids=True)
+        return None if kind == "counts" else "\n".join(lines)
+
     async def status_text(self, session_id: int, *, require_votes: bool = False) -> str | None:
         """The harness status of the poll of a session, or None without a poll.
 
@@ -411,7 +506,7 @@ class PollManager:
                 participants = frozenset(participants | state["votes"].keys())
                 single = getattr(state["channel"], "guild", None) is None or len(participants) <= 1
                 if not (single and state["multiple"]):
-                    return f"Choices are open:\n{self._text(state)}"
+                    return f"Choices are open:\n{self._agent_text(state)}"
                 # One active user answers a multiple-choice poll with a reply:
                 # the reply closes the choices, no idle wait.
                 task = state["idle_task"]
@@ -444,10 +539,14 @@ class PollManager:
                     message = None
                 poll = getattr(message, "poll", None)
                 if poll is not None and poll.total_votes:
-                    parts = [f"{answer.text}: {answer.vote_count}" for answer in poll.answers]
                     victor = poll.victor_answer
                     outcome = f"The winner is {victor.text}." if victor is not None else "The result is a tie."
-                    return f"The choices on {state['question']!r} are complete. Final counts: {', '.join(parts)}. {outcome}"
+                    head = f"The choices on {state['question']!r} are complete."
+                    report = await self._native_report(poll)
+                    if report is None:
+                        parts = [f"{answer.text}: {answer.vote_count}" for answer in poll.answers]
+                        return f"{head} Final counts: {', '.join(parts)}. {outcome}"
+                    return f"{head} Votes:\n{report}\n{outcome}"
                 if require_votes:
                     # No vote landed, or the counts are unknown: stay silent.
                     return None
@@ -457,11 +556,16 @@ class PollManager:
             counts = self._counts(state)
             if not any(counts):
                 return f"The choices on {state['question']!r} have expired. Nobody voted."
-            parts = [f"{answer}: {counts[index]}" for index, answer in enumerate(state["answers"])]
             top = max(counts)
             winners = [answer for index, answer in enumerate(state["answers"]) if counts[index] == top]
             outcome = f"The winner is {winners[0]}." if len(winners) == 1 else "The result is a tie."
-            return f"The choices on {state['question']!r} are complete. Final counts: {', '.join(parts)}. {outcome}"
+            head = f"The choices on {state['question']!r} are complete."
+            parts = [f"{answer}: {counts[index]}" for index, answer in enumerate(state["answers"])]
+            if getattr(state["channel"], "guild", None) is not None:
+                kind, lines = self._report_lines(state["answers"], state["votes"], state.get("names", {}), counts, ids=True)
+                if kind != "counts":
+                    return f"{head} Votes:\n" + "\n".join(lines) + f"\n{outcome}"
+            return f"{head} Final counts: {', '.join(parts)}. {outcome}"
 
     async def drop_user(self, user_id: int) -> None:
         """Drop the votes of a user and the poll of a direct message with them (EUD)."""
@@ -475,6 +579,8 @@ class PollManager:
             # The per-poll lock serializes the removal against a vote in
             # flight: a vote persists the state again after its own section.
             async with poll["lock"]:
+                # The name dies with the vote: it is the data of the user.
+                poll.get("names", {}).pop(user_id, None)
                 if poll["votes"].pop(user_id, None) is None:
                     continue
                 if poll["state"] == "active" and poll["message_id"] is not None:
