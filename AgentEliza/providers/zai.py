@@ -6,9 +6,10 @@ ZAI_IMAGE_MAX_BYTES = 5_000_000
 ZAI_IMAGE_TYPES = ("image/png", "image/jpeg")
 # The vision models known compatible with the image_url contract of
 # analyze_image. Keep the list current when a vision model is added.
-# glm-5v-turbo needs a plan with access (error 1311 on the coding plan),
-# glm-4.6v is the coding-plan model.
-ZAI_VISION_MODELS = ("glm-5v-turbo", "glm-4.6v")
+# glm-5.3-flash is the coding-plan model (the vision server ships it
+# since 0.1.2), glm-4.6v was the earlier one, glm-5v-turbo needs a
+# plan with access (error 1311 on the coding plan).
+ZAI_VISION_MODELS = ("glm-5.3-flash", "glm-4.6v", "glm-5v-turbo")
 
 
 def _validate_image(body: bytes, content_type: str):
@@ -29,9 +30,6 @@ class ZaiProvider(Provider):
         "glm-5.3": 1_048_576
       , "glm-5.2": 1_048_576
     }
-    # The vision model of analyze_image on this provider.
-    vision_model = "glm-4.6v"
-
     def native_tools(self) -> list:
         """The vision tool: image analysis, only with a Z.AI provider."""
         return [analyze_image_tool(self.vision_model, validate=_validate_image)]
@@ -104,6 +102,8 @@ class ZaiCodeProvider(ZaiProvider):
 
     name = "Z.AI Code"
     base_url = "https://api.z.ai/api/coding/paas/v4"
+    # The vision model of analyze_image on the coding plan.
+    vision_model = "glm-5.3-flash"
     models = [
         "glm-5.3"
       , "glm-5.2"
@@ -115,6 +115,7 @@ class ZaiApiProvider(ZaiProvider):
 
     name = "Z.AI API"
     base_url = "https://api.z.ai/api/paas/v4"
+    # The vision model of analyze_image on this provider.
     vision_model = "glm-5v-turbo"
     models = [
         "glm-5.3"
