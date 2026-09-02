@@ -89,6 +89,7 @@ class Eliza(commands.Cog):
         tool_options.bot_token_getter = lambda: bot.http.token
         tool_options.polls = self.polls
         tool_options.workspace = self.workspace
+        tool_options.mcp = self.mcp
         self.harness_tools = HarnessTools(tool_options)
         # Usage stats and rate windows per scope, in Config.
         self.scope_stats = ScopeStats(self.config)

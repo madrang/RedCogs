@@ -4,10 +4,11 @@ import json
 import logging
 import time
 from contextlib import AsyncExitStack
+from pathlib import Path
 
 from discord.ext import tasks
 
-from .tools import TOOL_RESULT_MAX_CHARS
+from .tools.base import TOOL_RESULT_MAX_CHARS, _cap
 
 log = logging.getLogger("red.agenteliza.mcp")
 
@@ -26,6 +27,14 @@ except ImportError as e:
     streamable_http_client = None
     TextContent = None
 
+try:
+    # A clean JSON-RPC error answer (no resources capability, an unknown
+    # resource) keeps the session: only a broken transport drops it. The
+    # import stands alone: a miss must not disable the whole MCP block.
+    from mcp.shared.exceptions import MCPError
+except ImportError:
+    MCPError = None
+
 MCP_IDLE_TIMEOUT = 600
 # Cap of the connect and tool-list phase of a server. A hung server must
 # not block a reply forever.
@@ -37,6 +46,92 @@ MCP_HTTP_TIMEOUT = 30
 MCP_SSE_READ_TIMEOUT = 300
 # Cap of the tool arguments in the log line.
 MCP_LOG_ARGS_MAX_CHARS = 500
+# Page cap of one resources/list sweep. A server that paginates past the cap
+# ends the list with a note instead of an endless cursor chase.
+MCP_RESOURCE_PAGES_MAX = 10
+# The built-in resource set of the harness: the files of the cog `resources/`
+# folder, served through the resource tools as a virtual server. A file in
+# the folder registers itself: its relative path is the uri path under the
+# harness scheme. The server name is reserved.
+HARNESS_SERVER_NAME = "harness"
+HARNESS_RESOURCE_SCHEME = "harness:///"
+HARNESS_RESOURCES_FOLDER = Path(__file__).resolve().parent / "resources"
+
+
+class HarnessResources:
+    """The built-in resource set: the files of the cog `resources/` folder.
+
+    The set rides the resource tools as a virtual server. No MCP connection
+    stands behind it: the manager serves it directly.
+    """
+
+    def __init__(self, folder: Path = HARNESS_RESOURCES_FOLDER):
+        self.folder = folder.resolve()
+
+    def _resolve(self, uri: str) -> Path | None:
+        """The confined folder path of one harness uri, or None."""
+        if not uri.startswith(HARNESS_RESOURCE_SCHEME):
+            return None
+        rest = uri[len(HARNESS_RESOURCE_SCHEME):].replace("\\", "/")
+        target = (self.folder / rest).resolve()
+        if self.folder not in target.parents:
+            # The uri path stays inside the folder, like a workspace path.
+            return None
+        return target
+
+    @staticmethod
+    def _mime(path: Path) -> str:
+        suffix = path.suffix.lower()
+        if suffix == ".md":
+            return "text/markdown"
+        if suffix in (".txt", ""):
+            return "text/plain"
+        return "application/octet-stream"
+
+    @staticmethod
+    def _description(path: Path) -> str:
+        """The first heading line of a file, as its description."""
+        try:
+            with path.open("r", encoding="utf-8") as file:
+                for line in file:
+                    text = line.strip()
+                    if text.startswith("# "):
+                        return text[2:].strip()
+        except OSError:
+            pass
+        return ""
+
+    def _scan(self) -> list:
+        """The resource lines of the folder: uri, name, mime, description."""
+        lines = []
+        if not self.folder.is_dir():
+            return lines
+        for path in sorted(p for p in self.folder.rglob("*") if p.is_file()):
+            uri = HARNESS_RESOURCE_SCHEME + path.relative_to(self.folder).as_posix()
+            line = f"- {uri} — {path.name} ({self._mime(path)})"
+            description = self._description(path)
+            if description:
+                line += f": {description}"
+            lines.append(line)
+        return lines
+
+    async def list(self) -> str:
+        """The harness section of list_resources."""
+        lines = await asyncio.to_thread(self._scan)
+        return f"## {HARNESS_SERVER_NAME}\n" + ("\n".join(lines) if lines else "(no resources)")
+
+    async def read(self, uri: str) -> str:
+        """One harness uri in the read_resource format."""
+        if not uri.startswith(HARNESS_RESOURCE_SCHEME):
+            return f"Error: a harness uri starts with {HARNESS_RESOURCE_SCHEME}."
+        target = await asyncio.to_thread(self._resolve, uri)
+        if target is None or not target.is_file():
+            return f"Error: no harness resource at {uri}. Use list_resources to see the uris."
+        try:
+            text = await asyncio.to_thread(target.read_text, encoding="utf-8", errors="replace")
+        except OSError as e:
+            return f"Error: the read of {uri} failed: {e}."
+        return _cap(f"# {uri} ({self._mime(target)})\n{text}")
 
 
 class MCPConnection:
@@ -165,6 +260,82 @@ class MCPConnection:
             return f"Error: {text}"
         return text or "(no output)"
 
+    async def _resource_failure(self, call: str, error: Exception) -> str:
+        """The error text of a failed resource call.
+
+        A clean JSON-RPC error (the server offers no resources, the uri is
+        unknown) leaves the session live. Any other failure drops it, like
+        a tool call: the stream may be broken.
+        """
+        if MCPError is not None and isinstance(error, MCPError):
+            log.info("Resource call %s %s answered an error: %s", self.name, call, error)
+            return f"Error: the server answered {call} with an error: {error}"
+        await self.close()
+        log.warning("Resource call %s %s failed: %s: %s", self.name, call, type(error).__name__, error)
+        return f"Error: the {call} call failed: {error}"
+
+    async def list_resources(self) -> str:
+        """resources/list of this server, as agent-facing text."""
+        client = await self.get_client()
+        if client is None:
+            log.info("Resource list %s skipped: the server is unavailable: %s", self.name, self.error or "unknown error")
+            return f"Error: MCP server {self.name} is unavailable: {self.error or 'unknown error'}"
+        log.info("Resource list %s", self.name)
+        resources = []
+        cursor = None
+        pages = 0
+        try:
+            while True:
+                result = await client.list_resources(cursor=cursor)
+                resources.extend(result.resources)
+                cursor = result.next_cursor or None
+                pages += 1
+                if not cursor or pages >= MCP_RESOURCE_PAGES_MAX:
+                    break
+        except Exception as e:
+            return await self._resource_failure("resources/list", e)
+        if not resources:
+            return "(no resources)"
+        lines = []
+        for resource in resources:
+            line = f"- {resource.uri} — {resource.name}"
+            if resource.mime_type:
+                line += f" ({resource.mime_type})"
+            if resource.description:
+                line += f": {resource.description}"
+            lines.append(line)
+        if cursor:
+            lines.append(f"[more resources follow: the list stopped at {MCP_RESOURCE_PAGES_MAX} pages]")
+        return _cap("\n".join(lines))
+
+    async def read_resource(self, uri: str) -> str:
+        """resources/read of one uri, as agent-facing text."""
+        client = await self.get_client()
+        if client is None:
+            log.info("Resource read %s skipped: the server is unavailable: %s", self.name, self.error or "unknown error")
+            return f"Error: MCP server {self.name} is unavailable: {self.error or 'unknown error'}"
+        log.info("Resource read %s %s", self.name, uri)
+        try:
+            result = await client.read_resource(uri)
+        except Exception as e:
+            return await self._resource_failure("resources/read", e)
+        if not result.contents:
+            return "(no content)"
+        blocks = []
+        for content in result.contents:
+            head = f"# {content.uri}"
+            if content.mime_type:
+                head += f" ({content.mime_type})"
+            text = getattr(content, "text", None)
+            if text is not None:
+                blocks.append(f"{head}\n{text or '(empty text)'}")
+            else:
+                # Base64 in a chat context burns tokens without usable data:
+                # the type and the size carry what the agent can act on.
+                blob = getattr(content, "blob", "") or ""
+                blocks.append(f"{head}\n[binary content: about {int(len(blob) * 3 / 4)} bytes]")
+        return _cap("\n\n".join(blocks))
+
     async def close(self) -> None:
         """Close the session. Safe to call from any task."""
         stack, self.stack = self.stack, None
@@ -188,6 +359,8 @@ class MCPManager:
         # MCP servers of the active provider, refreshed at every gather_tools.
         self.extra_servers: dict = {}
         self.connections: dict[str, MCPConnection] = {}
+        # The built-in resource set, served through the resource tools.
+        self.harness = HarnessResources()
 
     @property
     def available(self) -> bool:
@@ -232,7 +405,7 @@ class MCPManager:
         routed to the provider server.
         """
         self.extra_servers = provider.mcp_servers(api_key) if provider is not None and api_key else {}
-        servers = {**await self.config.mcp_servers(), **self.extra_servers}
+        servers = await self._server_map()
         tools = []
         routes = {}
         replaced = set()
@@ -270,6 +443,47 @@ class MCPManager:
         if connection is None:
             return f"Error: MCP server {name} is not connected."
         return await connection.run_tool(tool_name, arguments)
+
+    async def _server_map(self) -> dict:
+        """The merged server definitions: Config servers plus the servers of the active provider."""
+        return {**await self.config.mcp_servers(), **self.extra_servers}
+
+    @staticmethod
+    def _unknown_server(server: str, servers: dict) -> str:
+        """The error text for a server name outside the known set."""
+        known = ", ".join(sorted([HARNESS_SERVER_NAME, *servers]))
+        return f"Error: unknown MCP server {server}. Known servers: {known}."
+
+    async def list_resources(self, server: str = "") -> str:
+        """resources/list of one server or of every server, as agent-facing text.
+
+        The built-in harness set lists first: alone when named, with the
+        servers when the name is blank.
+        """
+        if server and server != HARNESS_SERVER_NAME:
+            servers = await self._server_map()
+            if server not in servers:
+                return self._unknown_server(server, servers)
+            connection = self.get_connection(server)
+            return _cap(f"## {server}\n{await connection.list_resources()}")
+        sections = []
+        if not server or server == HARNESS_SERVER_NAME:
+            sections.append(await self.harness.list())
+        if not server:
+            for name in await self._server_map():
+                connection = self.get_connection(name)
+                sections.append(f"## {name}\n{await connection.list_resources()}")
+        return _cap("\n\n".join(sections))
+
+    async def read_resource(self, server: str, uri: str) -> str:
+        """resources/read of one uri of one server, as agent-facing text."""
+        if server == HARNESS_SERVER_NAME:
+            return await self.harness.read(uri)
+        servers = await self._server_map()
+        if server not in servers:
+            return self._unknown_server(server, servers)
+        connection = self.get_connection(server)
+        return await connection.read_resource(uri)
 
     @tasks.loop(seconds=60)
     async def _reap_idle(self) -> None:

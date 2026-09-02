@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from ..memory import Memory
 from .files import FileTools
 from .history import HistoryTools
+from .mcp import MCPTools
 from .memory import SCOPE_ALIASES, MemoryTools
 from .poll import PollTools
 from .web import WebTools
@@ -31,9 +32,11 @@ class HarnessOptions:
     polls: object = None
     # The workspace store, for the workspace tools and send_file.
     workspace: object = None
+    # The MCP manager, for the resource tools.
+    mcp: object = None
 
 
-class HarnessTools(MemoryTools, HistoryTools, FileTools, PollTools, WebTools, WorkspaceTools):
+class HarnessTools(MemoryTools, HistoryTools, FileTools, PollTools, WebTools, WorkspaceTools, MCPTools):
     """The set of the harness tools, one mixin per tool family.
 
     Each tool maps to a `_tool_<name>` method. Memory tools resolve the
@@ -54,10 +57,11 @@ class HarnessTools(MemoryTools, HistoryTools, FileTools, PollTools, WebTools, Wo
         self.bot_token_getter = options.bot_token_getter
         self.polls = options.polls
         self.workspace = options.workspace
+        self.mcp = options.mcp
 
     def tools(self) -> list:
         """The OpenAI function schemas of the harness tools, in a stable order."""
-        return [*self.memory_tools(), *self.history_tools(), *self.file_tools(), *self.poll_tools(), *self.web_tools(), *self.workspace_tools()]
+        return [*self.memory_tools(), *self.history_tools(), *self.file_tools(), *self.poll_tools(), *self.web_tools(), *self.workspace_tools(), *self.mcp_tools()]
 
     async def run(self, name: str, arguments: dict, *, guild_id, channel_id, user_id, is_owner: bool = False) -> str:
         """Run one harness tool and return its output as text."""
