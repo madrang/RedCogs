@@ -17,17 +17,19 @@ VENICE_QUERY_MAX_CHARS = 400
 VENICE_SEARCH_MAX_LIMIT = 20
 # Image generation: the endpoint-wide prompt cap.
 VENICE_PROMPT_MAX_CHARS = 7500
-# The default image model, Venice's own pixel-based one. The other ids come
-# from the live model list (GET /models?type=image needs no key).
-VENICE_IMAGE_MODEL = "venice-sd35"
+# The curated image models, hand-ordered best-first: the models with the
+# uncensored trait come first for now, the models with limitation traits
+# come last. The first entry is the default model, like the first entry of
+# PROVIDERS is the default provider. The other ids come from the live model
+# list (GET /models?type=image needs no key).
 VENICE_IMAGE_MODELS = (
-    "venice-sd35"
-  , "flux-2-pro"
+    "seedream-v4"
+  , "venice-sd35"
   , "gpt-image-2"
   , "nano-banana-2"
   , "qwen-image-2"
+  , "flux-2-pro"
   , "grok-imagine-image"
-  , "seedream-v4"
 )
 # Prompt caps under the endpoint-wide 7500 (the per-model constraints of the
 # live model list).
@@ -67,22 +69,27 @@ VENICE_SEED_MAX = 999_999_999
 # Per-model behavior flags from the live sweep of 2026-09-03, one key per
 # approved trait. copyrighted_material: the model refuses a prompt that
 # names copyrighted material, a character or anything else (verified live:
-# the answer is a uniform blank image, no error). The tool description
-# states the trait once, so the agent picks a model that fits the prompt.
-# The full findings live in the vault note Venice.AI/HTTP API.md.
+# the answer is a uniform blank image, no error). uncensored: the live
+# model list reports the model as applying minimal content-based filtering
+# (model_spec.uncensored true). The tool description states each trait
+# once, so the agent picks a model that fits the prompt. The full findings
+# live in the vault note Venice.AI/HTTP API.md.
 VENICE_IMAGE_MODEL_TRAITS = {
     "flux-2-pro": {"copyrighted_material": True}
   , "grok-imagine-image": {"copyrighted_material": True}
+  , "seedream-v4": {"uncensored": True}
 }
 # The agent-facing label of each trait flag.
 VENICE_IMAGE_TRAIT_LABELS = {
     "copyrighted_material": "refuses copyrighted material"
+  , "uncensored": "uncensored"
 }
 # The refusal asset of the endpoint: a uniform blank image that compresses
 # far below any real render (exactly 1926 bytes live, while the smallest
 # real render of the 2026-09-03 sweep weighed 193 KB). No image decoder
-# rides the cog, so the decoded size stands in for the pixel check.
-VENICE_IMAGE_BLANK_MAX_BYTES = 4096
+# rides the cog, so the decoded size stands in for the pixel check. The
+# ceiling sits just above the observed asset.
+VENICE_IMAGE_BLANK_MAX_BYTES = 2048
 
 
 def _header_flag(headers, name: str) -> str:
@@ -240,7 +247,7 @@ def _image_tool() -> dict:
         prompt = str(arguments.get("prompt") or "").strip()
         if not prompt:
             return "Error: the prompt must be a non-empty string."
-        model = str(arguments.get("model") or "").strip() or VENICE_IMAGE_MODEL
+        model = str(arguments.get("model") or "").strip() or VENICE_IMAGE_MODELS[0]
         prompt_limit = VENICE_IMAGE_PROMPT_LIMITS.get(model, VENICE_PROMPT_MAX_CHARS)
         if len(prompt) > prompt_limit:
             return f"Error: the prompt is over the {prompt_limit}-character limit of the model {model}."
@@ -331,15 +338,15 @@ def _image_tool() -> dict:
             "Generate one image from a text prompt through Venice and post it to the conversation. "
             "The size comes from the aspect_ratio alone; the tool sets the resolution and the quality itself. "
             f"Known models: {', '.join(model_notes)}. "
-            f"The default {VENICE_IMAGE_MODEL} is the only pixel model and takes a cfg_scale. "
-            "A model with this flag refuses prompts that name copyrighted material: "
-            "describe the subject instead of naming it, or pick a model without the flag."
+            "venice-sd35 is the only pixel model and takes a cfg_scale. "
+            "A model marked as refusing copyrighted material does exactly that: "
+            "describe the subject instead of naming it, or pick another model."
         )
         , "parameters": {
             "type": "object"
             , "properties": {
                 "prompt": {"type": "string", "description": "What to draw."}
-                , "model": {"type": "string", "description": f"The image model. Default {VENICE_IMAGE_MODEL}."}
+                , "model": {"type": "string", "description": f"The image model. Default {VENICE_IMAGE_MODELS[0]}."}
                 , "aspect_ratio": {"type": "string", "description": "The aspect ratio of the image, for example 1:1, 16:9, or 9:16."}
                 , "negative_prompt": {"type": "string", "description": "What to keep out of the image."}
                 , "cfg_scale": {"type": "number", "description": "How strictly the pixel model follows the prompt, over 0 up to 20. Default of the endpoint."}
