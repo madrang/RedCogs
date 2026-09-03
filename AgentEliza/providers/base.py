@@ -125,8 +125,8 @@ class Provider:
         answer, and raises ChatError on failure. send_file posts one
         binary file to the current channel and returns the result text.
         channel_nsfw reports whether the current channel sits behind the
-        Discord 18+ gate. A native tool takes the place of a harness tool
-        of the same name.
+        Discord 18+ gate (a direct message of the bot owner counts). A
+        native tool takes the place of a harness tool of the same name.
         """
         return []
 

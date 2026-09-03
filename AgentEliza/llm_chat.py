@@ -397,7 +397,11 @@ class ChatEngine:
         async def channel_nsfw():
             """Whether the current channel sits behind the Discord 18+ gate,
             for native provider tools: the channel flag, the flag of the
-            parent channel of a thread, or an age-restricted guild."""
+            parent channel of a thread, or an age-restricted guild. A direct
+            message of the bot owner counts as gated: the API reports no
+            user age, and the owner operates the bot."""
+            if guild_id is None and is_owner:
+                return True
             getter = self.harness_tools.channel_getter
             channel = await getter(channel_id) if getter else None
             parent = getattr(channel, "parent", None)
