@@ -64,6 +64,28 @@ VENICE_PIXEL_RATIOS = {
 }
 # The seed range of the endpoint.
 VENICE_SEED_MAX = 999_999_999
+# Per-model behavior flags from the live sweep of 2026-09-03, one key per
+# approved trait. copyrighted_material: the model refuses a prompt that
+# names copyrighted material, a character or anything else (verified live:
+# the answer is a uniform blank image, no error). The tool description
+# states the trait once, so the agent picks a model that fits the prompt.
+# The full findings live in the vault note Venice.AI/HTTP API.md.
+VENICE_IMAGE_MODEL_TRAITS = {
+    "flux-2-pro": {"copyrighted_material": True}
+  , "grok-imagine-image": {"copyrighted_material": True}
+}
+# The agent-facing label of each trait flag.
+VENICE_IMAGE_TRAIT_LABELS = {
+    "copyrighted_material": "refuses copyrighted material"
+}
+
+
+def _header_flag(headers, name: str) -> str:
+    """The yes/no/unknown text of a boolean response header."""
+    value = headers.get(name) if headers is not None else None
+    if value is None:
+        return "unknown"
+    return "yes" if str(value).strip().lower() == "true" else "no"
 
 
 def _search_tool() -> dict:
@@ -84,7 +106,7 @@ def _search_tool() -> dict:
         if limit is not None:
             body["limit"] = max(1, min(VENICE_SEARCH_MAX_LIMIT, limit))
         try:
-            data = await api_post("/augment/search", json_body=body)
+            data, _headers = await api_post("/augment/search", json_body=body)
         except ChatError as e:
             return f"Error: the search failed: {e}"
         results = data.get("results") or []
@@ -126,7 +148,7 @@ def _scrape_tool() -> dict:
         if not url.startswith(("http://", "https://")):
             return "Error: the url must be an http(s) URL."
         try:
-            data = await api_post("/augment/scrape", json_body={"url": url})
+            data, _headers = await api_post("/augment/scrape", json_body={"url": url})
         except ChatError as e:
             return f"Error: the scrape failed: {e}"
         content = data.get("content")
@@ -170,7 +192,7 @@ def _parse_tool() -> dict:
         form = aiohttp.FormData()
         form.add_field("file", body, filename=name, content_type=content_type)
         try:
-            data = await api_post("/augment/text-parser", data=form)
+            data, _headers = await api_post("/augment/text-parser", data=form)
         except ChatError as e:
             return f"Error: the parse failed: {e}"
         text = data.get("text")
@@ -203,7 +225,8 @@ def _image_tool() -> dict:
     controls the prompt, the model, the aspect ratio, the negative prompt,
     and the cfg scale. The resolution, the quality, the watermark, the
     exif metadata, and the seed are preset here; safe_mode drops only on an
-    age-restricted channel."""
+    age-restricted channel. The tool result appends the moderation headers
+    of the answer as a [venice] status line: content violation, blurred."""
 
     async def handler(arguments, call_api, fetch_url=None, api_post=None, send_file=None, channel_nsfw=None):
         prompt = str(arguments.get("prompt") or "").strip()
@@ -254,9 +277,15 @@ def _image_tool() -> dict:
             # where Discord itself gates the channel behind 18+.
             body["safe_mode"] = False
         try:
-            data = await api_post("/image/generate", json_body=body)
+            data, headers = await api_post("/image/generate", json_body=body)
         except ChatError as e:
             return f"Error: the image generation failed: {e}"
+        # The moderation signals of the endpoint: a content violation is the
+        # documented face of the silent refusal (a blank image with no error).
+        status = (
+            f"[venice] content violation: {_header_flag(headers, 'x-venice-is-content-violation')}"
+            f", blurred: {_header_flag(headers, 'x-venice-is-blurred')}"
+        )
         images = data.get("images") or []
         if not images:
             return "Error: the image generation returned no image."
@@ -271,15 +300,22 @@ def _image_tool() -> dict:
         # The format stays the endpoint default (webp). The id names the file:
         # each image of a conversation lands under its own name.
         name = re.sub(r"[\s/\\]+", "-", str(data.get("id") or "venice-image"))[:100]
-        return await send_file(f"{name}.webp", raw)
+        sent = await send_file(f"{name}.webp", raw)
+        return f"{sent}\n{status}"
 
+    model_notes = []
+    for image_model in VENICE_IMAGE_MODELS:
+        labels = [VENICE_IMAGE_TRAIT_LABELS[key] for key in VENICE_IMAGE_MODEL_TRAITS.get(image_model, ())]
+        model_notes.append(f"{image_model} ({', '.join(labels)})" if labels else image_model)
     return {
         "name": "generate_image"
         , "description": (
             "Generate one image from a text prompt through Venice and post it to the conversation. "
             "The size comes from the aspect_ratio alone; the tool sets the resolution and the quality itself. "
-            f"Known models: {', '.join(VENICE_IMAGE_MODELS)}. The default {VENICE_IMAGE_MODEL} is the only pixel model "
-            "and takes a cfg_scale."
+            f"Known models: {', '.join(model_notes)}. "
+            f"The default {VENICE_IMAGE_MODEL} is the only pixel model and takes a cfg_scale. "
+            "A model with this flag refuses prompts that name copyrighted material: "
+            "describe the subject instead of naming it, or pick a model without the flag."
         )
         , "parameters": {
             "type": "object"

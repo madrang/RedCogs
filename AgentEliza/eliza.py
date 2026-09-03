@@ -329,10 +329,11 @@ class Eliza(commands.Cog):
                 await asyncio.sleep(delay)
                 delay *= 2
 
-    async def provider_post(self, api_key: str, path: str, *, json_body=None, data=None) -> dict:
+    async def provider_post(self, api_key: str, path: str, *, json_body=None, data=None) -> tuple[dict, dict]:
         """One POST to a REST path of the chat provider, for the native tools
-        of a provider (the Venice augment set). Return the JSON answer as a
-        dict. Raise ChatError on any failure: the caller owns the error text.
+        of a provider (the Venice augment set). Return the JSON answer and
+        the response headers (a case-insensitive mapping) as a tuple. Raise
+        ChatError on any failure: the caller owns the error text.
         Connect-level failures retry like chat_request."""
         if self.session is None or self.session.closed:
             self.session = self._new_session()
@@ -356,7 +357,7 @@ class Eliza(commands.Cog):
                     except ValueError:
                         parsed = None
                     if response.status == 200 and isinstance(parsed, dict):
-                        return parsed
+                        return parsed, response.headers
                     error = parsed.get("error") if isinstance(parsed, dict) else None
                     detail = error if isinstance(error, str) else body[:500]
                     if response.status == 401:

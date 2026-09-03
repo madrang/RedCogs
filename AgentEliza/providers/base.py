@@ -122,7 +122,8 @@ class Provider:
         one chat-completions payload to the provider. fetch_url downloads
         one URL to (bytes, content_type), or None on failure. api_post
         sends one POST to a REST path of the provider, returns the JSON
-        answer, and raises ChatError on failure. send_file posts one
+        answer and the response headers (case-insensitive) as a tuple, and
+        raises ChatError on failure. send_file posts one
         binary file to the current channel and returns the result text.
         channel_nsfw reports whether the current channel sits behind the
         Discord 18+ gate (a direct message of the bot owner counts). A
