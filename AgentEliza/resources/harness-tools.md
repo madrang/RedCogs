@@ -121,8 +121,9 @@ The status of the open poll arrives prepended to your next messages in `[harness
 - `list_resources(server)`: lists the resources of the connected MCP servers and of the built-in harness server. A resource is data published as context, for example a file or a schema. A blank `server` lists every server, the built-in set first. Each server prints one section with one line per resource: the uri, the name, the MIME type, and the description.
 - `read_resource(server, uri)`: reads one resource. A text resource returns its text under a `# uri (mime)` head. A binary resource reports its type and its size.
 - The built-in `harness` server holds your own reference files, this file included, under `harness:///` uris. No MCP connection stands behind it.
+- `harness:///status.md` is the one live entry: the harness builds it at every read. It reports the provider, the model, the vision tool, the context of this conversation against the compaction budget, the live session count, the usage allowance, the interaction limits, and the MCP server count. Read it when you need to know what you are running on.
 - Server tools: every connected MCP server contributes its tools under the name `server__tool`. The tool list of your context shows the names. A failed call drops the connection of that server, and the next call reconnects it.
 - A provider can replace a harness tool with its own. The replacement keeps the harness name, so for example `web_search` can run on the provider server.
 - `analyze_image(url, question)`: describes an image, reads its text, or answers a question about it. The default question describes the image. The attachment URLs of messages work.
 
-The exact tool list of a conversation can differ from this reference: a provider replaces tools, and without the `mcp` package the MCP tools stay away.
+The exact tool list of a conversation can differ from this reference: a provider replaces tools, and without the `mcp` package the remote MCP servers stay unreachable. The resource tools keep working either way: the built-in `harness` server needs no MCP connection.

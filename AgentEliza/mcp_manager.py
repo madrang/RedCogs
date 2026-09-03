@@ -56,6 +56,13 @@ MCP_RESOURCE_PAGES_MAX = 10
 HARNESS_SERVER_NAME = "harness"
 HARNESS_RESOURCE_SCHEME = "harness:///"
 HARNESS_RESOURCES_FOLDER = Path(__file__).resolve().parent / "resources"
+# The one live entry of the harness set: the status of the harness itself,
+# built at read time by the cog. No file sits behind the uri, so a physical
+# file of the same name never loads.
+HARNESS_STATUS_URI = "status.md"
+HARNESS_STATUS_DESCRIPTION = (
+    "The live status of the harness: provider, model, context, sessions, and usage allowance."
+)
 
 
 class HarnessResources:
@@ -67,6 +74,10 @@ class HarnessResources:
 
     def __init__(self, folder: Path = HARNESS_RESOURCES_FOLDER):
         self.folder = folder.resolve()
+        # Async callable (session_id) -> body text of the live status, wired
+        # by the cog. While None the status resource stays out of the list
+        # and the reads.
+        self.status_getter = None
 
     def _resolve(self, uri: str) -> Path | None:
         """The confined folder path of one harness uri, or None."""
@@ -117,13 +128,30 @@ class HarnessResources:
 
     async def list(self) -> str:
         """The harness section of list_resources."""
-        lines = await asyncio.to_thread(self._scan)
+        lines = []
+        if self.status_getter is not None:
+            # The live entry lists first: it changes, the files do not.
+            lines.append(
+                f"- {HARNESS_RESOURCE_SCHEME}{HARNESS_STATUS_URI} — {HARNESS_STATUS_URI}"
+                f" ({self._mime(Path(HARNESS_STATUS_URI))}): {HARNESS_STATUS_DESCRIPTION}"
+            )
+        lines.extend(await asyncio.to_thread(self._scan))
         return f"## {HARNESS_SERVER_NAME}\n" + ("\n".join(lines) if lines else "(no resources)")
 
-    async def read(self, uri: str) -> str:
-        """One harness uri in the read_resource format."""
+    async def read(self, uri: str, session_id: int | None = None) -> str:
+        """One harness uri in the read_resource format.
+
+        session_id reaches the live status resource only: it reports the
+        context of the session that reads.
+        """
         if not uri.startswith(HARNESS_RESOURCE_SCHEME):
             return f"Error: a harness uri starts with {HARNESS_RESOURCE_SCHEME}."
+        if self.status_getter is not None and uri == HARNESS_RESOURCE_SCHEME + HARNESS_STATUS_URI:
+            try:
+                text = await self.status_getter(session_id)
+            except Exception as e:
+                return f"Error: the status of the harness could not be built: {type(e).__name__}: {e}."
+            return _cap(f"# {uri} (text/markdown)\n{text}")
         target = await asyncio.to_thread(self._resolve, uri)
         if target is None or not target.is_file():
             return f"Error: no harness resource at {uri}. Use list_resources to see the uris."
@@ -458,7 +486,8 @@ class MCPManager:
         """resources/list of one server or of every server, as agent-facing text.
 
         The built-in harness set lists first: alone when named, with the
-        servers when the name is blank.
+        servers when the name is blank. Without the `mcp` package the
+        servers collapse into one note: the harness set still serves.
         """
         if server and server != HARNESS_SERVER_NAME:
             servers = await self._server_map()
@@ -470,15 +499,29 @@ class MCPManager:
         if not server or server == HARNESS_SERVER_NAME:
             sections.append(await self.harness.list())
         if not server:
-            for name in await self._server_map():
-                connection = self.get_connection(name)
-                sections.append(f"## {name}\n{await connection.list_resources()}")
+            names = list(await self._server_map())
+            if not self.available:
+                # Without the `mcp` package the harness set still serves:
+                # the remote servers get one note, not an error section each.
+                if names:
+                    sections.append(
+                        "The `mcp` package is not installed. The remote servers stay unreachable: "
+                        + ", ".join(names) + "."
+                    )
+            else:
+                for name in names:
+                    connection = self.get_connection(name)
+                    sections.append(f"## {name}\n{await connection.list_resources()}")
         return _cap("\n\n".join(sections))
 
-    async def read_resource(self, server: str, uri: str) -> str:
-        """resources/read of one uri of one server, as agent-facing text."""
+    async def read_resource(self, server: str, uri: str, session_id: int | None = None) -> str:
+        """resources/read of one uri of one server, as agent-facing text.
+
+        session_id reaches the built-in harness set only: its live status
+        resource reports the context of the reading session.
+        """
         if server == HARNESS_SERVER_NAME:
-            return await self.harness.read(uri)
+            return await self.harness.read(uri, session_id=session_id)
         servers = await self._server_map()
         if server not in servers:
             return self._unknown_server(server, servers)

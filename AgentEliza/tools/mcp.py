@@ -12,9 +12,10 @@ class MCPTools:
 
     def mcp_tools(self) -> list:
         """The OpenAI function schemas of the MCP resource tools."""
-        if self.mcp is None or not self.mcp.available:
-            # Without the `mcp` package there is nothing to bridge.
+        if self.mcp is None:
             return []
+        # Offered without the `mcp` package too: the built-in harness set
+        # needs no client. The remote servers answer an unavailable error.
         return [
             {
                 "type": "function"
@@ -66,19 +67,23 @@ class MCPTools:
 
     async def _tool_list_resources(self, arguments: dict, **_scope) -> str:
         if self.mcp is None:
-            return "Error: the `mcp` package is not installed."
+            return "Error: the MCP manager is not wired."
         server = arguments.get("server")
         if server is not None and not isinstance(server, str):
             return "Error: the server must be a string."
         return await self.mcp.list_resources((server or "").strip())
 
-    async def _tool_read_resource(self, arguments: dict, **_scope) -> str:
+    async def _tool_read_resource(self, arguments: dict, **scope) -> str:
         if self.mcp is None:
-            return "Error: the `mcp` package is not installed."
+            return "Error: the MCP manager is not wired."
         server = arguments.get("server")
         uri = arguments.get("uri")
         if not isinstance(server, str) or not server.strip():
             return "Error: the server must be a non-empty string."
         if not isinstance(uri, str) or not uri.strip():
             return "Error: the uri must be a non-empty string."
-        return await self.mcp.read_resource(server.strip(), uri.strip())
+        # The live status resource reports the context of the reading
+        # session: the channel of a guild message, the user of a direct
+        # message, the same rule as the reply engine.
+        session_id = scope.get("channel_id") if scope.get("guild_id") is not None else scope.get("user_id")
+        return await self.mcp.read_resource(server.strip(), uri.strip(), session_id=session_id)

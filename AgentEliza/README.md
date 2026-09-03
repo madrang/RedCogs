@@ -9,7 +9,7 @@ The default provider is Kimi Code (`https://api.kimi.com/coding/v1`, model `k3-2
 - One conversation session per channel, one per user in direct messages. At most 3 live sessions run in parallel.
 - Long-term memory at server, channel, and user scopes. The agent manages it through tools.
 - Automatic compaction: a session that grows too large or idles too long is summarized. The summary persists across restarts, and a fresh session restores recent turns from the channel history.
-- MCP tools: remote HTTP MCP servers join the tool list, added by command or shipped by the active provider. The agent can also list and read the resources those servers publish. Its own reference files (the tools reference, the Discord markdown tutorial) ride the same tools as the built-in `harness` server.
+- MCP tools: remote HTTP MCP servers join the tool list, added by command or shipped by the active provider. The agent can also list and read the resources those servers publish. Its own reference files (the tools reference, the Discord markdown tutorial) and a live status resource (provider, model, context, and usage allowance, built at every read) ride the same tools as the built-in `harness` server. These built-in resources need no `mcp` package. The remote servers do.
 - Built-in tools: web search and page fetch, channel history reading, file sending, and interactive choice polls.
 - Usage throttle at the provider and hourly rate limits per scope. Only the bot owner bypasses them.
 

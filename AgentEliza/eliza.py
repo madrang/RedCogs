@@ -5,13 +5,17 @@ import json
 import logging
 import re
 import time
+from datetime import datetime, timezone
 
 import aiohttp
 import discord
 from redbot.core import commands, Config
 from redbot.core.utils.mod import is_admin_or_superior
 
-from .history import DEFAULT_CACHE_TTL, History
+from .history import (
+    CHARS_PER_TOKEN, COMPACTION_AT, CONTEXT_FILL, DEFAULT_CACHE_TTL, HISTORY_MAX_CHARS,
+    HISTORY_MAX_TOKENS, History,
+)
 from .llm_chat import ChatEngine, ChatError, MAX_SESSIONS
 from .llm_compress import Compressor
 from .mcp_manager import MCPManager
@@ -20,7 +24,7 @@ from .pages import paginate
 from .polls import PollManager
 from .providers import DEFAULT_PROVIDER, PROVIDERS, provider_for, provider_named
 from .stats import ScopeStats
-from .tools import HarnessOptions, HarnessTools
+from .tools import HarnessOptions, HarnessTools, MESSAGE_TIME_FORMAT
 from .workspace import Workspace
 
 log = logging.getLogger("red.agenteliza")
@@ -76,6 +80,8 @@ class Eliza(commands.Cog):
         self.config.register_guild(rules=DEFAULT_GUILD_RULES)
         # Live MCP state lives in the manager, in memory only.
         self.mcp = MCPManager(self.config)
+        # The live status resource of the harness set reads the cog state at call time.
+        self.mcp.harness.status_getter = self._harness_status
         # Long-term memory lives in Config. The harness tools let the agent control it.
         self.memory = Memory(self.config)
         # The interactive votes: a button view first, a native poll after an idle time.
@@ -330,6 +336,124 @@ class Eliza(commands.Cog):
         if not choices:
             return None
         return choices[0].get("message")
+
+    async def _harness_status(self, session_id: int | None = None) -> str:
+        """The body of the `harness:///status.md` resource: the live harness status.
+
+        Every value is read at call time, so the resource answers with the
+        state of the moment. session_id is the session that reads: the
+        context section reports it, the session counts cover every live one.
+        The status holds no session labels: a speaker of one server must not
+        read the channel names of another.
+        """
+        preset = await self.current_preset()
+        context_tokens = await self.context_length(preset)
+        cache_ttl = getattr(preset, "cache_ttl", None) or DEFAULT_CACHE_TTL
+        stamp = f"{datetime.now(timezone.utc):{MESSAGE_TIME_FORMAT}}"
+        if context_tokens:
+            budget = int(context_tokens * CONTEXT_FILL)
+            context_line = (
+                f"- Context: {context_tokens:,} tokens, known for this model. "
+                f"The history compacts at {budget:,} tokens."
+            )
+        else:
+            budget = HISTORY_MAX_TOKENS
+            context_line = (
+                f"- Context: unknown for this model. The harness budgets the history at "
+                f"{HISTORY_MAX_TOKENS:,} tokens, about {HISTORY_MAX_CHARS:,} characters."
+            )
+        vision_model = getattr(preset, "vision_model", None)
+        lines = [
+            "# Harness status"
+            , f"Read at {stamp}. The values change with the next exchange."
+            , ""
+            , "## Provider"
+            , f"- Provider: {preset.name if preset is not None else 'custom'} — {await self._base_url()}"
+            , f"- Model: {await self.model_name()}"
+            , context_line
+        ]
+        if vision_model:
+            lines.append(f"- Vision: available. `analyze_image` answers through the model `{vision_model}`.")
+        else:
+            lines.append("- Vision: not available. This provider ships no `analyze_image` tool.")
+        lines.append(
+            f"- Context expiry: a context idle for {cache_ttl} s or more rebuilds on the next message. "
+            f"Idle compaction starts at {int(cache_ttl * COMPACTION_AT)} s."
+        )
+        session = self.history.sessions.get(session_id) if session_id is not None else None
+        if session is not None:
+            turns = max(len(session.messages) - 1, 0)
+            estimate = session.size // CHARS_PER_TOKEN
+            used = session.last_prompt_tokens or estimate
+            basis = "measured" if session.last_prompt_tokens else "estimated from the characters"
+            lines += [
+                ""
+                , "## Context of this conversation"
+                , f"- Turns kept verbatim: {turns}. Context size: {session.size:,} characters, about {estimate:,} tokens."
+                , f"- About {used / budget:.1%} of the {budget:,}-token compaction budget ({basis})."
+                , f"- Idle: {int(session.idle())} s."
+            ]
+        active = sum(1 for other in self.history.sessions.values() if other.idle() < cache_ttl)
+        idle = len(self.history.sessions) - active
+        lines += [
+            ""
+            , "## Sessions"
+            , f"- Live sessions: {len(self.history.sessions)} of {MAX_SESSIONS}, {active} active, {idle} idle."
+        ]
+        threshold = await self.config.usage_threshold()
+        lines += ["", "## Usage allowance"]
+        if threshold:
+            lines.append(f"- The throttle stops new replies at {threshold}% of a provider limit.")
+        else:
+            lines.append("- The usage throttle is off.")
+        rows = await self._usage_rows()
+        if not rows:
+            lines.append("- No usage data: the provider has no known usage endpoint, or the check failed.")
+        else:
+            for row in rows:
+                if row.get("text"):
+                    lines.append(f"- {row['name']}: {row['text']}")
+                    continue
+                parts = []
+                if row.get("used") is not None and row.get("limit"):
+                    parts.append(f"{row['used']:,} of {row['limit']:,}")
+                if row.get("percent") is not None:
+                    parts.append(f"{row['percent']:.1f}% used")
+                if row.get("reset"):
+                    reset = row["reset"]
+                    if isinstance(reset, (int, float)):
+                        parts.append(f"resets {datetime.fromtimestamp(reset, timezone.utc):{MESSAGE_TIME_FORMAT}}")
+                    else:
+                        parts.append(f"resets {reset}")
+                if threshold and row.get("percent") is not None and row["percent"] >= threshold:
+                    parts.append("over the throttle")
+                lines.append(f"- {row['name']}: " + ", ".join(parts) if parts else f"- {row['name']}")
+        limits = await self._rate_limits()
+        lines += [
+            ""
+            , "## Limits"
+            , f"- Interactions per hour: user {limits['user']}, channel {limits['channel']}, server {limits['guild']}. "
+              "A limit of 0 is off. The bot owner is unlimited."
+        ]
+        if session is not None:
+            stats = await self.scope_stats.get(session.scope, session_id)
+            rate = await self.scope_stats.rate(session.scope, session_id)
+            limit = limits.get(session.scope) or 0
+            window = f"{rate.get('count', 0)} of {limit} this hour" if limit else "unlimited"
+            lines.append(
+                f"- This {'channel' if session.scope == 'channel' else 'user'} scope: "
+                f"{stats.get('messages', 0):,} messages, {stats.get('prompt_tokens', 0):,} prompt tokens, "
+                f"{stats.get('completion_tokens', 0):,} completion tokens, {stats.get('cached_tokens', 0):,} cached. "
+                f"Interactions: {window}."
+            )
+        servers = await self.config.mcp_servers()
+        lines += [
+            ""
+            , "## MCP"
+            , f"- Servers: {len(servers)} configured, {len(self.mcp.extra_servers)} from the provider, "
+              f"{self.mcp.connected_count()} connected, {self.mcp.tool_count()} tools."
+        ]
+        return "\n".join(lines)
 
     #
     # Listener
