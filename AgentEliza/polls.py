@@ -251,7 +251,12 @@ class PollManager:
             log.exception("The poll agent trigger failed for session %s.", session_id)
 
     async def create(self, session_id: int, channel, question: str, answers: list, multiple: bool) -> str | None:
-        """Post the view poll of a session. Return an error text, or None on success."""
+        """Post the view poll of a session. Return an error text, or None on success.
+
+        The tool ends an open poll of the session before it calls here, so
+        the guard below catches only a vote or a conversion that landed
+        between the two calls.
+        """
         if session_id in self.active:
             return "Error: choices are already open in this conversation."
         state = {
@@ -484,7 +489,7 @@ class PollManager:
         kind, lines = self._report_lines(answers, votes, names, counts, ids=True)
         return None if kind == "counts" else "\n".join(lines)
 
-    async def status_text(self, session_id: int, *, require_votes: bool = False) -> str | None:
+    async def status_text(self, session_id: int, *, require_votes: bool = False, force: bool = False) -> str | None:
         """The harness status of the poll of a session, or None without a poll.
 
         On an active poll: the live counts.
@@ -493,6 +498,8 @@ class PollManager:
           On a closed poll: the first call answers the final counts of the view.
         require_votes: a completed poll without any vote answers None (the
         natural expiry then stays silent).
+        force: an active view closes at once with the votes it holds. The
+        replace path of propose_choices.
         """
         state = self.active.get(session_id)
         if state is None:
@@ -505,10 +512,10 @@ class PollManager:
                 # A voter counts as an active user, the same rule as in vote.
                 participants = frozenset(participants | state["votes"].keys())
                 single = getattr(state["channel"], "guild", None) is None or len(participants) <= 1
-                if not (single and state["multiple"]):
+                if not force and not (single and state["multiple"]):
                     return f"Choices are open:\n{self._agent_text(state)}"
-                # One active user answers a multiple-choice poll with a reply:
-                # the reply closes the choices, no idle wait.
+                # The view closes at once: force (the replace path), or one
+                # active user answering a multiple-choice poll with a reply.
                 task = state["idle_task"]
                 if task is not None:
                     task.cancel()

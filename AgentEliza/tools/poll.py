@@ -15,6 +15,7 @@ class PollTools:
                     "name": "propose_choices"
                     , "description": (
                         "Propose choices for an answer to a question: a message with one button per choice. "
+                        "A new call ends an open poll at once, and its results join the tool result. "
                         "The status arrives prepended to the next messages. Do not repeat the choices in your answer."
                     )
                     , "parameters": {
@@ -66,10 +67,14 @@ class PollTools:
         if channel is None:
             return "Error: the current channel is unknown."
         session_id = channel_id if guild_id is not None else user_id
+        # The replace path: an open poll of the conversation ends at once,
+        # whatever its phase, and its results join the tool response.
+        report = await self.polls.status_text(session_id, force=True)
         error = await self.polls.create(session_id, channel, question, cleaned, multiple)
         if error:
             return error
-        return (
+        posted = (
             f"The choices for {question!r} have been posted with {len(cleaned)} options. "
             "The status arrives prepended to the next messages."
         )
+        return f"{report}\n{posted}" if report else posted

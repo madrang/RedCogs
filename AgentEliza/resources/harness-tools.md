@@ -101,7 +101,7 @@ Caps: 25 MiB per file, 250 MiB per folder. Files live about 3 weeks. The older a
 
 ## propose_choices
 
-Posts a question with one button per choice. One open poll per conversation.
+Posts a question with one button per choice. One open poll per conversation. A new call while a poll is open ends the old one at once, whatever votes it holds: the results of the old poll join the tool response, then the new choices post.
 
 | Parameter | Meaning |
 | --- | --- |
