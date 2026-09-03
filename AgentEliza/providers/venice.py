@@ -37,7 +37,9 @@ VENICE_IMAGE_PROMPT_LIMITS = {"venice-sd35": 1500, "flux-2-pro": 3000}
 # The sizing dialect of each curated model, an unknown id takes the ratio
 # dialect: pixel models size through width and height, the resolution-tier
 # models carry a fixed resolution (and gpt-image-2 a quality) preset, the
-# rest take the aspect ratio as-is.
+# rest take the aspect ratio as-is. The tool description reports the
+# dialect beside the traits of each model, so the agent knows which
+# parameters apply.
 VENICE_IMAGE_DIALECTS = {
     "venice-sd35": "pixel"
   , "flux-2-pro": "ratio"
@@ -330,15 +332,20 @@ def _image_tool() -> dict:
 
     model_notes = []
     for image_model in VENICE_IMAGE_MODELS:
-        labels = [VENICE_IMAGE_TRAIT_LABELS[key] for key in VENICE_IMAGE_MODEL_TRAITS.get(image_model, ())]
+        labels = []
+        dialect = VENICE_IMAGE_DIALECTS.get(image_model)
+        if dialect:
+            labels.append(dialect)
+        labels.extend(VENICE_IMAGE_TRAIT_LABELS[key] for key in VENICE_IMAGE_MODEL_TRAITS.get(image_model, ()))
         model_notes.append(f"{image_model} ({', '.join(labels)})" if labels else image_model)
     return {
         "name": "generate_image"
         , "description": (
             "Generate one image from a text prompt through Venice and post it to the conversation. "
-            "The size comes from the aspect_ratio alone; the tool sets the resolution and the quality itself. "
             f"Known models: {', '.join(model_notes)}. "
-            "venice-sd35 is the only pixel model and takes a cfg_scale. "
+            "Every model sizes through aspect_ratio. A pixel model also takes cfg_scale, "
+            "and the tool maps the ratio to pixels for it. "
+            "A resolution model renders at a fixed resolution and quality preset. "
             "A model marked as refusing copyrighted material does exactly that: "
             "describe the subject instead of naming it, or pick another model."
         )
