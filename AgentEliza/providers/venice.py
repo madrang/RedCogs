@@ -78,6 +78,11 @@ VENICE_IMAGE_MODEL_TRAITS = {
 VENICE_IMAGE_TRAIT_LABELS = {
     "copyrighted_material": "refuses copyrighted material"
 }
+# The refusal asset of the endpoint: a uniform blank image that compresses
+# far below any real render (exactly 1926 bytes live, while the smallest
+# real render of the 2026-09-03 sweep weighed 193 KB). No image decoder
+# rides the cog, so the decoded size stands in for the pixel check.
+VENICE_IMAGE_BLANK_MAX_BYTES = 4096
 
 
 def _header_flag(headers, name: str) -> str:
@@ -226,7 +231,10 @@ def _image_tool() -> dict:
     and the cfg scale. The resolution, the quality, the watermark, the
     exif metadata, and the seed are preset here; safe_mode drops only on an
     age-restricted channel. The tool result appends the moderation headers
-    of the answer as a [venice] status line: content violation, blurred."""
+    of the answer as a [venice] status line: content violation, blurred.
+    A refusal needs both marks, a tiny image and the violation flag: only
+    then the tool answers with an error and posts nothing. Without the
+    flag, a small image posts as content."""
 
     async def handler(arguments, call_api, fetch_url=None, api_post=None, send_file=None, channel_nsfw=None):
         prompt = str(arguments.get("prompt") or "").strip()
@@ -282,8 +290,9 @@ def _image_tool() -> dict:
             return f"Error: the image generation failed: {e}"
         # The moderation signals of the endpoint: a content violation is the
         # documented face of the silent refusal (a blank image with no error).
+        violation = _header_flag(headers, "x-venice-is-content-violation")
         status = (
-            f"[venice] content violation: {_header_flag(headers, 'x-venice-is-content-violation')}"
+            f"[venice] content violation: {violation}"
             f", blurred: {_header_flag(headers, 'x-venice-is-blurred')}"
         )
         images = data.get("images") or []
@@ -297,6 +306,15 @@ def _image_tool() -> dict:
             return "Error: the image generation returned unreadable image data."
         if not raw:
             return "Error: the image generation returned an empty image."
+        if len(raw) <= VENICE_IMAGE_BLANK_MAX_BYTES and violation == "yes":
+            # A refusal needs both marks: the tiny image and the violation
+            # flag. Without the flag, a small image posts: the agent assumes
+            # it holds content.
+            return (
+                f"Error: the generation was refused: the answer is a blank image of {len(raw)} bytes "
+                f"and the endpoint flags a content violation. {status}. Nothing was posted. "
+                "Describe the subject instead of naming it, or pick a model without the refusal flag."
+            )
         # The format stays the endpoint default (webp). The id names the file:
         # each image of a conversation lands under its own name.
         name = re.sub(r"[\s/\\]+", "-", str(data.get("id") or "venice-image"))[:100]
