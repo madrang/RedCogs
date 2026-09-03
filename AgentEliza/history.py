@@ -38,7 +38,7 @@ COMPACT_REQUEST = (
 )
 # Context backfill target of a fresh session: recent channel messages from
 # Discord. eliza.py scans the channel history for them.
-BACKFILL_MESSAGES = 64
+BACKFILL_MESSAGES = 16
 # Cap of the wait for the session lock. 30 minutes is far above the
 # longest reply or compaction: a wait that long means something is
 # seriously wrong, and the waiter fails with TimeoutError instead of

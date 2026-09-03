@@ -30,12 +30,13 @@ MAX_SESSIONS = 3
 # Context backfill of a fresh session: recent channel messages from Discord.
 # The message count is BACKFILL_MESSAGES from history.py: the compaction
 # keeps the same count verbatim. The size cap is in characters, the context
-# counts tokens: 128K characters is about 32K tokens at 4 per token.
-BACKFILL_MAX_CHARS = 131_072
+# counts tokens: 64000 characters is about 16K tokens at 4 per token. The
+# value matches the uniform tool result cap (TOOL_RESULT_MAX_CHARS).
+BACKFILL_MAX_CHARS = 64_000
 # Cap of the raw messages scanned to find the qualifying ones. The scan
 # pages deeper into the history until it has BACKFILL_MESSAGES messages of
 # the conversation with the agent, or this cap.
-BACKFILL_SCAN_MAX = 199
+BACKFILL_SCAN_MAX = 99
 # The reply sent when the model returns no content at all.
 EMPTY_REPLY = "(empty answer)"
 # The tag that lets the agent refuse to reply. The harness sends nothing.
