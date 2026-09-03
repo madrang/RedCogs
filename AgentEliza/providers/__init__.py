@@ -1,5 +1,6 @@
 from .kimi_api import KimiApiProvider
 from .kimi_code import KimiCodeProvider
+from .venice import VeniceApiProvider
 from .zai import ZaiApiProvider, ZaiCodeProvider
 
 # The first PROVIDERS entry is the default provider.
@@ -8,6 +9,7 @@ PROVIDERS = [
     KimiApiProvider(),
     ZaiCodeProvider(),
     ZaiApiProvider(),
+    VeniceApiProvider(),
 ]
 DEFAULT_PROVIDER = PROVIDERS[0]
 

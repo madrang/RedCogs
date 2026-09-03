@@ -2,7 +2,7 @@
 
 An AI agent harness for Discord. The agent answers mentions and direct messages through an OpenAI-compatible chat API. MCP servers give it extra tools. Part of [Mads-RedCogs](https://github.com/madrang/RedCogs).
 
-The default provider is Kimi Code (`https://api.kimi.com/coding/v1`, model `k3-256k`). Presets ship for Kimi Code, Kimi API, Z.AI Code, and Z.AI API. The host, model, and key are configurable.
+The default provider is Kimi Code (`https://api.kimi.com/coding/v1`, model `k3-256k`). Presets ship for Kimi Code, Kimi API, Z.AI Code, Z.AI API, and Venice API. The host, model, and key are configurable.
 
 ## Features
 

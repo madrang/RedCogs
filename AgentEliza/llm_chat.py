@@ -14,6 +14,7 @@ from .history import BACKFILL_MESSAGES, DEFAULT_CACHE_TTL, Session
 from .prompt import place_block, system_text
 from .tools import MESSAGE_TIME_FORMAT
 from .tools.base import DISCORD_FILE_HOSTS, attachments_text, poll_result_suffix, read_limited
+from .tools.files import post_file
 
 log = logging.getLogger("red.agenteliza")
 
@@ -350,6 +351,11 @@ class ChatEngine:
 
         async def call_api(tool_payload):
             """One chat-completions call on the active provider, for native provider tools."""
+            if preset is not None:
+                # The provider payload extras ride this call too, not only the
+                # reply: Venice needs venice_parameters on every call, or its
+                # default system prompt joins the vision answer.
+                tool_payload.update(preset.extra_payload(session_id))
             return await self.api.chat_request(api_key, tool_payload)
 
         async def fetch_url(url):
@@ -375,6 +381,32 @@ class ChatEngine:
                 log.warning("fetch_url: the body of %r is over the %d bytes cap", url[:150], NATIVE_TOOL_FETCH_MAX_BYTES)
                 return None
             return body, content_type
+
+        async def api_post(path, *, json_body=None, data=None):
+            """One POST to a REST path of the active provider, for native provider tools."""
+            return await self.api.provider_post(api_key, path, json_body=json_body, data=data)
+
+        async def send_file(name, data, caption=None):
+            """Post one binary file to the current channel, for native provider tools."""
+            getter = self.harness_tools.channel_getter
+            channel = await getter(channel_id) if getter else None
+            if channel is None:
+                return "Error: the current channel is unknown."
+            return await post_file(channel, data, name, caption)
+
+        async def channel_nsfw():
+            """Whether the current channel sits behind the Discord 18+ gate,
+            for native provider tools: the channel flag, the flag of the
+            parent channel of a thread, or an age-restricted guild."""
+            getter = self.harness_tools.channel_getter
+            channel = await getter(channel_id) if getter else None
+            parent = getattr(channel, "parent", None)
+            guild = getattr(channel, "guild", None) or getattr(parent, "guild", None)
+            return bool(
+                getattr(channel, "nsfw", False)
+                or getattr(parent, "nsfw", False)
+                or getattr(guild, "nsfw_level", None) == discord.NSFWLevel.age_restricted
+            )
         # The tool rounds of this reply: assistant calls and tool results, as
         # the API sent them. The session keeps them until a compaction.
         exchange = []
@@ -439,7 +471,7 @@ class ChatEngine:
                         # Routes win: a provider tool can take a harness name.
                         result_text = await self.mcp.run_tool(name, arguments, routes)
                     elif name in native_routes:
-                        result_text = await native_routes[name](arguments, call_api, fetch_url)
+                        result_text = await native_routes[name](arguments, call_api, fetch_url, api_post, send_file, channel_nsfw)
                     elif name in self._harness_tool_names:
                         result_text = await self.harness_tools.run(
                             name, arguments, guild_id=guild_id, channel_id=channel_id, user_id=user_id,

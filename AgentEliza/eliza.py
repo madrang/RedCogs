@@ -329,6 +329,65 @@ class Eliza(commands.Cog):
                 await asyncio.sleep(delay)
                 delay *= 2
 
+    async def provider_post(self, api_key: str, path: str, *, json_body=None, data=None) -> dict:
+        """One POST to a REST path of the chat provider, for the native tools
+        of a provider (the Venice augment set). Return the JSON answer as a
+        dict. Raise ChatError on any failure: the caller owns the error text.
+        Connect-level failures retry like chat_request."""
+        if self.session is None or self.session.closed:
+            self.session = self._new_session()
+        base_url = await self._base_url()
+        delay = 4
+        for attempt in range(4):
+            try:
+                async with self.session.post(
+                    f"{base_url}{path}",
+                    headers={"Authorization": f"Bearer {api_key}"},
+                    json=json_body,
+                    data=data,
+                    # The augment scrape falls back to a headless browser: a
+                    # slow page needs a long total. sock_connect fails a
+                    # stalled connect fast so the retry probes again sooner.
+                    timeout=aiohttp.ClientTimeout(total=120, sock_connect=15),
+                ) as response:
+                    body = await response.text()
+                    try:
+                        parsed = json.loads(body)
+                    except ValueError:
+                        parsed = None
+                    if response.status == 200 and isinstance(parsed, dict):
+                        return parsed
+                    error = parsed.get("error") if isinstance(parsed, dict) else None
+                    detail = error if isinstance(error, str) else body[:500]
+                    if response.status == 401:
+                        log.warning("The provider rejected the API key (401) at %s.", path)
+                        raise ChatError(
+                            "auth",
+                            "The API rejected the API key (401). An admin can check it with the `eliza status` command.",
+                            raw=parsed,
+                        )
+                    if response.status == 429:
+                        raise ChatError("rate_limit", "The API rate limit is reached. Try again later.", raw=parsed)
+                    if response.status == 402:
+                        raise ChatError(
+                            "http",
+                            "The provider balance is insufficient for this call (HTTP 402). An admin can check with the `eliza usage` command.",
+                            raw=parsed,
+                        )
+                    log.warning("The provider endpoint %s failed (HTTP %s): %s", path, response.status, detail)
+                    raise ChatError(
+                        "http",
+                        f"The provider endpoint {path} returned an error (HTTP {response.status}): {detail}",
+                        raw=parsed,
+                    )
+            except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+                if attempt == 3:
+                    log.warning("The provider endpoint %s failed after %d attempts: %s: %s", path, attempt + 1, type(e).__name__, e)
+                    raise ChatError("connection", f"The connection to the API failed: {type(e).__name__}: {e}", raw=e) from e
+                log.info("The provider endpoint %s failed, attempt %d: %s: %s", path, attempt + 1, type(e).__name__, e)
+                await asyncio.sleep(delay)
+                delay *= 2
+
     @staticmethod
     def message_of(data: dict) -> dict | None:
         """The message of the first choice, or None on a non-standard answer."""
@@ -788,11 +847,13 @@ class Eliza(commands.Cog):
     @eliza_group.command(name="providers")
     @commands.admin()
     async def eliza_providers(self, ctx: commands.Context) -> None:
-        """List the known provider presets. The first model of each list is the default."""
-        lines = [
-            f"**{p.name}** — `{p.base_url}`\nModels: {', '.join(f'`{m}`' for m in p.models)}"
-            for p in PROVIDERS
-        ]
+        """List the known provider presets. The first model of each list is the default.
+        Models marked (vision) accept image input."""
+        lines = []
+        for p in PROVIDERS:
+            vision = set(getattr(p, "vision_models", None) or ())
+            names = [f"`{m}` (vision)" if m in vision else f"`{m}`" for m in p.models]
+            lines.append(f"**{p.name}** — `{p.base_url}`\nModels: {', '.join(names)}")
         embed = discord.Embed(
             title="Providers",
             description="\n".join(lines),

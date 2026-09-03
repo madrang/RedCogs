@@ -11,6 +11,26 @@ import discord
 FILE_SEND_DM_MAX_BYTES = 26_214_400
 
 
+async def post_file(channel, data: bytes, name: str, caption: str | None = None) -> str:
+    """Post one file to a channel: the permission check, the upload limit,
+    the send. Return the result text. The send_file tool and the native
+    provider tools share this path."""
+    guild = getattr(channel, "guild", None)
+    if guild is not None and guild.me is not None and not channel.permissions_for(guild.me).attach_files:
+        return "Error: I do not have the permission to attach files in this channel."
+    limit = guild.filesize_limit if guild is not None else FILE_SEND_DM_MAX_BYTES
+    if len(data) > limit:
+        return (
+            f"Error: the file holds {len(data)} bytes, over the Discord upload limit of this channel "
+            f"({limit} bytes). Split the content into smaller files."
+        )
+    try:
+        await channel.send(content=caption or None, file=discord.File(io.BytesIO(data), filename=name))
+    except (discord.Forbidden, discord.HTTPException) as e:
+        return f"Error: the file send failed: {e}."
+    return f"The file {name} ({len(data)} bytes) has been sent."
+
+
 class FileTools:
     """The send_file tool."""
 
@@ -91,17 +111,4 @@ class FileTools:
         channel = await self.channel_getter(channel_id) if self.channel_getter else None
         if channel is None:
             return "Error: the current channel is unknown."
-        guild = getattr(channel, "guild", None)
-        if guild is not None and guild.me is not None and not channel.permissions_for(guild.me).attach_files:
-            return "Error: I do not have the permission to attach files in this channel."
-        limit = guild.filesize_limit if guild is not None else FILE_SEND_DM_MAX_BYTES
-        if len(data) > limit:
-            return (
-                f"Error: the file holds {len(data)} bytes, over the Discord upload limit of this channel "
-                f"({limit} bytes). Split the content into smaller files."
-            )
-        try:
-            await channel.send(content=caption or None, file=discord.File(io.BytesIO(data), filename=name))
-        except (discord.Forbidden, discord.HTTPException) as e:
-            return f"Error: the file send failed: {e}."
-        return f"The file {name} ({len(data)} bytes) has been sent."
+        return await post_file(channel, data, name, caption)

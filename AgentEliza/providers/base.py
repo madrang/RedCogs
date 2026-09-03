@@ -60,7 +60,7 @@ async def analyze_image_impl(arguments: dict, call_api, fetch_url, *, model: str
 def analyze_image_tool(model: str, validate=None) -> dict:
     """The analyze_image native tool entry: the schema and the handler."""
 
-    async def handler(arguments, call_api, fetch_url=None):
+    async def handler(arguments, call_api, fetch_url=None, api_post=None, send_file=None, channel_nsfw=None):
         return await analyze_image_impl(arguments, call_api, fetch_url, model=model, validate=validate)
 
     return {
@@ -101,6 +101,9 @@ class Provider:
     # the harness falls back to its default budget (CONTEXT_TOKENS in
     # history.py, of which the history uses half).
     context_lengths: dict = {}
+    # Model ids that accept image input through the chat contract. The
+    # `eliza providers` command marks them.
+    vision_models: set = set()
 
     def context_length(self, model_name: str) -> int | None:
         """The context size of a model in tokens, None when unknown."""
@@ -114,11 +117,16 @@ class Provider:
         """Tool definitions the provider implements itself, live while it is active.
 
         Each entry: {"name", "description", "parameters", "handler"}. The
-        handler is an async callable (arguments, call_api, fetch_url)
-        returning text. call_api posts one chat-completions payload to the
-        provider. fetch_url downloads one URL to (bytes, content_type), or
-        None on failure. A native tool takes the place of a harness tool of
-        the same name.
+        handler is an async callable (arguments, call_api, fetch_url,
+        api_post, send_file, channel_nsfw) returning text. call_api posts
+        one chat-completions payload to the provider. fetch_url downloads
+        one URL to (bytes, content_type), or None on failure. api_post
+        sends one POST to a REST path of the provider, returns the JSON
+        answer, and raises ChatError on failure. send_file posts one
+        binary file to the current channel and returns the result text.
+        channel_nsfw reports whether the current channel sits behind the
+        Discord 18+ gate. A native tool takes the place of a harness tool
+        of the same name.
         """
         return []
 
