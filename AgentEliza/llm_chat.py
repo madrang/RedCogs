@@ -284,7 +284,7 @@ class ChatEngine:
             rules_block += f"\nWhenever this conversation becomes idle, you always update the {summary_scope} summary, and the conversation resumes from it later."
             # A fresh session lost its verbatim turns: the Discord history restores them.
             fresh = not session.messages
-            session.start_context(system_text(name, memory, rules_block, await place_block(self.bot, guild_id, channel_id)))
+            session.start_context(system_text(name, memory, rules_block, await place_block(self.bot, guild_id, channel_id, is_owner=is_owner)))
             if fresh:
                 # The persisted summary joins as the compaction exchange, before the backfilled turns it summarizes.
                 if session.summary:

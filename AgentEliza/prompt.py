@@ -44,18 +44,38 @@ SYSTEM_PROMPT = (
     "Now connected to Discord chat! Welcome {name}!\n"
 )
 
-async def place_block(bot, guild_id, channel_id) -> str:
-    """The location lines of the system message: server and channel, names and descriptions."""
+def _age_line(*, allowed: bool, reason: str | None = None) -> str:
+    """The age-restriction status line of the system message. Each case has
+    its own full wording, per the STE rules of the vault."""
+    if allowed:
+        return (
+            f"Age restriction: {reason or 'this conversation permits adult content'}. "
+            "You can send adult content in this conversation."
+        )
+    return (
+        "Age restriction: this conversation is not age-restricted. "
+        "Do not send adult content."
+    )
+
+
+async def place_block(bot, guild_id, channel_id, is_owner: bool = False) -> str:
+    """The location lines of the system message: server and channel, the
+    server description on its own line, then the age-restriction status.
+    The status mirrors channel_nsfw: the channel flag, the parent channel
+    of a thread, an age-restricted guild, or the direct message of the bot
+    owner."""
     if guild_id is None:
         # A direct message has no server or channel object to describe.
-        return "Direct message: a private conversation with the user."
+        lines = ["Direct message: a private conversation with the user."]
+        lines.append(_age_line(
+            allowed=is_owner
+            , reason="this direct message belongs to the bot owner" if is_owner else None
+        ))
+        return "\n".join(lines)
     lines = []
     guild = bot.get_guild(guild_id)
     if guild is not None:
-        line = f"Server: {guild.name}"
-        if guild.description:
-            line += f" — {' '.join(guild.description.split())}"
-        lines.append(line)
+        lines.append(f"Server: {guild.name}")
     channel = bot.get_channel(channel_id)
     if channel is None:
         # A cache miss must not drop the line: ask the API. A lookup
@@ -69,6 +89,22 @@ async def place_block(bot, guild_id, channel_id) -> str:
         if topic:
             line += f" — {' '.join(topic.split())}"
         lines.append(line)
+    description = getattr(guild, "description", None) if guild is not None else None
+    if description:
+        # The description line sits right before the age line, so the two
+        # close the block as one unit.
+        lines.append(f"Server description: {' '.join(description.split())}")
+    parent = getattr(channel, "parent", None)
+    gated = bool(
+        getattr(channel, "nsfw", False)
+        or getattr(parent, "nsfw", False)
+        or getattr(getattr(channel, "guild", None) or getattr(parent, "guild", None) or guild, "nsfw_level", None)
+        == discord.NSFWLevel.age_restricted
+    )
+    lines.append(_age_line(
+        allowed=gated
+        , reason="this channel is age-restricted" if gated else None
+    ))
     return "\n".join(lines)
 
 
