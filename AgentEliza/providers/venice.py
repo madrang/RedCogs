@@ -315,8 +315,9 @@ def _image_tool() -> dict:
     controls the prompt, the model, the aspect ratio, the negative prompt,
     and the cfg scale. The resolution, the quality, the watermark, the
     exif metadata, and the seed are preset here; safe_mode drops only on an
-    age-restricted channel. The tool result appends the moderation headers
-    of the answer as a [venice] status line: content violation, blurred.
+    age-restricted channel. The tool result appends the moderation flags of
+    the answer as a [venice] status line, and only a flag that reads yes
+    appears: a clean answer carries no line.
     A refusal needs both marks, a tiny image and the violation flag: only
     then the tool answers with an error and posts nothing. Without the
     flag, a small image posts as content."""
@@ -376,10 +377,17 @@ def _image_tool() -> dict:
         # The moderation signals of the endpoint: a content violation is the
         # documented face of the silent refusal (a blank image with no error).
         violation = _header_flag(headers, "x-venice-is-content-violation")
-        status = (
-            f"[venice] content violation: {violation}"
-            f", blurred: {_header_flag(headers, 'x-venice-is-blurred')}"
-        )
+        # A flag reaches the model only when it reads yes. A clean answer
+        # carries no status line at all.
+        raised = [
+            f"{label}: {flag}"
+            for label, flag in (
+                ("content violation", violation)
+                , ("blurred", _header_flag(headers, "x-venice-is-blurred"))
+            )
+            if flag == "yes"
+        ]
+        status = f"[venice] {', '.join(raised)}" if raised else ""
         images = data.get("images") or []
         if not images:
             return "Error: the image generation returned no image."
@@ -404,7 +412,9 @@ def _image_tool() -> dict:
         # each image of a conversation lands under its own name.
         name = re.sub(r"[\s/\\]+", "-", str(data.get("id") or "venice-image"))[:100]
         sent = await send_file(f"{name}.webp", raw)
-        return f"{sent}\n{status}"
+        if status:
+            return f"{sent}\n{status}"
+        return sent
 
     model_notes = []
     for image_model in VENICE_IMAGE_MODELS:
