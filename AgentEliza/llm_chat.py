@@ -432,8 +432,9 @@ class ChatEngine:
 
         async def chat_with_overload_fallback(request_payload):
             """One reply-path chat request with the overload fallback: a
-            429 that names model overload moves the conversation to the
-            next preset up in cost and retries once on it. The move rides
+            rate-limit or HTTP error that names model overload moves the
+            conversation to the next preset up in cost and retries once on
+            it. The move rides
             the session override, so it holds for the conversation and
             dies with it. The error still reaches the user: the notice is
             staged with the fallback name and yields ahead of the answer.
@@ -442,7 +443,7 @@ class ChatEngine:
                 return await self.api.chat_request(api_key, request_payload)
             except ChatError as e:
                 overloaded = (
-                    e.kind == "rate_limit"
+                    e.kind in ("rate_limit", "http")
                     and isinstance(e.raw, dict)
                     and "overloaded" in str(e.raw.get("error") or "").lower()
                 )

@@ -48,6 +48,22 @@ FILTER_TIMEOUT = 1800
 LONG_REPLY_MAX_PAGES = 4
 
 
+def _error_message(data) -> str | None:
+    """The error text of an API error body, or None.
+
+    The OpenAI envelope holds an object ({"error": {"message": ...}}),
+    the Venice StandardError holds a plain string ({"error": "..."}).
+    """
+    if not isinstance(data, dict):
+        return None
+    error = data.get("error")
+    if isinstance(error, dict):
+        return error.get("message")
+    if isinstance(error, str):
+        return error
+    return None
+
+
 class Eliza(commands.Cog):
     """AgentEliza Cog - Harness that connects AI agents to Discord through an OpenAI-compatible chat API."""
 
@@ -310,7 +326,7 @@ class Eliza(commands.Cog):
                     if isinstance(data, dict) and data.get("contentFilter"):
                         log.info(
                             "The API content filter rejected the request (HTTP %s): %s",
-                            response.status, (data.get("error") or {}).get("message"),
+                            response.status, _error_message(data),
                         )
                         raise ChatError(
                             "content_filter",
@@ -319,8 +335,7 @@ class Eliza(commands.Cog):
                         )
                     if response.status == 400:
                         log.warning("The API rejected the request as invalid (400): %s", data)
-                        message = (data.get("error") or {}).get("message") if isinstance(data, dict) else None
-                        detail = message or data
+                        detail = _error_message(data) or data
                         raise ChatError("bad_request", f"The API rejected the request (400): {detail}", raw=data)
                     if response.status == 401:
                         log.warning("The API rejected the API key (401).")
@@ -334,8 +349,7 @@ class Eliza(commands.Cog):
                         raise ChatError("rate_limit", "The API rate limit is reached. Try again later.", raw=data)
                     if response.status != 200 or not data:
                         log.warning("The API request failed (HTTP %s): %s", response.status, data)
-                        message = (data.get("error") or {}).get("message") if isinstance(data, dict) else None
-                        detail = message or data
+                        detail = _error_message(data) or data
                         raise ChatError("http", f"The API returned an error (HTTP {response.status}): {detail}", raw=data)
                     return data
             except (aiohttp.ClientError, asyncio.TimeoutError) as e:
