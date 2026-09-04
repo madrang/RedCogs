@@ -8,7 +8,7 @@ import re
 import aiohttp
 
 from ..llm_chat import ChatError
-from ..tools.base import _cap
+from ..tools.base import DISCORD_FILE_HOSTS, _cap
 from .base import Provider, analyze_image_tool
 
 # The limit types of the rate-limits endpoint, spelled out for the usage rows.
