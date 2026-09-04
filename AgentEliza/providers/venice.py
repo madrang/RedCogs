@@ -18,39 +18,75 @@ VENICE_QUERY_MAX_CHARS = 400
 VENICE_SEARCH_MAX_LIMIT = 20
 # Image generation: the endpoint-wide prompt cap.
 VENICE_PROMPT_MAX_CHARS = 7500
-# The curated image models, hand-ordered best-first: the models with the
-# uncensored trait come first for now. The dict order is preference order,
-# the first entry is the default model, like the first entry of PROVIDERS
-# is the default provider. Each entry holds its capability traits (plain
-# names) and its real cost in USD per image: the price of the request the
-# tool sends — the 2K preset on the resolution-tier models (gpt-image-2 at
-# 2K medium), the flat generation price on the rest, the default 1K tier
-# when a model prices by tier and the tool sends no resolution. Read from
-# the live model list (GET /models?type=image needs no key), 2026-09-04:
-# image models price per image, not per million tokens.
+# The curated image models, ordered by cost per image: the entries run in
+# descending cost, the first entry is the default model, like the first
+# entry of PROVIDERS is the default provider. Each entry holds its
+# capability traits (plain names) and its real cost in USD per image: the
+# price of the request the tool sends — the 2K preset on the
+# resolution-tier models (gpt-image-2 at 2K medium), the flat generation
+# price on the rest, the default 1K tier when a model prices by tier and
+# the tool sends no resolution. The comment on each entry names the
+# release date (the created field of the live model list, rendered in the
+# operator's timezone UTC-4). Read from the live model list
+# (GET /models?type=image needs no key), 2026-09-04: image models price
+# per image, not per million tokens.
 VENICE_IMAGE_MODELS = {
-    "recraft-v4-pro": {"traits": [], "cost": 0.29}
-  , "nano-banana-2": {"traits": [], "cost": 0.14}
-  , "gpt-image-2": {"traits": [], "cost": 0.13}
-  , "luma-uni-1-max": {"traits": [], "cost": 0.12}
-  , "grok-imagine-image-2-0": {"traits": [], "cost": 0.10}
-  , "wan-2-7-pro-text-to-image": {"traits": [], "cost": 0.09375}
-  , "flux-2-max": {"traits": [], "cost": 0.09}
-  , "hunyuan-image-v3": {"traits": [], "cost": 0.09}
-  , "krea-v2-large": {"traits": [], "cost": 0.07}
-  , "seedream-v5-pro": {"traits": ["uncensored"], "cost": 0.06}
-  , "ideogram-v4": {"traits": [], "cost": 0.06}
-  , "imagineart-1.5-pro": {"traits": [], "cost": 0.06}
-  , "qwen-image-3-pro": {"traits": ["uncensored"], "cost": 0.05}
-  , "z-image-turbo": {"traits": [], "cost": 0.01}
-  , "lustify-v8": {"traits": ["uncensored"], "cost": 0.01}
-  , "venice-sd35": {"traits": [], "cost": 0.01}
-  , "wai-Illustrious": {"traits": ["uncensored"], "cost": 0.01}
-  , "chroma": {"traits": ["uncensored"], "cost": 0.01}
+    "recraft-v4-pro": {"traits": [], "cost": 0.29}  # released Feb 11, 2026
+  , "nano-banana-2": {"traits": [], "cost": 0.14}  # released Feb 25, 2026
+  , "gpt-image-2": {"traits": [], "cost": 0.13}  # released Apr 20, 2026
+  , "luma-uni-1-max": {"traits": [], "cost": 0.12}  # released Jun 16, 2026
+  , "seedream-v5-pro": {"traits": ["uncensored"], "cost": 0.11}  # released Jul 7, 2026
+  , "grok-imagine-image-2-0": {"traits": [], "cost": 0.10}  # released Aug 10, 2026
+  , "wan-2-7-pro-text-to-image": {"traits": [], "cost": 0.09375}  # released Mar 31, 2026
+  , "flux-2-max": {"traits": [], "cost": 0.09}  # released Nov 25, 2025
+  , "hunyuan-image-v3": {"traits": [], "cost": 0.09}  # released Feb 28, 2026
+  , "qwen-image-3-pro": {"traits": ["uncensored"], "cost": 0.09}  # released Jul 15, 2026
+  , "krea-v2-large": {"traits": [], "cost": 0.07}  # released May 21, 2026
+  , "ideogram-v4": {"traits": [], "cost": 0.06}  # released Jun 2, 2026
+  , "imagineart-1.5-pro": {"traits": [], "cost": 0.06}  # released Jan 26, 2026
+  , "muse-image": {"traits": [], "cost": 0.02}  # released Sep 2, 2026
+  , "z-image-turbo": {"traits": [], "cost": 0.01}  # released Dec 3, 2025
+  , "lustify-v8": {"traits": ["uncensored"], "cost": 0.01}  # released Mar 29, 2026
+  , "venice-sd35": {"traits": [], "cost": 0.01}  # released Mar 27, 2025
+  , "wai-Illustrious": {"traits": ["uncensored"], "cost": 0.01}  # released Jan 11, 2025
+  , "chroma": {"traits": ["uncensored"], "cost": 0.01}  # released Jan 29, 2026
 }
-# Prompt caps under the endpoint-wide 7500 (the per-model constraints of the
-# live model list).
-VENICE_IMAGE_PROMPT_LIMITS = {"venice-sd35": 1500}
+# The promptCharacterLimit of each curated model (model_spec.constraints
+# of the live list), the generate catalog first, the edit catalog after.
+# An entry may sit above the endpoint-wide VENICE_PROMPT_MAX_CHARS: the
+# model accepts the longer prompt, so its entry lifts the cap. An id
+# missing here keeps the endpoint-wide fallback.
+VENICE_IMAGE_PROMPT_LIMITS = {
+    "recraft-v4-pro": 10000
+  , "nano-banana-2": 32768
+  , "gpt-image-2": 10000
+  , "luma-uni-1-max": 6000
+  , "seedream-v5-pro": 10000
+  , "grok-imagine-image-2-0": 7500
+  , "wan-2-7-pro-text-to-image": 3000
+  , "flux-2-max": 3000
+  , "hunyuan-image-v3": 3000
+  , "qwen-image-3-pro": 10000
+  , "krea-v2-large": 5000
+  , "ideogram-v4": 10000
+  , "imagineart-1.5-pro": 10000
+  , "muse-image": 10000
+  , "z-image-turbo": 7500
+  , "lustify-v8": 1500
+  , "venice-sd35": 1500
+  , "wai-Illustrious": 1500
+  , "chroma": 7500
+  , "gpt-image-2-edit": 10000
+  , "flux-2-max-edit": 3000
+  , "nano-banana-2-edit": 32768
+  , "qwen-image-3-pro-edit": 10000
+  , "wan-2-7-pro-edit": 5000
+  , "grok-imagine-image-2-0-edit": 7500
+  , "luma-uni-1-edit": 6000
+  , "seedream-v4-edit": 10000
+  , "firered-image-edit": 1500
+  , "muse-image-edit": 10000
+}
 # The sizing dialect of each curated model, an unknown id takes the ratio
 # dialect: pixel models size through width and height (model_spec.constraints
 # carries a widthHeightDivisor and no aspectRatios), the resolution-tier
@@ -73,6 +109,7 @@ VENICE_IMAGE_DIALECTS = {
   , "ideogram-v4": "ratio"
   , "imagineart-1.5-pro": "ratio"
   , "qwen-image-3-pro": "resolution"
+  , "muse-image": "ratio"
   , "z-image-turbo": "pixel"
   , "lustify-v8": "pixel"
   , "venice-sd35": "pixel"
@@ -100,39 +137,53 @@ VENICE_PIXEL_RATIOS = {
 }
 # The seed range of the endpoint.
 VENICE_SEED_MAX = 999_999_999
-# The curated edit models of /image/edit, hand-ordered like the generate
-# list: the first entry is the default (the edit twin of the generate
-# default family, seedream). The live /models list carries no edit
-# model, so the endpoint enum of the docs is the source; traits come the
-# same way as the generate list.
-VENICE_EDIT_MODELS = [
-    "seedream-v4-edit"
+# The curated edit models of /image/edit, cost-ordered like the generate
+# catalog (descending, the first entry is the default model). The source
+# is the live list under the inpaint type (GET /models?type=inpaint):
+# the edit models are inpaint models, their price is the inpaint price at
+# the 2K preset — the quality table wins when the model has one (2K
+# medium), else the 2K resolution tier, else the flat price — mirroring
+# the generate convention (the edit tool sends the same presets).
+# Each entry holds its capability traits (plain names) and its real cost
+# in USD per edit; the comment names the release date (the created field,
+# rendered UTC-4).
+VENICE_EDIT_MODELS = {
+    "gpt-image-2-edit": {"traits": [], "cost": 0.14}  # released Apr 20, 2026
+  , "nano-banana-2-edit": {"traits": [], "cost": 0.14}  # released Feb 25, 2026
+  , "flux-2-max-edit": {"traits": [], "cost": 0.12}  # released Jan 4, 2026
+  , "grok-imagine-image-2-0-edit": {"traits": [], "cost": 0.10}  # released Aug 10, 2026
+  , "wan-2-7-pro-edit": {"traits": [], "cost": 0.094}  # released Apr 22, 2026
+  , "qwen-image-3-pro-edit": {"traits": [], "cost": 0.09}  # released Jul 15, 2026
+  , "luma-uni-1-edit": {"traits": [], "cost": 0.06}  # released Jun 16, 2026
+  , "seedream-v4-edit": {"traits": ["uncensored"], "cost": 0.05}  # released Jan 3, 2026
+  , "firered-image-edit": {"traits": [], "cost": 0.04}  # released Mar 24, 2026
+  , "muse-image-edit": {"traits": [], "cost": 0.02}  # released Sep 2, 2026
+}
+# The edit models that price and render by resolution tier, and the
+# subset that takes a quality preset: the edit tool sends the same 2K and
+# medium constants as generate, so the catalog cost matches the bill.
+VENICE_EDIT_TIER_MODELS = {
+    "gpt-image-2-edit"
   , "nano-banana-2-edit"
-  , "gpt-image-2-edit"
-  , "qwen-image-2-pro-edit"
-  , "qwen-edit-uncensored"
-  , "firered-image-edit"
   , "grok-imagine-image-2-0-edit"
-  , "wan-2-7-pro-edit"
-  , "flux-2-max-edit"
-  , "luma-uni-1-edit"
-]
+  , "qwen-image-3-pro-edit"
+}
+VENICE_EDIT_QUALITY_MODELS = {
+    "gpt-image-2-edit"
+  , "grok-imagine-image-2-0-edit"
+}
 # The edit answer formats of the endpoint, mapped to file extensions.
 VENICE_EDIT_FORMATS = {"image/png": "png", "image/jpeg": "jpg", "image/webp": "webp"}
-# Behavior flags of the EDIT models — the generate models carry their
-# traits inline in VENICE_IMAGE_MODELS, the live /models list carries no
-# edit model, so the endpoint enum plus the name is the source here (the
-# id qwen-edit-uncensored states the uncensored trait itself). The
+# The agent-facing label of each trait flag. The flags ride the catalog
+# entries (VENICE_IMAGE_MODELS, VENICE_EDIT_MODELS). The
 # copyrighted_material trait: the model refuses a prompt that names
 # copyrighted material (verified live 2026-09-03 on flux-2-pro and
 # grok-imagine-image — the answer is a uniform blank image, no error; both
 # were replaced on 2026-09-04, so no entry carries the flag until a sweep
 # re-tests their successors, the full table lives in the vault note
-# Venice.AI/HTTP API.md). The label map below serves both lists.
-VENICE_IMAGE_MODEL_TRAITS = {
-    "qwen-edit-uncensored": {"uncensored": True}
-}
-# The agent-facing label of each trait flag.
+# Venice.AI/HTTP API.md). The uncensored trait: the live model list
+# reports the model as applying minimal content-based filtering
+# (model_spec.uncensored true).
 VENICE_IMAGE_TRAIT_LABELS = {
     "copyrighted_material": "refuses copyrighted material"
   , "uncensored": "uncensored"
@@ -539,7 +590,7 @@ def _edit_tool() -> dict:
         prompt = str(arguments.get("prompt") or "").strip()
         if not prompt:
             return "Error: the prompt must say what to change."
-        model = str(arguments.get("model") or "").strip() or VENICE_EDIT_MODELS[0]
+        model = str(arguments.get("model") or "").strip() or next(iter(VENICE_EDIT_MODELS))
         prompt_limit = VENICE_IMAGE_PROMPT_LIMITS.get(model, VENICE_PROMPT_MAX_CHARS)
         if len(prompt) > prompt_limit:
             return f"Error: the prompt is over the {prompt_limit}-character limit of the model {model}."
@@ -559,6 +610,14 @@ def _edit_tool() -> dict:
         if aspect_ratio and aspect_ratio != "auto":
             # auto is the endpoint default: the edit keeps the input shape.
             body["aspect_ratio"] = aspect_ratio
+        if model in VENICE_EDIT_TIER_MODELS:
+            # The tier models render at the 2K preset, the quality models
+            # at medium — the same convention as generate, so the catalog
+            # cost matches the bill (gpt-image-2-edit defaults to high,
+            # which bills far over medium).
+            body["resolution"] = VENICE_IMAGE_RESOLUTION
+            if model in VENICE_EDIT_QUALITY_MODELS:
+                body["quality"] = VENICE_IMAGE_QUALITY
         if channel_nsfw is not None and await channel_nsfw():
             # The endpoint default true blurs adult content: it drops only
             # where Discord itself gates the channel behind 18+.
@@ -592,8 +651,8 @@ def _edit_tool() -> dict:
         return sent
 
     model_notes = []
-    for edit_model in VENICE_EDIT_MODELS:
-        labels = [VENICE_IMAGE_TRAIT_LABELS[key] for key in VENICE_IMAGE_MODEL_TRAITS.get(edit_model, ())]
+    for edit_model, entry in VENICE_EDIT_MODELS.items():
+        labels = [VENICE_IMAGE_TRAIT_LABELS[key] for key in entry["traits"]]
         model_notes.append(f"{edit_model} ({', '.join(labels)})" if labels else edit_model)
     return {
         "name": "edit_image"
@@ -610,7 +669,7 @@ def _edit_tool() -> dict:
             , "properties": {
                 "image": {"type": "string", "description": "The http(s) URL of the picture to edit."}
                 , "prompt": {"type": "string", "description": "What to change in the picture."}
-                , "model": {"type": "string", "description": f"The edit model. Default {VENICE_EDIT_MODELS[0]}."}
+                , "model": {"type": "string", "description": f"The edit model. Default {next(iter(VENICE_EDIT_MODELS))}."}
                 , "aspect_ratio": {"type": "string", "description": "The aspect ratio of the result, for example 1:1, 16:9, or 9:16. Default auto."}
             }
             , "required": ["image", "prompt"]
