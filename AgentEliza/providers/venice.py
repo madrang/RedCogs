@@ -69,6 +69,25 @@ VENICE_PIXEL_RATIOS = {
 }
 # The seed range of the endpoint.
 VENICE_SEED_MAX = 999_999_999
+# The curated edit models of /image/edit, hand-ordered like the generate
+# list: the first entry is the default (the edit twin of the generate
+# default family, seedream-v4). The live /models list carries no edit
+# model, so the endpoint enum of the docs is the source; traits come the
+# same way as the generate list.
+VENICE_EDIT_MODELS = [
+    "seedream-v4-edit"
+  , "nano-banana-2-edit"
+  , "gpt-image-2-edit"
+  , "qwen-image-2-edit"
+  , "qwen-edit-uncensored"
+  , "firered-image-edit"
+  , "grok-imagine-image-2-0-edit"
+  , "wan-2-7-pro-edit"
+  , "flux-2-max-edit"
+  , "luma-uni-1-edit"
+]
+# The edit answer formats of the endpoint, mapped to file extensions.
+VENICE_EDIT_FORMATS = {"image/png": "png", "image/jpeg": "jpg", "image/webp": "webp"}
 # Per-model behavior flags from the live sweep of 2026-09-03, one key per
 # approved trait. copyrighted_material: the model refuses a prompt that
 # names copyrighted material, a character or anything else (verified live:
@@ -81,6 +100,7 @@ VENICE_IMAGE_MODEL_TRAITS = {
     "flux-2-pro": {"copyrighted_material": True}
   , "grok-imagine-image": {"copyrighted_material": True}
   , "seedream-v4": {"uncensored": True}
+  , "qwen-edit-uncensored": {"uncensored": True}
 }
 # The agent-facing label of each trait flag.
 VENICE_IMAGE_TRAIT_LABELS = {
@@ -188,6 +208,23 @@ def _header_flag(headers, name: str) -> str:
     if value is None:
         return "unknown"
     return "yes" if str(value).strip().lower() == "true" else "no"
+
+
+def _moderation_status(headers) -> tuple[str, str]:
+    """The (violation flag, [venice] status line) of an image answer. A flag
+    reaches the model only when it reads yes: a clean answer carries no
+    line at all. The generate and the edit endpoint answer the same
+    headers."""
+    violation = _header_flag(headers, "x-venice-is-content-violation")
+    raised = [
+        f"{label}: {flag}"
+        for label, flag in (
+            ("content violation", violation)
+            , ("blurred", _header_flag(headers, "x-venice-is-blurred"))
+        )
+        if flag == "yes"
+    ]
+    return violation, f"[venice] {', '.join(raised)}" if raised else ""
 
 
 def _search_tool() -> dict:
@@ -388,18 +425,7 @@ def _image_tool() -> dict:
             return f"Error: the image generation failed: {e}"
         # The moderation signals of the endpoint: a content violation is the
         # documented face of the silent refusal (a blank image with no error).
-        violation = _header_flag(headers, "x-venice-is-content-violation")
-        # A flag reaches the model only when it reads yes. A clean answer
-        # carries no status line at all.
-        raised = [
-            f"{label}: {flag}"
-            for label, flag in (
-                ("content violation", violation)
-                , ("blurred", _header_flag(headers, "x-venice-is-blurred"))
-            )
-            if flag == "yes"
-        ]
-        status = f"[venice] {', '.join(raised)}" if raised else ""
+        violation, status = _moderation_status(headers)
         images = data.get("images") or []
         if not images:
             return "Error: the image generation returned no image."
@@ -457,6 +483,107 @@ def _image_tool() -> dict:
                 , "cfg_scale": {"type": "number", "description": "How strictly the pixel model follows the prompt, over 0 up to 20. Default of the endpoint."}
             }
             , "required": ["prompt"]
+        }
+        , "handler": handler
+    }
+
+
+def _edit_tool() -> dict:
+    """The image edit endpoint as a native tool: one edited image, posted to
+    the conversation. The endpoint always answers in binary (the JSON mode
+    of generate does not exist here), so the call rides provider_post with
+    binary=True and the answer format names the file extension. The input
+    image comes as an http(s) URL: an attachment of the conversation or
+    the URL the posting result of generate_image names. A Discord file
+    host URL downloads with the bot token and rides the JSON body as
+    base64; a foreign URL passes to the endpoint as-is. The agent
+    controls the image, the prompt, the model, and the aspect ratio.
+    safe_mode drops only on an age-restricted channel. The moderation
+    flags report like generate_image: only a flag that reads yes appears,
+    and a blank refusal needs both marks."""
+
+    async def handler(arguments, call_api, fetch_url=None, api_post=None, send_file=None, channel_nsfw=None, set_conversation_model=None):
+        image = str(arguments.get("image") or "").strip()
+        if not image.startswith(("http://", "https://")):
+            return "Error: the image must be the http(s) URL of the picture to edit."
+        prompt = str(arguments.get("prompt") or "").strip()
+        if not prompt:
+            return "Error: the prompt must say what to change."
+        model = str(arguments.get("model") or "").strip() or VENICE_EDIT_MODELS[0]
+        prompt_limit = VENICE_IMAGE_PROMPT_LIMITS.get(model, VENICE_PROMPT_MAX_CHARS)
+        if len(prompt) > prompt_limit:
+            return f"Error: the prompt is over the {prompt_limit}-character limit of the model {model}."
+        body = {"model": model, "prompt": prompt}
+        if urlparse(image).netloc.lower() in DISCORD_FILE_HOSTS:
+            # The Discord file hosts need an authorized download: the image
+            # rides the body as base64 instead of the URL.
+            if fetch_url is None:
+                return "Error: the Discord download is not available here."
+            fetched = await fetch_url(image)
+            if fetched is None:
+                return "Error: the download of the Discord file failed."
+            body["image"] = base64.b64encode(fetched[0]).decode("ascii")
+        else:
+            body["image"] = image
+        aspect_ratio = str(arguments.get("aspect_ratio") or "").strip()
+        if aspect_ratio and aspect_ratio != "auto":
+            # auto is the endpoint default: the edit keeps the input shape.
+            body["aspect_ratio"] = aspect_ratio
+        if channel_nsfw is not None and await channel_nsfw():
+            # The endpoint default true blurs adult content: it drops only
+            # where Discord itself gates the channel behind 18+.
+            body["safe_mode"] = False
+        try:
+            data, headers = await api_post("/image/edit", json_body=body, binary=True)
+        except ChatError as e:
+            return f"Error: the image edit failed: {e}"
+        if not isinstance(data, (bytes, bytearray)) or not data:
+            return "Error: the image edit returned no image."
+        violation, status = _moderation_status(headers)
+        if len(data) <= VENICE_IMAGE_BLANK_MAX_BYTES and violation == "yes":
+            # A refusal needs both marks: the tiny image and the violation
+            # flag, the same gate as generate.
+            return (
+                f"Error: the edit was refused: the answer is a blank image of {len(data)} bytes "
+                f"and the endpoint flags a content violation. {status}. Nothing was posted. "
+                "Describe the subject instead of naming it, or pick a model without the refusal flag."
+            )
+        if send_file is None:
+            return "Error: the image posting is not available here."
+        # The binary answer carries no generation id: the answer format
+        # (a content-type header) names the extension, the model and a
+        # random token name the file.
+        content_type = str(headers.get("content-type") or "").split(";")[0].strip().lower()
+        extension = VENICE_EDIT_FORMATS.get(content_type, "png")
+        name = f"{model}-{random.randint(0, 0xFFFF):04x}.{extension}"
+        sent = await send_file(name, bytes(data))
+        if status:
+            return f"{sent}\n{status}"
+        return sent
+
+    model_notes = []
+    for edit_model in VENICE_EDIT_MODELS:
+        labels = [VENICE_IMAGE_TRAIT_LABELS[key] for key in VENICE_IMAGE_MODEL_TRAITS.get(edit_model, ())]
+        model_notes.append(f"{edit_model} ({', '.join(labels)})" if labels else edit_model)
+    return {
+        "name": "edit_image"
+        , "description": (
+            "Edit one image through Venice and post the result to the conversation. "
+            "The image is the http(s) URL of the picture: an attachment of a message, "
+            "or the URL the generate_image result names. "
+            f"Known models: {', '.join(model_notes)}. "
+            "Every model takes the prompt and the aspect ratio; auto (the default) keeps the input shape. "
+            "A model marked as refusing copyrighted material does exactly that."
+        )
+        , "parameters": {
+            "type": "object"
+            , "properties": {
+                "image": {"type": "string", "description": "The http(s) URL of the picture to edit."}
+                , "prompt": {"type": "string", "description": "What to change in the picture."}
+                , "model": {"type": "string", "description": f"The edit model. Default {VENICE_EDIT_MODELS[0]}."}
+                , "aspect_ratio": {"type": "string", "description": "The aspect ratio of the result, for example 1:1, 16:9, or 9:16. Default auto."}
+            }
+            , "required": ["image", "prompt"]
         }
         , "handler": handler
     }
@@ -631,11 +758,12 @@ class VeniceApiProvider(Provider):
 
     def native_tools(self) -> list:
         """The provider tools: the vision tool, the augment set, the image
-        generation, and the environment tool. web_search takes the harness
-        name, so the Venice search replaces the DuckDuckGo default while
-        this provider is active. web_scrape, parse_document, generate_image,
-        and configure_environment join as additions; the harness web_fetch
-        keeps its place, it reads the Discord file hosts with the bot
+        generation and edit, and the environment tool. web_search takes the
+        harness name, so the Venice search replaces the DuckDuckGo default
+        while this provider is active. web_scrape, parse_document,
+        generate_image, edit_image, and configure_environment join as
+        additions; the harness web_fetch keeps its place, it reads the
+        Discord file hosts with the bot
         token."""
         return [
             analyze_image_tool(self.vision_model)
@@ -643,6 +771,7 @@ class VeniceApiProvider(Provider):
           , _scrape_tool()
           , _parse_tool()
           , _image_tool()
+          , _edit_tool()
           , _environment_tool()
         ]
 

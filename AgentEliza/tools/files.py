@@ -25,10 +25,14 @@ async def post_file(channel, data: bytes, name: str, caption: str | None = None)
             f"({limit} bytes). Split the content into smaller files."
         )
     try:
-        await channel.send(content=caption or None, file=discord.File(io.BytesIO(data), filename=name))
+        sent = await channel.send(content=caption or None, file=discord.File(io.BytesIO(data), filename=name))
     except (discord.Forbidden, discord.HTTPException) as e:
         return f"Error: the file send failed: {e}."
-    return f"The file {name} ({len(data)} bytes) has been sent."
+    # The posted URL names the file for the follow-ups of the agent (an
+    # image edit or a vision call). It is signed and expires after about
+    # 24 hours.
+    url = sent.attachments[0].url if sent.attachments else ""
+    return f"The file {name} ({len(data)} bytes) has been sent.{f' {url}' if url else ''}"
 
 
 class FileTools:

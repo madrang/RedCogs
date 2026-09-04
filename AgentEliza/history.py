@@ -23,6 +23,10 @@ HISTORY_MAX_CHARS = CONTEXT_TOKENS // 2 * CHARS_PER_TOKEN
 CONTEXT_FILL = 0.8
 # Cap of the rolling summary text.
 SUMMARY_MAX_CHARS = 4000
+# The char-estimate weight of one image part of a vision turn: about 2000
+# tokens at the 4-chars-per-token convention. It stands in only when the
+# provider reports no token counts.
+HISTORY_IMAGE_CHARS = 8_000
 
 # The harness request that asks for the summary. It goes to the API as a
 # user message after the untouched session, and it introduces the summary
@@ -125,15 +129,31 @@ class Session:
         self.seen_users.clear()
         self.touch()
 
-    def append(self, role: str, content: str) -> None:
-        self.messages.append({"role": role, "content": content})
-        self.size += len(content)
+    def append(self, role: str, content) -> None:
+        """Store one simple turn. The content may hold parts (a vision turn:
+        text and image parts), so the size routes through _size_of."""
+        message = {"role": role, "content": content}
+        self.messages.append(message)
+        self.size += self._size_of(message)
         self.touch()
 
     @staticmethod
     def _size_of(message: dict) -> int:
-        """The size of one turn: the content, plus the reasoning when the turn keeps it."""
-        return len(message.get("content") or "") + len(message.get("reasoning_content") or "") + len(message.get("reasoning") or "")
+        """The size of one turn: the content, plus the reasoning when the turn
+        keeps it. A content array (a vision turn) counts the text parts by
+        length and each image part at HISTORY_IMAGE_CHARS: an image bills the
+        provider as image tokens, not characters, so a fixed stand-in keeps
+        the fallback trigger honest. The real prompt token count of the API
+        answer takes precedence when the provider reports one."""
+        content = message.get("content") or ""
+        if isinstance(content, list):
+            size = sum(
+                (len(part.get("text") or "") if part.get("type") == "text" else HISTORY_IMAGE_CHARS)
+                for part in content if isinstance(part, dict)
+            )
+        else:
+            size = len(content)
+        return size + len(message.get("reasoning_content") or "") + len(message.get("reasoning") or "")
 
     def append_message(self, message: dict) -> None:
         """Store one turn as the API sent it: role, content, and the extra fields (tool calls, reasoning)."""

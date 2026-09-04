@@ -1,6 +1,7 @@
 """The reply engine: one user message in, the agent answer out."""
 
 import asyncio
+import base64
 import json
 import logging
 from collections.abc import AsyncIterator
@@ -19,6 +20,22 @@ from .tools.files import post_file
 log = logging.getLogger("red.agenteliza")
 
 MCP_TOOL_ROUNDS = 16
+# A vision chat model reads the images of the conversation directly: the
+# images of a message and the images a tool posts join the turns as
+# image_url parts. The caps bound one turn (the message images) and one
+# note (the posted images): a data URI rides every later request of the
+# session, so an unbounded set would bloat the context until a compaction.
+VISION_MAX_IMAGES = 4
+VISION_IMAGE_BUDGET_BYTES = 8 * 1024 * 1024
+# The image mime type of a file extension, for the data URIs of posted
+# files (the Discord attachments name theirs through the content type).
+IMAGE_EXT_MIMES = {
+    "png": "image/png"
+  , "jpg": "image/jpeg"
+  , "jpeg": "image/jpeg"
+  , "gif": "image/gif"
+  , "webp": "image/webp"
+}
 # The system prompt tells the agent a limit of 10 tool calls. The gap gives
 # slack when the agent miscounts its own calls.
 # Cap of one download of a native provider tool (an image for the vision call).
@@ -315,8 +332,6 @@ class ChatEngine:
             stamp = f"{discord.utils.snowflake_time(message_id):{MESSAGE_TIME_FORMAT}}"
         else:
             stamp = f"{datetime.now(timezone.utc):{MESSAGE_TIME_FORMAT}}"
-        additions.append({"role": "user", "content": f"{stamp} {tag}: {content}{attachments_text(attachments)}"})
-        messages = [*session.messages, *additions]
         tools, routes, replaced = await self.mcp.gather_tools(preset, api_key)
         native_routes = {}
         if preset is not None:
@@ -357,20 +372,15 @@ class ChatEngine:
             )
 
         gated = await channel_nsfw()
-        payload = {
-            "model": session.model_override or await self.api.model_name(),
-            "messages": messages,
-            "stream": False,
-        }
-        if preset is not None:
-            # Provider-specific fields, for example prompt_cache_key on Kimi.
-            # A provider may also rewrite the model here: Venice resolves a
-            # preset name to its id, the 18+ variant behind the gate.
-            payload.update(preset.extra_payload(session_id, payload["model"], gated))
-        if tools:
-            payload["tools"] = tools
-            payload["tool_choice"] = "auto"
-        rounds = MCP_TOOL_ROUNDS if tools else 1
+        request_model = session.model_override or await self.api.model_name()
+        # A vision chat model sees the images of the conversation directly.
+        # The resolved request model decides, an override included: a preset
+        # name maps to its id first, and the provider's vision_models set
+        # names the models that accept image parts in the chat contract.
+        vision_chat = (
+            preset is not None
+            and preset.resolve_model(request_model) in preset.vision_models
+        )
 
         async def call_api(tool_payload):
             """One chat-completions call on the active provider, for native provider tools."""
@@ -405,9 +415,13 @@ class ChatEngine:
                 return None
             return body, content_type
 
-        async def api_post(path, *, json_body=None, data=None):
+        async def api_post(path, *, json_body=None, data=None, binary=False):
             """One POST to a REST path of the active provider, for native provider tools."""
-            return await self.api.provider_post(api_key, path, json_body=json_body, data=data)
+            return await self.api.provider_post(api_key, path, json_body=json_body, data=data, binary=binary)
+
+        # The images the native tools posted in this reply: a vision chat
+        # model sees them through the harness note the tool loop builds.
+        posted_images = []
 
         async def send_file(name, data, caption=None):
             """Post one binary file to the current channel, for native provider tools."""
@@ -415,7 +429,10 @@ class ChatEngine:
             channel = await getter(channel_id) if getter else None
             if channel is None:
                 return "Error: the current channel is unknown."
-            return await post_file(channel, data, name, caption)
+            sent = await post_file(channel, data, name, caption)
+            if sent.startswith("The file ") and name.rsplit(".", 1)[-1].lower() in IMAGE_EXT_MIMES:
+                posted_images.append((name, data))
+            return sent
 
         async def set_conversation_model(model_id):
             """Override the chat model of this conversation, for native
@@ -424,6 +441,54 @@ class ChatEngine:
             the session. It answers the next and later requests, the
             request that runs the tool keeps its model."""
             session.model_override = model_id
+
+        # The user turn of this message. On a vision chat model the images
+        # of the message join as image_url parts (a data URI, fetched with
+        # the bot token on the Discord hosts): the model sees them directly.
+        # The attachment line stays in the text either way: it names every
+        # attachment, and it is the only record a non-vision model keeps.
+        text = f"{stamp} {tag}: {content}{attachments_text(attachments)}"
+        turn_content = text
+        if vision_chat and attachments:
+            parts = []
+            budget = VISION_IMAGE_BUDGET_BYTES
+            for name, content_type, url in attachments:
+                if not str(content_type or "").startswith("image/"):
+                    continue
+                if len(parts) >= VISION_MAX_IMAGES or budget <= 0:
+                    break
+                fetched = await fetch_url(url)
+                if fetched is None:
+                    continue
+                body, header_type = fetched
+                mime = header_type if str(header_type or "").startswith("image/") else ""
+                if not mime:
+                    continue
+                if len(body) > budget:
+                    continue
+                budget -= len(body)
+                parts.append({
+                    "type": "image_url"
+                  , "image_url": {"url": f"data:{mime};base64,{base64.b64encode(body).decode('ascii')}"}
+                })
+            if parts:
+                turn_content = [{"type": "text", "text": text}, *parts]
+        additions.append({"role": "user", "content": turn_content})
+        messages = [*session.messages, *additions]
+        payload = {
+            "model": request_model
+            , "messages": messages
+            , "stream": False
+        }
+        if preset is not None:
+            # Provider-specific fields, for example prompt_cache_key on Kimi.
+            # A provider may also rewrite the model here: Venice resolves a
+            # preset name to its id, the 18+ variant behind the gate.
+            payload.update(preset.extra_payload(session_id, payload["model"], gated))
+        if tools:
+            payload["tools"] = tools
+            payload["tool_choice"] = "auto"
+        rounds = MCP_TOOL_ROUNDS if tools else 1
 
         # A staged overload notice: the wrapper fills it, the reply loop
         # yields it as the leading segment, so the user always sees the
@@ -556,12 +621,38 @@ class ChatEngine:
                     log.exception("The tool %s failed:", name)
                     result_text = f"Error: the tool {name} failed: {type(e).__name__}: {e}"
                 result = {
-                    "role": "tool",
-                    "tool_call_id": call.get("id", ""),
-                    "content": result_text,
+                    "role": "tool"
+                    , "tool_call_id": call.get("id", "")
+                    , "content": result_text,
                 }
                 messages.append(result)
                 exchange.append(result)
+            if posted_images and vision_chat:
+                # The vision chat model sees what a tool posted: the images
+                # join the exchange as a harness note, so the model can
+                # judge its own output. The note rides the session like any
+                # turn, until a compaction summarizes it. A model without
+                # vision keeps the text result of the tool alone.
+                parts = [{"type": "text", "text": "[harness] the image a tool posted to the conversation:"}]
+                budget = VISION_IMAGE_BUDGET_BYTES
+                while posted_images and len(parts) - 1 < VISION_MAX_IMAGES:
+                    name, data = posted_images.pop(0)
+                    if len(data) > budget:
+                        continue
+                    budget -= len(data)
+                    parts.append({
+                        "type": "image_url"
+                      , "image_url": {
+                            "url": f"data:{IMAGE_EXT_MIMES[name.rsplit('.', 1)[-1].lower()]}"
+                                   f";base64,{base64.b64encode(data).decode('ascii')}"
+                        }
+                    })
+                if len(parts) > 1:
+                    note = {"role": "user", "content": parts}
+                    messages.append(note)
+                    exchange.append(note)
+                elif posted_images:
+                    log.info("The posted images stay unseen: over the vision caps of one note.")
         # The rounds are spent: one last pass without tools, so the model can answer with what it found.
         payload["tool_choice"] = "none"
         try:
@@ -605,11 +696,17 @@ class ChatEngine:
 
         The no-reply tag ends the stream with nothing more. An empty
         message speaks only when no segment went out before: the notice
-        would replace a real answer the user already saw.
+        would replace a real answer the user already saw. A content array
+        (a vision model answering in parts) flattens to its text.
         """
-        content = (message.get("content") or "").strip()
+        content = message.get("content") or ""
+        if isinstance(content, list):
+            content = "".join(part.get("text") or "" for part in content if isinstance(part, dict))
+        content = content.strip()
         if content and content != NO_REPLY_TAG:
-            return message["content"]
+            # The flattened text, not the raw field: a content array
+            # (a vision answer in parts) posts as its text.
+            return content
         if not content and not emitted:
             return EMPTY_REPLY
         return None

@@ -12,6 +12,10 @@ class KimiCodeProvider(Provider):
     usage_url = "https://api.kimi.com/coding/v1/usages"
     # The vision model of analyze_image on this provider: the k3 family has image_in.
     vision_model = "k3-256k"
+    # The chat models that accept image parts in the chat contract (the
+    # same wire as analyze_image): the engine feeds conversation images
+    # to a resolved model in this set.
+    vision_models = {"k3-256k"}
 
     def native_tools(self) -> list:
         """The vision tool: image analysis, only with a Kimi provider."""
