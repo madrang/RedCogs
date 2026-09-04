@@ -19,43 +19,74 @@ VENICE_SEARCH_MAX_LIMIT = 20
 # Image generation: the endpoint-wide prompt cap.
 VENICE_PROMPT_MAX_CHARS = 7500
 # The curated image models, hand-ordered best-first: the models with the
-# uncensored trait come first for now, the models with limitation traits
-# come last. The first entry is the default model, like the first entry of
-# PROVIDERS is the default provider. The other ids come from the live model
-# list (GET /models?type=image needs no key).
-VENICE_IMAGE_MODELS = (
-    "seedream-v4"
-  , "venice-sd35"
-  , "gpt-image-2"
-  , "nano-banana-2"
-  , "qwen-image-2"
-  , "flux-2-pro"
-  , "grok-imagine-image"
-)
+# uncensored trait come first for now. The dict order is preference order,
+# the first entry is the default model, like the first entry of PROVIDERS
+# is the default provider. Each entry holds its capability traits (plain
+# names) and its real cost in USD per image: the price of the request the
+# tool sends — the 2K preset on the resolution-tier models (gpt-image-2 at
+# 2K medium), the flat generation price on the rest, the default 1K tier
+# when a model prices by tier and the tool sends no resolution. Read from
+# the live model list (GET /models?type=image needs no key), 2026-09-04:
+# image models price per image, not per million tokens.
+VENICE_IMAGE_MODELS = {
+    "recraft-v4-pro": {"traits": [], "cost": 0.29}
+  , "nano-banana-2": {"traits": [], "cost": 0.14}
+  , "gpt-image-2": {"traits": [], "cost": 0.13}
+  , "luma-uni-1-max": {"traits": [], "cost": 0.12}
+  , "grok-imagine-image-2-0": {"traits": [], "cost": 0.10}
+  , "wan-2-7-pro-text-to-image": {"traits": [], "cost": 0.09375}
+  , "flux-2-max": {"traits": [], "cost": 0.09}
+  , "hunyuan-image-v3": {"traits": [], "cost": 0.09}
+  , "krea-v2-large": {"traits": [], "cost": 0.07}
+  , "seedream-v5-pro": {"traits": ["uncensored"], "cost": 0.06}
+  , "ideogram-v4": {"traits": [], "cost": 0.06}
+  , "imagineart-1.5-pro": {"traits": [], "cost": 0.06}
+  , "qwen-image-3-pro": {"traits": ["uncensored"], "cost": 0.05}
+  , "z-image-turbo": {"traits": [], "cost": 0.01}
+  , "lustify-v8": {"traits": ["uncensored"], "cost": 0.01}
+  , "venice-sd35": {"traits": [], "cost": 0.01}
+  , "wai-Illustrious": {"traits": ["uncensored"], "cost": 0.01}
+  , "chroma": {"traits": ["uncensored"], "cost": 0.01}
+}
 # Prompt caps under the endpoint-wide 7500 (the per-model constraints of the
 # live model list).
-VENICE_IMAGE_PROMPT_LIMITS = {"venice-sd35": 1500, "flux-2-pro": 3000}
+VENICE_IMAGE_PROMPT_LIMITS = {"venice-sd35": 1500}
 # The sizing dialect of each curated model, an unknown id takes the ratio
-# dialect: pixel models size through width and height, the resolution-tier
-# models carry a fixed resolution (and gpt-image-2 a quality) preset, the
-# rest take the aspect ratio as-is. The tool description reports the
-# dialect beside the traits of each model, so the agent knows which
-# parameters apply.
+# dialect: pixel models size through width and height (model_spec.constraints
+# carries a widthHeightDivisor and no aspectRatios), the resolution-tier
+# models carry a fixed resolution (and gpt-image-2 a quality) preset
+# (constraints carries a resolutions array), the rest take the aspect ratio
+# as-is. Read from the live model list, 2026-09-04. The tool description
+# reports the dialect beside the traits of each model, so the agent knows
+# which parameters apply.
 VENICE_IMAGE_DIALECTS = {
-    "venice-sd35": "pixel"
-  , "flux-2-pro": "ratio"
-  , "qwen-image-2": "ratio"
-  , "seedream-v4": "ratio"
-  , "gpt-image-2": "resolution"
+    "recraft-v4-pro": "ratio"
   , "nano-banana-2": "resolution"
-  , "grok-imagine-image": "resolution"
+  , "gpt-image-2": "resolution"
+  , "luma-uni-1-max": "ratio"
+  , "grok-imagine-image-2-0": "resolution"
+  , "wan-2-7-pro-text-to-image": "ratio"
+  , "flux-2-max": "ratio"
+  , "hunyuan-image-v3": "ratio"
+  , "krea-v2-large": "ratio"
+  , "seedream-v5-pro": "resolution"
+  , "ideogram-v4": "ratio"
+  , "imagineart-1.5-pro": "ratio"
+  , "qwen-image-3-pro": "resolution"
+  , "z-image-turbo": "pixel"
+  , "lustify-v8": "pixel"
+  , "venice-sd35": "pixel"
+  , "wai-Illustrious": "pixel"
+  , "chroma": "pixel"
 }
 # The presets of the resolution-tier models. 2K and medium for now, adjust
 # after some use.
 VENICE_IMAGE_RESOLUTION = "2K"
 VENICE_IMAGE_QUALITY = "medium"
-# aspect_ratio to pixels for venice-sd35: sides at most 1280, multiples of
-# its widthHeightDivisor 16, about one megapixel.
+# aspect_ratio to pixels for the pixel-dialect models: sides at most 1280,
+# multiples of 16 — every pixel model's widthHeightDivisor divides it (16 on
+# venice-sd35 and wai-Illustrious, 8 on z-image-turbo, lustify-v8, chroma),
+# so one table serves them all. About one megapixel.
 VENICE_PIXEL_RATIOS = {
     "1:1": (1024, 1024)
   , "4:3": (1024, 768)
@@ -71,14 +102,14 @@ VENICE_PIXEL_RATIOS = {
 VENICE_SEED_MAX = 999_999_999
 # The curated edit models of /image/edit, hand-ordered like the generate
 # list: the first entry is the default (the edit twin of the generate
-# default family, seedream-v4). The live /models list carries no edit
+# default family, seedream). The live /models list carries no edit
 # model, so the endpoint enum of the docs is the source; traits come the
 # same way as the generate list.
 VENICE_EDIT_MODELS = [
     "seedream-v4-edit"
   , "nano-banana-2-edit"
   , "gpt-image-2-edit"
-  , "qwen-image-2-edit"
+  , "qwen-image-2-pro-edit"
   , "qwen-edit-uncensored"
   , "firered-image-edit"
   , "grok-imagine-image-2-0-edit"
@@ -88,19 +119,18 @@ VENICE_EDIT_MODELS = [
 ]
 # The edit answer formats of the endpoint, mapped to file extensions.
 VENICE_EDIT_FORMATS = {"image/png": "png", "image/jpeg": "jpg", "image/webp": "webp"}
-# Per-model behavior flags from the live sweep of 2026-09-03, one key per
-# approved trait. copyrighted_material: the model refuses a prompt that
-# names copyrighted material, a character or anything else (verified live:
-# the answer is a uniform blank image, no error). uncensored: the live
-# model list reports the model as applying minimal content-based filtering
-# (model_spec.uncensored true). The tool description states each trait
-# once, so the agent picks a model that fits the prompt. The full findings
-# live in the vault note Venice.AI/HTTP API.md.
+# Behavior flags of the EDIT models — the generate models carry their
+# traits inline in VENICE_IMAGE_MODELS, the live /models list carries no
+# edit model, so the endpoint enum plus the name is the source here (the
+# id qwen-edit-uncensored states the uncensored trait itself). The
+# copyrighted_material trait: the model refuses a prompt that names
+# copyrighted material (verified live 2026-09-03 on flux-2-pro and
+# grok-imagine-image — the answer is a uniform blank image, no error; both
+# were replaced on 2026-09-04, so no entry carries the flag until a sweep
+# re-tests their successors, the full table lives in the vault note
+# Venice.AI/HTTP API.md). The label map below serves both lists.
 VENICE_IMAGE_MODEL_TRAITS = {
-    "flux-2-pro": {"copyrighted_material": True}
-  , "grok-imagine-image": {"copyrighted_material": True}
-  , "seedream-v4": {"uncensored": True}
-  , "qwen-edit-uncensored": {"uncensored": True}
+    "qwen-edit-uncensored": {"uncensored": True}
 }
 # The agent-facing label of each trait flag.
 VENICE_IMAGE_TRAIT_LABELS = {
@@ -375,7 +405,7 @@ def _image_tool() -> dict:
         prompt = str(arguments.get("prompt") or "").strip()
         if not prompt:
             return "Error: the prompt must be a non-empty string."
-        model = str(arguments.get("model") or "").strip() or VENICE_IMAGE_MODELS[0]
+        model = str(arguments.get("model") or "").strip() or next(iter(VENICE_IMAGE_MODELS))
         prompt_limit = VENICE_IMAGE_PROMPT_LIMITS.get(model, VENICE_PROMPT_MAX_CHARS)
         if len(prompt) > prompt_limit:
             return f"Error: the prompt is over the {prompt_limit}-character limit of the model {model}."
@@ -455,12 +485,12 @@ def _image_tool() -> dict:
         return sent
 
     model_notes = []
-    for image_model in VENICE_IMAGE_MODELS:
+    for image_model, entry in VENICE_IMAGE_MODELS.items():
         labels = []
         dialect = VENICE_IMAGE_DIALECTS.get(image_model)
         if dialect:
             labels.append(dialect)
-        labels.extend(VENICE_IMAGE_TRAIT_LABELS[key] for key in VENICE_IMAGE_MODEL_TRAITS.get(image_model, ()))
+        labels.extend(VENICE_IMAGE_TRAIT_LABELS[key] for key in entry["traits"])
         model_notes.append(f"{image_model} ({', '.join(labels)})" if labels else image_model)
     return {
         "name": "generate_image"
@@ -477,7 +507,7 @@ def _image_tool() -> dict:
             "type": "object"
             , "properties": {
                 "prompt": {"type": "string", "description": "What to draw."}
-                , "model": {"type": "string", "description": f"The image model. Default {VENICE_IMAGE_MODELS[0]}."}
+                , "model": {"type": "string", "description": f"The image model. Default {next(iter(VENICE_IMAGE_MODELS))}."}
                 , "aspect_ratio": {"type": "string", "description": "The aspect ratio of the image, for example 1:1, 16:9, or 9:16."}
                 , "negative_prompt": {"type": "string", "description": "What to keep out of the image."}
                 , "cfg_scale": {"type": "number", "description": "How strictly the pixel model follows the prompt, over 0 up to 20. Default of the endpoint."}
