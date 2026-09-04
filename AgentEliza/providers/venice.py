@@ -457,6 +457,13 @@ def _image_tool() -> dict:
         if not prompt:
             return "Error: the prompt must be a non-empty string."
         model = str(arguments.get("model") or "").strip() or next(iter(VENICE_IMAGE_MODELS))
+        if model not in VENICE_IMAGE_MODELS:
+            # Only the curated catalog: the dialect, the prompt limit, and
+            # the cost of an unknown id are all unverified.
+            return (
+                f"Error: unknown image model {model}. "
+                f"Valid models: {', '.join(VENICE_IMAGE_MODELS)}."
+            )
         prompt_limit = VENICE_IMAGE_PROMPT_LIMITS.get(model, VENICE_PROMPT_MAX_CHARS)
         if len(prompt) > prompt_limit:
             return f"Error: the prompt is over the {prompt_limit}-character limit of the model {model}."
@@ -591,6 +598,13 @@ def _edit_tool() -> dict:
         if not prompt:
             return "Error: the prompt must say what to change."
         model = str(arguments.get("model") or "").strip() or next(iter(VENICE_EDIT_MODELS))
+        if model not in VENICE_EDIT_MODELS:
+            # Only the curated catalog: a generate model id here edits
+            # through an untested path at an unknown price.
+            return (
+                f"Error: unknown edit model {model}. "
+                f"Valid models: {', '.join(VENICE_EDIT_MODELS)}."
+            )
         prompt_limit = VENICE_IMAGE_PROMPT_LIMITS.get(model, VENICE_PROMPT_MAX_CHARS)
         if len(prompt) > prompt_limit:
             return f"Error: the prompt is over the {prompt_limit}-character limit of the model {model}."
