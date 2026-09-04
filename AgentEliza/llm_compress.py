@@ -93,13 +93,16 @@ class Compressor:
         # the untouched turns, so the compaction reads the context the agent
         # worked with. Only the harness request joins, as a user message.
         # An earlier summary is already in the turns as the compaction exchange.
+        # The model follows the conversation (an override included); a
+        # provider resolves a preset name, and the compaction has no gate
+        # context, so the normal variant serves it.
         payload = {
-            "model": await self.api.model_name(),
+            "model": session.model_override or await self.api.model_name(),
             "messages": [*session.messages, {"role": "user", "content": COMPACT_REQUEST}],
             "stream": False,
         }
         if preset is not None:
-            payload.update(preset.extra_payload(session_id))
+            payload.update(preset.extra_payload(session_id, payload["model"]))
         try:
             data = await self.api.chat_request(api_key, payload)
         except ChatError as e:
@@ -142,7 +145,12 @@ class Compressor:
         session.error = None
         session.compaction_failures = 0
         session.compaction_retry_at = 0.0
-        return data.get("usage") or {}
+        # The token usage of the call, with the provider's own cost metric
+        # beside it: the caller merges both into the interaction stats.
+        usage = dict(data.get("usage") or {})
+        if preset is not None:
+            usage["cost"] = preset.cost_of(data)
+        return usage
 
     @tasks.loop(seconds=60)
     async def sweep(self) -> None:

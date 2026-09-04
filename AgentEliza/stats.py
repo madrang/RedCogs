@@ -1,6 +1,8 @@
 import time
 
 RATE_WINDOW_SECONDS = 3600
+# The cost history keeps this many month keys, the current one included.
+COST_MONTHS_KEPT = 13
 
 # Default counters registered at each scope.
 _STATS_DEFAULT = {
@@ -8,11 +10,18 @@ _STATS_DEFAULT = {
     , "prompt_tokens": 0
     , "completion_tokens": 0
     , "cached_tokens": 0
+    , "cost": 0.0
+    , "cost_months": {}
 }
 _RATE_DEFAULT = {
       "count": 0
     , "start": 0
 }
+
+
+def month_key() -> str:
+    """The UTC month key of the moment, for example 2026-09."""
+    return time.strftime("%Y-%m", time.gmtime())
 
 class ScopeStats:
     """Per-scope counters of the AgentEliza cog, stored in Red Config.
@@ -47,9 +56,13 @@ class ScopeStats:
         """Add one interaction and its token usage to every scope with an id.
 
         usage holds the accumulated totals of one generate_reply call:
-        prompt_tokens, completion_tokens, cached_tokens.
+        prompt_tokens, completion_tokens, cached_tokens, and cost — the
+        generic cost metric of the provider (its currency or its compute
+        units; 0 when the provider names none). The cost lands in the scope
+        total and in the bucket of the current UTC month.
         """
         ids = {"guild": guild_id, "channel": channel_id, "user": user_id}
+        cost = float(usage.get("cost") or 0)
         for scope, scope_id in ids.items():
             if scope_id is None:
                 continue
@@ -58,6 +71,15 @@ class ScopeStats:
                 stats["messages"] = stats.get("messages", 0) + 1
                 for key in ("prompt_tokens", "completion_tokens", "cached_tokens"):
                     stats[key] = stats.get(key, 0) + (usage.get(key) or 0)
+                if cost:
+                    stats["cost"] = stats.get("cost", 0.0) + cost
+                    months = dict(stats.get("cost_months") or {})
+                    month = month_key()
+                    months[month] = months.get(month, 0.0) + cost
+                    if len(months) > COST_MONTHS_KEPT:
+                        for old in sorted(months)[: len(months) - COST_MONTHS_KEPT]:
+                            months.pop(old)
+                    stats["cost_months"] = months
 
     async def check_and_count(self, *, guild_id, channel_id, user_id, limits: dict) -> str | None:
         """Count one interaction against the per-scope limits.
