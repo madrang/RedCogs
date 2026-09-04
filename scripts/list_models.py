@@ -1,7 +1,11 @@
 """List the chat models of a provider: context, prices, capability flags.
 
+The operating cost is the real cost of a 1M-token workload: 10x the input
+price, plus 1x the output price and 1x the cache-read price (each per 1M
+tokens). The cost scale of the AgentEliza preset catalog reads it.
+
 Run it when new models land or prices change, to refresh the preset
-catalog of AgentEliza (the cost scale of the traits):
+catalog of AgentEliza (the cost property of the presets):
 
     python scripts/list_models.py venice
     python scripts/list_models.py venice --type image
@@ -53,6 +57,13 @@ def rows(models: list) -> list:
           , "cache_input_usd_per_m": (pricing.get("cache_input") or {}).get("usd")
           , "output_usd_per_m": (pricing.get("output") or {}).get("usd")
         }
+        prices = (entry["input_usd_per_m"], entry["output_usd_per_m"])
+        if all(price is not None for price in prices):
+            # The cost of a 1M-token workload: 10x input, 1x output, 1x
+            # cache. A model that reports no cache price does not bill
+            # cache reads: the term adds 0.
+            cache = entry["cache_input_usd_per_m"] or 0
+            entry["operating_usd_per_m"] = round(10 * prices[0] + prices[1] + cache, 6)
         if provider_flags(caps):
             entry["flags"] = provider_flags(caps)
         if model.get("type"):
@@ -85,11 +96,12 @@ def main() -> int:
     if args.json:
         print(json.dumps(table, indent=2))
         return 0
-    print(f"{'id':36s} {'context':>9s} {'in $/M':>8s} {'out $/M':>8s}  flags")
+    print(f"{'id':36s} {'context':>9s} {'in $/M':>8s} {'out $/M':>8s} {'op $/M':>8s}  flags")
     for entry in table:
         print(
             f"{entry['id']:36s} {str(entry['context']):>9s} "
-            f"{str(entry['input_usd_per_m'] or '-'):>8s} {str(entry['output_usd_per_m'] or '-'):>8s}  "
+            f"{str(entry['input_usd_per_m'] or '-'):>8s} {str(entry['output_usd_per_m'] or '-'):>8s} "
+            f"{str(entry.get('operating_usd_per_m') or '-'):>8s}  "
             f"{', '.join(entry.get('flags', []))}"
         )
     return 0

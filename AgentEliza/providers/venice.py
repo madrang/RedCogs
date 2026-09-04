@@ -100,72 +100,84 @@ VENICE_IMAGE_BLANK_MAX_BYTES = 2048
 VENICE_CHAT_CAPABILITIES = ("large context", "vision", "uncensored", "code")
 # Chat presets: a short display name for the agent and the user, the model
 # id behind it, an optional NSFW variant id for conversations behind the
-# 18+ gate (a different model with its own capability set), and the
-# capabilities the preset provides. A trait value is a cost scale from 0
-# to 1: the input price of the model over the priciest catalog model
-# (Kimi and Aion tie at the ceiling, read 2026-09-03 through
-# scripts/list_models.py). A value of 0 is omitted: GLM Lite, the
-# cheapest, carries an empty traits object. The
-# presence of a key still means the preset provides the capability. The
-# catalog order is preference order: the first preset that satisfies a
-# request wins. The short names are the only model handle the agent ever
-# sees.
+# 18+ gate (a different model with its own capability set), the capability
+# names the preset provides, and the cost scale of the preset. The cost is
+# the operating cost of the model — 10x the input price plus 1x the output
+# and cache-read prices, each per 1M tokens (the operating_usd_per_m column
+# of scripts/list_models.py) — over the priciest catalog model (Kimi at the
+# ceiling, read 2026-09-04), anchored at DeepSeek Lite = 0: a preset
+# cheaper than the default carries a negative cost. The catalog order is
+# preference order: the first preset that satisfies a request wins. The
+# short names are the only model handle the agent ever sees.
 VENICE_CHAT_PRESETS = {
     "GLM 1M": {
         "normal": "z-ai-glm-5-3"
-      , "traits": {"large context": 0.47, "code": 0.47}
+      , "traits": ["large context", "code"]
+      , "cost": 0.39
     }
   , "GLM Lite": {
         "normal": "zai-org-glm-4.7-flash"
-      , "traits": {}
+      , "traits": []
+      , "cost": -0.02
       , "nsfw": "olafangensan-glm-4.7-flash-heretic"
-      , "nsfw_traits": {}
+      , "nsfw_traits": []
     }
   , "GLM Vision": {
         "normal": "z-ai-glm-5-3-flash"
-      , "traits": {"large context": 0.04, "vision": 0.04, "code": 0.04}
+      , "traits": ["large context", "vision", "code"]
+      , "cost": 0.0
     }
   , "Kimi": {
         "normal": "kimi-k3"
-      , "traits": {"large context": 1.0, "vision": 1.0, "code": 1.0}
+      , "traits": ["large context", "vision", "code"]
+      , "cost": 1.0
     }
   , "Venice Uncensored": {
         "normal": "venice-uncensored-1-2"
-      , "traits": {"vision": 0.05, "uncensored": 0.05}
+      , "traits": ["vision", "uncensored"]
+      , "cost": 0.01
     }
   , "Inkling": {
         "normal": "inkling"
-      , "traits": {"vision": 0.33, "code": 0.33}
+      , "traits": ["vision", "code"]
+      , "cost": 0.29
     }
   , "DeepSeek Lite": {
         "normal": "deepseek-v4-flash-0731"
-      , "traits": {"large context": 0.05, "code": 0.05}
+      , "traits": ["large context", "code"]
+      , "cost": 0.0
     }
   , "DeepSeek Pro": {
         "normal": "deepseek-v4-pro"
-      , "traits": {"large context": 0.44, "code": 0.44}
+      , "traits": ["large context", "code"]
+      , "cost": 0.33
     }
   , "Gemma": {
         "normal": "google-gemma-4-31b-it"
-      , "traits": {"vision": 0.03}
+      , "traits": ["vision"]
+      , "cost": 0.0
       , "nsfw": "gemma-4-uncensored"
-      , "nsfw_traits": {"vision": 0.04}
+      , "nsfw_traits": ["vision"]
     }
   , "Aion Mini": {
         "normal": "aion-labs-aion-3-0-mini"
-      , "traits": {"uncensored": 0.23}
+      , "traits": ["uncensored"]
+      , "cost": 0.16
     }
   , "Aion": {
         "normal": "aion-labs-aion-3-0"
-      , "traits": {"uncensored": 1.0}
+      , "traits": ["uncensored"]
+      , "cost": 0.80
     }
   , "Qwen Lite": {
         "normal": "qwen3-6-35b-a3b"
-      , "traits": {"vision": 0.03, "code": 0.03, "uncensored": 0.03}
+      , "traits": ["vision", "code", "uncensored"]
+      , "cost": 0.0
     }
   , "Qwen": {
         "normal": "qwen-3-8-27b"
-      , "traits": {"vision": 0.12, "code": 0.12, "uncensored": 0.12}
+      , "traits": ["vision", "code", "uncensored"]
+      , "cost": 0.10
     }
 }
 
@@ -494,14 +506,14 @@ def _environment_tool() -> dict:
                 # value is the preset name: the request-time resolution
                 # picks the variant by the gate of the moment.
                 variant = preset.get("nsfw")
-                if variant is not None and all(preset.get("nsfw_traits", {}).get(trait) for trait in remaining):
+                if variant is not None and all(trait in preset.get("nsfw_traits", ()) for trait in remaining):
                     await set_conversation_model(name)
                     granted = ", ".join(sorted(requested))
                     return (
                         f"The environment now provides: {granted}. Active preset: {name} (18+ variant). "
                         "The change answers the next message."
                     )
-                if variant is None and preset.get("traits", {}).get("uncensored") and all(preset["traits"].get(trait) for trait in remaining):
+                if variant is None and "uncensored" in preset.get("traits", ()) and all(trait in preset["traits"] for trait in remaining):
                     await set_conversation_model(name)
                     granted = ", ".join(sorted(requested))
                     return (
@@ -509,8 +521,8 @@ def _environment_tool() -> dict:
                         "The change answers the next message."
                     )
             else:
-                traits = preset.get("traits", {})
-                if all(traits.get(trait) for trait in requested):
+                traits = preset.get("traits", ())
+                if all(trait in traits for trait in requested):
                     await set_conversation_model(name)
                     granted = ", ".join(sorted(requested))
                     return (
@@ -545,7 +557,7 @@ def _environment_tool() -> dict:
 
 def preset_menu_line(name: str, preset: dict) -> str:
     """One catalog entry for the menus of the agent and the user."""
-    traits = ", ".join(sorted(preset.get("traits", {}))) or "plain"
+    traits = ", ".join(sorted(preset.get("traits", ()))) or "plain"
     suffix = "; 18+ variant available" if preset.get("nsfw") else ""
     return f"{name} ({traits}{suffix})"
 
@@ -557,9 +569,10 @@ class VeniceApiProvider(Provider):
     base_url = "https://api.venice.ai/api/v1"
     # A short list of the ~110 live models (GET /models needs no key); setmodel
     # accepts any other id with a notice. Context sizes from that endpoint.
-    # The first entry is the default model of the provider (GLM Lite).
+    # The first entry is the default model of the provider (DeepSeek Lite).
     models = [
-        "zai-org-glm-4.7-flash"
+        "deepseek-v4-flash-0731"
+      , "zai-org-glm-4.7-flash"
       , "z-ai-glm-5-3"
       , "venice-uncensored-1-2"
       , "kimi-k3"
@@ -568,7 +581,6 @@ class VeniceApiProvider(Provider):
       , "gemini-3-5-flash"
       , "aion-labs-aion-3-0"
       , "inkling"
-      , "deepseek-v4-flash-0731"
       , "deepseek-v4-pro"
       , "google-gemma-4-31b-it"
       , "gemma-4-uncensored"
@@ -681,13 +693,12 @@ class VeniceApiProvider(Provider):
     def preset_fallback(self, model: str) -> str | None:
         """The preset one step up in cost from the preset holding the
         model (either variant), cycling to the cheapest at the ceiling.
-        The cost of a preset is its highest trait value, 0 for a plain
-        one. None when the model sits in no preset."""
+        The cost of a preset is its cost property, 0 when the entry names
+        none. None when the model sits in no preset."""
         ranked = []
         current = None
         for name, preset in VENICE_CHAT_PRESETS.items():
-            values = [*preset.get("traits", {}).values(), *preset.get("nsfw_traits", {}).values(), 0.0]
-            entry = (max(values), name)
+            entry = (preset.get("cost", 0.0), name)
             ranked.append(entry)
             if model in (preset.get("normal"), preset.get("nsfw")):
                 current = entry
