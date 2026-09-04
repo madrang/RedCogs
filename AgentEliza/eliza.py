@@ -23,7 +23,7 @@ from .memory import Memory
 from .pages import paginate
 from .polls import PollManager
 from .providers import DEFAULT_PROVIDER, PROVIDERS, provider_for, provider_named
-from .stats import ScopeStats
+from .stats import ScopeStats, month_key
 from .tools import HarnessOptions, HarnessTools, MESSAGE_TIME_FORMAT
 from .workspace import Workspace
 
@@ -196,6 +196,16 @@ class Eliza(commands.Cog):
     async def current_preset(self):
         """The provider matching the configured base URL, or None for a custom provider."""
         return provider_for(await self._base_url())
+
+    async def display_model(self, preset=None) -> str:
+        """The configured model for display: the short preset name when the
+        provider carries one for the id, else the raw id."""
+        model = await self.model_name()
+        if preset is None:
+            preset = await self.current_preset()
+        if preset is None:
+            return model
+        return preset.preset_name(model) or model
 
     async def context_length(self, preset) -> int | None:
         """The context size of the configured model, None when unknown."""
@@ -423,13 +433,18 @@ class Eliza(commands.Cog):
                 f"{HISTORY_MAX_TOKENS:,} tokens, about {HISTORY_MAX_CHARS:,} characters."
             )
         vision_model = getattr(preset, "vision_model", None)
+        model_display = (preset.preset_name(await self.model_name()) or await self.model_name()) if preset is not None else await self.model_name()
+        reading = self.history.sessions.get(session_id) if session_id is not None else None
+        if reading is not None and reading.model_override:
+            override = (preset.preset_name(reading.model_override) or reading.model_override) if preset is not None else reading.model_override
+            model_display = f"{model_display} (this conversation: {override})"
         lines = [
             "# Harness status"
             , f"Read at {stamp}. The values change with the next exchange."
             , ""
             , "## Provider"
             , f"- Provider: {preset.name if preset is not None else 'custom'} — {await self._base_url()}"
-            , f"- Model: {await self.model_name()}"
+            , f"- Model: {model_display}"
             , context_line
         ]
         if vision_model:
@@ -502,8 +517,8 @@ class Eliza(commands.Cog):
             window = f"{rate.get('count', 0)} of {limit} this hour" if limit else "unlimited"
             lines.append(
                 f"- This {'channel' if session.scope == 'channel' else 'user'} scope: "
-                f"{stats.get('messages', 0):,} messages, {stats.get('prompt_tokens', 0):,} prompt tokens, "
-                f"{stats.get('completion_tokens', 0):,} completion tokens, {stats.get('cached_tokens', 0):,} cached. "
+                f"{stats.get('messages', 0):,} messages, {stats.get('prompt_tokens', 0):,} input tokens, "
+                f"{stats.get('completion_tokens', 0):,} output tokens, {stats.get('cached_tokens', 0):,} cached. "
                 f"Interactions: {window}."
             )
         servers = await self.config.mcp_servers()
@@ -854,7 +869,11 @@ class Eliza(commands.Cog):
         for p in PROVIDERS:
             vision = set(getattr(p, "vision_models", None) or ())
             names = [f"`{m}` (vision)" if m in vision else f"`{m}`" for m in p.models]
-            lines.append(f"**{p.name}** — `{p.base_url}`\nModels: {', '.join(names)}")
+            line = f"**{p.name}** — `{p.base_url}`\nModels: {', '.join(names)}"
+            presets = p.preset_menu()
+            if presets:
+                line += f"\nPresets: {', '.join(presets)}"
+            lines.append(line)
         embed = discord.Embed(
             title="Providers",
             description="\n".join(lines),
@@ -870,8 +889,19 @@ class Eliza(commands.Cog):
             await self.config.model_name.clear()
             await ctx.send(f"The model has been reset to the default: `{DEFAULT_PROVIDER.models[0]}`.")
             return
-        await self.config.model_name.set(model_name)
         preset = await self.current_preset()
+        # A preset name of the provider stores as the name itself: the
+        # request-time resolution maps it to the model id, and to the 18+
+        # variant of the preset behind the gate.
+        if preset is not None and preset.resolve_model(model_name) != model_name:
+            await self.config.model_name.set(model_name)
+            variant = " It loads its 18+ variant in conversations behind the 18+ gate." if preset.request_model(model_name, nsfw=True) != preset.request_model(model_name) else ""
+            await ctx.send(
+                f"The model has been set to the preset `{model_name}`.{variant} "
+                "Check it with the `eliza status` command."
+            )
+            return
+        await self.config.model_name.set(model_name)
         if preset is not None and model_name not in preset.models:
             known = ", ".join(f"`{m}`" for m in preset.models)
             await ctx.send(
@@ -885,6 +915,7 @@ class Eliza(commands.Cog):
     @commands.admin()
     async def eliza_status(self, ctx: commands.Context) -> None:
         """Check the connection to the chat API with the configured key."""
+        preset = await self.current_preset()
         api_key = await self.config.api_key()
         if not api_key:
             await ctx.send("The API key is not set. Use the `eliza setkey` command first.")
@@ -914,12 +945,14 @@ class Eliza(commands.Cog):
             return
         if response.status == 200 and data:
             models = [entry.get("id", "?") for entry in data.get("data", [])]
+            # A preset name resolves to its model id for the list check.
+            check = preset.request_model(model_name) if preset is not None else model_name
             description = (
                 f"Connection OK. {len(models)} models available.\n"
-                f"Configured model: `{model_name}` "
-                f"({'available' if model_name in models else 'NOT in the model list'})"
+                f"Configured model: `{preset.preset_name(check) or model_name}` "
+                f"({'available' if check in models else 'NOT in the model list'})"
             )
-            color = discord.Color.green() if model_name in models else discord.Color.orange()
+            color = discord.Color.green() if check in models else discord.Color.orange()
         elif response.status == 401:
             description = "The API key was rejected (401). Set a valid key with the `eliza setkey` command."
             color = discord.Color.red()
@@ -933,7 +966,6 @@ class Eliza(commands.Cog):
         )
         if self._closed:
             description += "\n**The agent is closed.** Reload the cog to start Eliza again."
-        preset = await self.current_preset()
         cache_ttl = getattr(preset, "cache_ttl", None) or DEFAULT_CACHE_TTL
         active = sum(1 for session in self.history.sessions.values() if session.idle() < cache_ttl)
         description += f"\nActive sessions: {active} of {MAX_SESSIONS}"
@@ -945,7 +977,7 @@ class Eliza(commands.Cog):
         if errored:
             description += f"\nSessions with a compaction error: {errored}."
         embed = discord.Embed(title="Chat API status", description=description, color=color)
-        embed.set_footer(text=f"Endpoint: {base_url} | Model: {model_name}")
+        embed.set_footer(text=f"Endpoint: {base_url} | Model: {preset.preset_name(model_name) or model_name if preset is not None else model_name}")
         await ctx.send(embed=embed)
 
     @eliza_group.command(name="usage")
@@ -1085,8 +1117,8 @@ class Eliza(commands.Cog):
             window = f"{rate.get('count', 0)}/{limit} this hour" if limit else "unlimited"
             lines.append(
                 f"**{label}** ({state}) — {stats.get('messages', 0)} messages, "
-                f"{stats.get('prompt_tokens', 0):,} prompt tokens, "
-                f"{stats.get('completion_tokens', 0):,} completion tokens, "
+                f"{stats.get('prompt_tokens', 0):,} input tokens, "
+                f"{stats.get('completion_tokens', 0):,} output tokens, "
                 f"{stats.get('cached_tokens', 0):,} cached. Interactions: {window}."
             )
         embed = discord.Embed(
@@ -1236,11 +1268,16 @@ class Eliza(commands.Cog):
             rate = await self.scope_stats.rate(internal, scope_id)
             limit = limits.get(internal) or 0
             window = f"{rate.get('count', 0)}/{limit} this hour" if limit else "unlimited"
+            cost = stats.get("cost") or 0
+            cost_text = ""
+            if cost:
+                month_cost = (stats.get("cost_months") or {}).get(month_key(), 0)
+                cost_text = f" Cost: {cost:.2f} total, {month_cost:.2f} this month."
             lines.append(
                 f"**{label}** — {stats.get('messages', 0)} messages, "
-                f"{stats.get('prompt_tokens', 0):,} prompt tokens, "
-                f"{stats.get('completion_tokens', 0):,} completion tokens, "
-                f"{stats.get('cached_tokens', 0):,} cached. Interactions: {window}."
+                f"{stats.get('prompt_tokens', 0):,} input tokens, "
+                f"{stats.get('completion_tokens', 0):,} output tokens, "
+                f"{stats.get('cached_tokens', 0):,} cached.{cost_text} Interactions: {window}."
             )
         embed = discord.Embed(
             title="Usage stats",

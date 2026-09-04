@@ -250,7 +250,7 @@ class ChatEngine:
         """The reply work of generate_reply. The caller holds the session lock."""
         preset = await self.api.current_preset()
         cache_ttl = getattr(preset, "cache_ttl", None) or DEFAULT_CACHE_TTL
-        usage = {"prompt_tokens": 0, "completion_tokens": 0, "cached_tokens": 0}
+        usage = {"prompt_tokens": 0, "completion_tokens": 0, "cached_tokens": 0, "cost": 0.0}
         # Context expiry: idle past the cache lifetime, or a compaction.
         # Only then is the system message rebuilt (prompt, memory, summary).
         # An agent memory update is already in the context as a tool call, so no reload between.
@@ -337,14 +337,36 @@ class ChatEngine:
         # A provider tool in the replaced set takes the place of the harness
         # default of the same name.
         tools = [tool for tool in self.harness_tools.tools() if tool["function"]["name"] not in replaced] + tools
+        async def channel_nsfw():
+            """Whether the current channel sits behind the Discord 18+ gate,
+            for the payload build and the native provider tools: the channel
+            flag, the flag of the parent channel of a thread, or an
+            age-restricted guild. A direct message of the bot owner counts
+            as gated: the API reports no user age, and the owner operates
+            the bot."""
+            if guild_id is None and is_owner:
+                return True
+            getter = self.harness_tools.channel_getter
+            channel = await getter(channel_id) if getter else None
+            parent = getattr(channel, "parent", None)
+            guild = getattr(channel, "guild", None) or getattr(parent, "guild", None)
+            return bool(
+                getattr(channel, "nsfw", False)
+                or getattr(parent, "nsfw", False)
+                or getattr(guild, "nsfw_level", None) == discord.NSFWLevel.age_restricted
+            )
+
+        gated = await channel_nsfw()
         payload = {
-            "model": await self.api.model_name(),
+            "model": session.model_override or await self.api.model_name(),
             "messages": messages,
             "stream": False,
         }
         if preset is not None:
             # Provider-specific fields, for example prompt_cache_key on Kimi.
-            payload.update(preset.extra_payload(session_id))
+            # A provider may also rewrite the model here: Venice resolves a
+            # preset name to its id, the 18+ variant behind the gate.
+            payload.update(preset.extra_payload(session_id, payload["model"], gated))
         if tools:
             payload["tools"] = tools
             payload["tool_choice"] = "auto"
@@ -395,23 +417,14 @@ class ChatEngine:
                 return "Error: the current channel is unknown."
             return await post_file(channel, data, name, caption)
 
-        async def channel_nsfw():
-            """Whether the current channel sits behind the Discord 18+ gate,
-            for native provider tools: the channel flag, the flag of the
-            parent channel of a thread, or an age-restricted guild. A direct
-            message of the bot owner counts as gated: the API reports no
-            user age, and the owner operates the bot."""
-            if guild_id is None and is_owner:
-                return True
-            getter = self.harness_tools.channel_getter
-            channel = await getter(channel_id) if getter else None
-            parent = getattr(channel, "parent", None)
-            guild = getattr(channel, "guild", None) or getattr(parent, "guild", None)
-            return bool(
-                getattr(channel, "nsfw", False)
-                or getattr(parent, "nsfw", False)
-                or getattr(guild, "nsfw_level", None) == discord.NSFWLevel.age_restricted
-            )
+        async def set_conversation_model(model_id):
+            """Override the chat model of this conversation, for native
+            provider tools. None restores the configured model. The override
+            rides the session: it survives a context restart and dies with
+            the session. It answers the next and later requests, the
+            request that runs the tool keeps its model."""
+            session.model_override = model_id
+
         # The tool rounds of this reply: assistant calls and tool results, as
         # the API sent them. The session keeps them until a compaction.
         exchange = []
@@ -429,6 +442,9 @@ class ChatEngine:
             round_usage = data.get("usage") or {}
             for key in usage:
                 usage[key] += round_usage.get(key) or 0
+            # The provider's own cost metric of the request, when it names one.
+            if preset is not None:
+                usage["cost"] += preset.cost_of(data)
             if round_usage.get("prompt_tokens"):
                 # The real prompt size calibrates the compaction trigger.
                 session.last_prompt_tokens = round_usage["prompt_tokens"]
@@ -476,7 +492,7 @@ class ChatEngine:
                         # Routes win: a provider tool can take a harness name.
                         result_text = await self.mcp.run_tool(name, arguments, routes)
                     elif name in native_routes:
-                        result_text = await native_routes[name](arguments, call_api, fetch_url, api_post, send_file, channel_nsfw)
+                        result_text = await native_routes[name](arguments, call_api, fetch_url, api_post, send_file, channel_nsfw, set_conversation_model)
                     elif name in self._harness_tool_names:
                         result_text = await self.harness_tools.run(
                             name, arguments, guild_id=guild_id, channel_id=channel_id, user_id=user_id,
@@ -504,6 +520,9 @@ class ChatEngine:
         round_usage = data.get("usage") or {}
         for key in usage:
             usage[key] += round_usage.get(key) or 0
+        # The provider's own cost metric of the request, when it names one.
+        if preset is not None:
+            usage["cost"] += preset.cost_of(data)
         message = self.api.message_of(data)
         if message is not None:
             await self._record_turn(

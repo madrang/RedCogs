@@ -60,7 +60,7 @@ async def analyze_image_impl(arguments: dict, call_api, fetch_url, *, model: str
 def analyze_image_tool(model: str, validate=None) -> dict:
     """The analyze_image native tool entry: the schema and the handler."""
 
-    async def handler(arguments, call_api, fetch_url=None, api_post=None, send_file=None, channel_nsfw=None):
+    async def handler(arguments, call_api, fetch_url=None, api_post=None, send_file=None, channel_nsfw=None, set_conversation_model=None):
         return await analyze_image_impl(arguments, call_api, fetch_url, model=model, validate=validate)
 
     return {
@@ -109,8 +109,32 @@ class Provider:
         """The context size of a model in tokens, None when unknown."""
         return self.context_lengths.get(model_name)
 
-    def extra_payload(self, session_id: int) -> dict:
-        """Extra fields for the chat completions payload."""
+    def preset_name(self, model_id: str) -> str | None:
+        """The short display name of a chat model id, None to keep the id."""
+        return None
+
+    def cost_of(self, data: dict) -> float:
+        """The cost of one chat-completions answer, as the provider's own
+        generic metric (its currency, or its compute units). 0 when the
+        provider names no cost."""
+        return 0.0
+
+    def resolve_model(self, name: str) -> str:
+        """Map a display name to its model id, pass anything else through."""
+        return name
+
+    def preset_menu(self) -> list:
+        """One line per named chat preset, empty when the provider has none."""
+        return []
+
+    def extra_payload(self, session_id: int, model: str = "", nsfw: bool = False) -> dict:
+        """Extra fields for the chat completions payload, merged over the
+        payload at every request. model carries the request's model string
+        (the session override or the configured name): a provider that
+        resolves display names to ids may return a "model" key here to
+        rewrite it, picking a variant by nsfw (the conversation sits behind
+        the 18+ gate). An empty model leaves the payload model alone — the
+        native tool payloads set their own model."""
         return {}
 
     def native_tools(self) -> list:
@@ -118,15 +142,17 @@ class Provider:
 
         Each entry: {"name", "description", "parameters", "handler"}. The
         handler is an async callable (arguments, call_api, fetch_url,
-        api_post, send_file, channel_nsfw) returning text. call_api posts
-        one chat-completions payload to the provider. fetch_url downloads
-        one URL to (bytes, content_type), or None on failure. api_post
-        sends one POST to a REST path of the provider, returns the JSON
-        answer and the response headers (case-insensitive) as a tuple, and
-        raises ChatError on failure. send_file posts one
-        binary file to the current channel and returns the result text.
-        channel_nsfw reports whether the current channel sits behind the
-        Discord 18+ gate (a direct message of the bot owner counts). A
+        api_post, send_file, channel_nsfw, set_conversation_model)
+        returning text. call_api posts one chat-completions payload to the
+        provider. fetch_url downloads one URL to (bytes, content_type), or
+        None on failure. api_post sends one POST to a REST path of the
+        provider, returns the JSON answer and the response headers
+        (case-insensitive) as a tuple, and raises ChatError on failure.
+        send_file posts one binary file to the current channel and returns
+        the result text. channel_nsfw reports whether the current channel
+        sits behind the Discord 18+ gate (a direct message of the bot
+        owner counts). set_conversation_model overrides the chat model of
+        the current conversation (None restores the configured model). A
         native tool takes the place of a harness tool of the same name.
         """
         return []

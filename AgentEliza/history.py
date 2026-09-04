@@ -102,6 +102,10 @@ class Session:
         # may retry: a failed compaction backs off instead of firing each loop.
         self.compaction_failures = 0
         self.compaction_retry_at = 0.0
+        # A temporary chat model override for this conversation, set by a
+        # native provider tool. None answers with the configured model. The
+        # override survives a context restart and dies with the session.
+        self.model_override = None
 
     def acquire(self):
         """The session lock with a timeout on the wait.

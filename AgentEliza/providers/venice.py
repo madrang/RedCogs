@@ -1,5 +1,6 @@
 from urllib.parse import urlparse
 
+import asyncio
 import base64
 import random
 import re
@@ -92,6 +93,50 @@ VENICE_IMAGE_TRAIT_LABELS = {
 # rides the cog, so the decoded size stands in for the pixel check. The
 # ceiling sits just above the observed asset.
 VENICE_IMAGE_BLANK_MAX_BYTES = 2048
+# The capabilities the agent can ask of the environment tool. One settled
+# vocabulary: the same words in the schema enum, the catalog traits, and
+# the tool answers. The code trait mirrors the optimizedForCode flag of
+# the live model list.
+VENICE_CHAT_CAPABILITIES = ("large context", "vision", "uncensored", "code")
+# Chat presets: a short display name for the agent and the user, the model
+# id behind it, an optional NSFW variant id for conversations behind the
+# 18+ gate (a different model with its own capability set), and the
+# capabilities the preset provides. A trait value is a cost scale from 0
+# to 1: the input price of the model over the priciest catalog model
+# (Kimi, read 2026-09-03 through scripts/list_models.py). A value of 0 is
+# omitted: GLM Lite, the cheapest, carries an empty traits object. The
+# presence of a key still means the preset provides the capability. The
+# catalog order is preference order: the first preset that satisfies a
+# request wins. The short names are the only model handle the agent ever
+# sees.
+VENICE_CHAT_PRESETS = {
+    "GLM 1M": {
+        "normal": "z-ai-glm-5-3"
+      , "traits": {"large context": 0.47, "code": 0.47}
+    }
+  , "GLM Lite": {
+        "normal": "zai-org-glm-4.7-flash"
+      , "traits": {}
+      , "nsfw": "olafangensan-glm-4.7-flash-heretic"
+      , "nsfw_traits": {}
+    }
+  , "GLM Vision": {
+        "normal": "z-ai-glm-5-3-flash"
+      , "traits": {"large context": 0.04, "vision": 0.04, "code": 0.04}
+    }
+  , "Kimi": {
+        "normal": "kimi-k3"
+      , "traits": {"large context": 1.0, "vision": 1.0, "code": 1.0}
+    }
+  , "Venice Uncensored": {
+        "normal": "venice-uncensored-1-2"
+      , "traits": {"vision": 0.05, "uncensored": 0.05}
+    }
+  , "Inkling": {
+        "normal": "inkling"
+      , "traits": {"vision": 0.33, "code": 0.33}
+    }
+}
 
 
 def _header_flag(headers, name: str) -> str:
@@ -105,7 +150,7 @@ def _header_flag(headers, name: str) -> str:
 def _search_tool() -> dict:
     """The augment search as a native tool, under the harness web_search name."""
 
-    async def handler(arguments, call_api, fetch_url=None, api_post=None, send_file=None, channel_nsfw=None):
+    async def handler(arguments, call_api, fetch_url=None, api_post=None, send_file=None, channel_nsfw=None, set_conversation_model=None):
         query = str(arguments.get("query") or "").strip()
         if not query:
             return "Error: the query must be a non-empty string."
@@ -157,7 +202,7 @@ def _search_tool() -> dict:
 def _scrape_tool() -> dict:
     """The augment scrape as a native tool: one page as markdown."""
 
-    async def handler(arguments, call_api, fetch_url=None, api_post=None, send_file=None, channel_nsfw=None):
+    async def handler(arguments, call_api, fetch_url=None, api_post=None, send_file=None, channel_nsfw=None, set_conversation_model=None):
         url = str(arguments.get("url") or "").strip()
         if not url.startswith(("http://", "https://")):
             return "Error: the url must be an http(s) URL."
@@ -192,7 +237,7 @@ def _scrape_tool() -> dict:
 def _parse_tool() -> dict:
     """The augment text parser as a native tool: one document as text."""
 
-    async def handler(arguments, call_api, fetch_url=None, api_post=None, send_file=None, channel_nsfw=None):
+    async def handler(arguments, call_api, fetch_url=None, api_post=None, send_file=None, channel_nsfw=None, set_conversation_model=None):
         url = str(arguments.get("url") or "").strip()
         if not url.startswith(("http://", "https://")):
             return "Error: the url must be the http(s) URL of a document."
@@ -245,7 +290,7 @@ def _image_tool() -> dict:
     then the tool answers with an error and posts nothing. Without the
     flag, a small image posts as content."""
 
-    async def handler(arguments, call_api, fetch_url=None, api_post=None, send_file=None, channel_nsfw=None):
+    async def handler(arguments, call_api, fetch_url=None, api_post=None, send_file=None, channel_nsfw=None, set_conversation_model=None):
         prompt = str(arguments.get("prompt") or "").strip()
         if not prompt:
             return "Error: the prompt must be a non-empty string."
@@ -364,6 +409,106 @@ def _image_tool() -> dict:
     }
 
 
+def _environment_tool() -> dict:
+    """The environment tool: the agent states the capabilities the current
+    task needs, the tool picks the chat preset that provides them and
+    switches the conversation to it. A task that asks for the uncensored
+    capability loads the NSFW variant of the preset, and only in a
+    conversation behind the 18+ gate. The agent never sees a model id: the
+    short preset name is its only handle."""
+
+    async def handler(arguments, call_api, fetch_url=None, api_post=None, send_file=None, channel_nsfw=None, set_conversation_model=None):
+        if set_conversation_model is None:
+            return "Error: the environment configuration is not available here."
+        raw = arguments.get("capabilities")
+        items = [raw] if isinstance(raw, str) else list(raw) if isinstance(raw, list) else []
+        requested = []
+        for item in items:
+            text = str(item).strip().lower()
+            if text and text not in requested:
+                requested.append(text)
+        if not requested:
+            return 'Error: state at least one capability, or "default" to restore the default environment.'
+        if "default" in requested:
+            if len(requested) > 1:
+                return 'Error: "default" accepts no other capability.'
+            await set_conversation_model(None)
+            return "The environment is back to the default configuration. The change answers the next message."
+        unknown = [item for item in requested if item not in VENICE_CHAT_CAPABILITIES]
+        if unknown:
+            return (
+                f"Error: unknown capability: {', '.join(unknown)}. "
+                f"Known capabilities: {', '.join(VENICE_CHAT_CAPABILITIES)}."
+            )
+        adult = "uncensored" in requested
+        if adult and (channel_nsfw is None or not await channel_nsfw()):
+            return "Error: the uncensored capability needs a conversation behind the 18+ gate."
+        for name, preset in VENICE_CHAT_PRESETS.items():
+            remaining = [trait for trait in requested if trait != "uncensored"]
+            if adult:
+                # The 18+ variant is the uncensored build of the preset; the
+                # other capabilities must hold for the variant itself. A
+                # preset without a variant can still be uncensored by
+                # itself, its normal id is the uncensored build. The stored
+                # value is the preset name: the request-time resolution
+                # picks the variant by the gate of the moment.
+                variant = preset.get("nsfw")
+                if variant is not None and all(preset.get("nsfw_traits", {}).get(trait) for trait in remaining):
+                    await set_conversation_model(name)
+                    granted = ", ".join(sorted(requested))
+                    return (
+                        f"The environment now provides: {granted}. Active preset: {name} (18+ variant). "
+                        "The change answers the next message."
+                    )
+                if variant is None and preset.get("traits", {}).get("uncensored") and all(preset["traits"].get(trait) for trait in remaining):
+                    await set_conversation_model(name)
+                    granted = ", ".join(sorted(requested))
+                    return (
+                        f"The environment now provides: {granted}. Active preset: {name}. "
+                        "The change answers the next message."
+                    )
+            else:
+                traits = preset.get("traits", {})
+                if all(traits.get(trait) for trait in requested):
+                    await set_conversation_model(name)
+                    granted = ", ".join(sorted(requested))
+                    return (
+                        f"The environment now provides: {granted}. Active preset: {name}. "
+                        "The change answers the next message."
+                    )
+        menu = "; ".join(preset_menu_line(name, preset) for name, preset in VENICE_CHAT_PRESETS.items())
+        return f"Error: no environment preset provides: {', '.join(sorted(requested))}. Available: {menu}."
+
+    return {
+        "name": "configure_environment"
+        , "description": (
+            "Configure the environment of this conversation for the current task. "
+            "State the capabilities the task needs. The change answers the next message. "
+            f"Capabilities: {', '.join(VENICE_CHAT_CAPABILITIES)}, and \"default\" to restore the default environment. "
+            "The uncensored capability needs a conversation behind the 18+ gate."
+        )
+        , "parameters": {
+            "type": "object"
+            , "properties": {
+                "capabilities": {
+                    "type": "array"
+                    , "items": {"type": "string", "enum": ["default", *VENICE_CHAT_CAPABILITIES]}
+                    , "description": "The capabilities the current task needs."
+                }
+            }
+            , "required": ["capabilities"]
+        }
+        , "handler": handler
+    }
+
+
+def preset_menu_line(name: str, preset: dict) -> str:
+    """One catalog entry for the menus of the agent and the user."""
+    traits = ", ".join(sorted(preset.get("traits", {}))) or "plain"
+    suffix = "; 18+ variant available" if preset.get("nsfw") else ""
+    return f"{name} ({traits}{suffix})"
+
+
 class VeniceApiProvider(Provider):
     """Venice API open platform (pay-as-you-go, OpenAI-compatible)."""
 
@@ -371,8 +516,10 @@ class VeniceApiProvider(Provider):
     base_url = "https://api.venice.ai/api/v1"
     # A short list of the ~110 live models (GET /models needs no key); setmodel
     # accepts any other id with a notice. Context sizes from that endpoint.
+    # The first entry is the default model of the provider (GLM Lite).
     models = [
-        "z-ai-glm-5-3"
+        "zai-org-glm-4.7-flash"
+      , "z-ai-glm-5-3"
       , "venice-uncensored-1-2"
       , "kimi-k3"
       , "qwen-3-8-max"
@@ -387,6 +534,7 @@ class VeniceApiProvider(Provider):
       , "kimi-k3": 1_000_000
       , "qwen-3-8-max": 1_000_000
       , "z-ai-glm-5-3-flash": 1_048_576
+      , "zai-org-glm-4.7-flash": 128_000
       , "gemini-3-5-flash": 1_000_000
       , "aion-labs-aion-3-0": 128_000
       , "inkling": 524_288
@@ -411,27 +559,116 @@ class VeniceApiProvider(Provider):
     vision_model = "venice-uncensored-1-2"
 
     def native_tools(self) -> list:
-        """The provider tools: the vision tool, the augment set, and the
-        image generation. web_search takes the harness name, so the Venice
-        search replaces the DuckDuckGo default while this provider is
-        active. web_scrape, parse_document, and generate_image join as
-        additions; the harness web_fetch keeps its place, it reads the
-        Discord file hosts with the bot token."""
+        """The provider tools: the vision tool, the augment set, the image
+        generation, and the environment tool. web_search takes the harness
+        name, so the Venice search replaces the DuckDuckGo default while
+        this provider is active. web_scrape, parse_document, generate_image,
+        and configure_environment join as additions; the harness web_fetch
+        keeps its place, it reads the Discord file hosts with the bot
+        token."""
         return [
             analyze_image_tool(self.vision_model)
           , _search_tool()
           , _scrape_tool()
           , _parse_tool()
           , _image_tool()
+          , _environment_tool()
         ]
 
-    def extra_payload(self, session_id: int) -> dict:
+    def preset_name(self, model_id: str) -> str | None:
+        """The short preset name of a chat model id, None when unknown."""
+        for name, preset in VENICE_CHAT_PRESETS.items():
+            if model_id in (preset.get("normal"), preset.get("nsfw")):
+                return name
+        return None
+
+    def request_model(self, name: str, nsfw: bool = False) -> str:
+        """Resolve a model string for one request: a preset name (any
+        casing) maps to its NSFW variant behind the 18+ gate, to its
+        normal id anywhere else. A raw id passes through unchanged."""
+        for catalog_name, preset in VENICE_CHAT_PRESETS.items():
+            if catalog_name.lower() == str(name).strip().lower():
+                if nsfw and preset.get("nsfw"):
+                    return preset["nsfw"]
+                return preset["normal"]
+        return name
+
+    def resolve_model(self, name: str) -> str:
+        """Map a short preset name (any casing) to its model id, pass
+        anything else through unchanged."""
+        return self.request_model(name, nsfw=False)
+
+    def context_length(self, model_name: str) -> int | None:
+        """The context size of a model in tokens, None when unknown. A
+        preset name resolves to its normal variant first."""
+        return self.context_lengths.get(self.request_model(model_name, nsfw=False))
+
+    def cost_of(self, data: dict) -> float:
+        """The Venice request cost: the answer carries it split by billing
+        currency. The USD part is the metric, the DIEM part fills in when
+        the plan bills that way."""
+        cost = data.get("cost") or {}
+        return float(cost.get("usd") or cost.get("diem") or 0)
+
+    def extra_payload(self, session_id: int, model: str = "", nsfw: bool = False) -> dict:
         # Venice appends its own system prompt unless told off; the harness
         # ships its own. prompt_cache_key routes a session to one backend.
-        return {
+        # A preset name in the model string resolves here, at request time:
+        # the NSFW variant behind the 18+ gate, the normal id elsewhere.
+        payload = {
             "venice_parameters": {"include_venice_system_prompt": False}
           , "prompt_cache_key": str(session_id)
         }
+        if model:
+            payload["model"] = self.request_model(model, nsfw)
+        return payload
+
+    def preset_menu(self) -> list:
+        """One line per chat preset for the eliza providers list."""
+        return [preset_menu_line(name, preset) for name, preset in VENICE_CHAT_PRESETS.items()]
+
+    async def fetch_usage(self, session, api_key: str):
+        """The rate-limits answer plus the billing allowance. /billing/balance
+        needs an ADMIN key, so an inference key keeps the plain row without
+        an error. The billing answer says the plan currency, and the
+        allowance of the plan: the remaining credit and, when the plan
+        reports one, the reserve it draws from."""
+        rows, error = await super().fetch_usage(session, api_key)
+        if error or not rows:
+            return rows, error
+        try:
+            async with session.get(
+                "https://api.venice.ai/api/v1/billing/balance"
+                , headers={"Authorization": f"Bearer {api_key}"}
+                , timeout=aiohttp.ClientTimeout(total=15),
+            ) as response:
+                if response.status != 200:
+                    # An inference key cannot read the billing endpoint.
+                    return rows, error
+                try:
+                    billing = await response.json(content_type=None)
+                except Exception:
+                    return rows, error
+        except (aiohttp.ClientError, asyncio.TimeoutError):
+            return rows, error
+        if not isinstance(billing, dict):
+            return rows, error
+        parts = []
+        currency = billing.get("consumptionCurrency")
+        if currency:
+            parts.append(f"plan currency {currency}")
+        balances = billing.get("balances") or {}
+        remaining = balances.get("diem")
+        reserve = billing.get("diemEpochAllocation")
+        if isinstance(remaining, (int, float)) and isinstance(reserve, (int, float)) and reserve:
+            parts.append(f"allowance {remaining:g} of {reserve:g} points left this epoch")
+        elif isinstance(balances.get("usd"), (int, float)):
+            parts.append(f"credit balance ${balances['usd']:g}")
+        if billing.get("canConsume") is False:
+            rows[0]["exhausted"] = True
+        if parts:
+            rows[0]["text"] += f"; {'; '.join(parts)}"
+        return rows, error
 
     def parse_usage(self, data: dict) -> list:
         payload = data.get("data") if isinstance(data.get("data"), dict) else {}

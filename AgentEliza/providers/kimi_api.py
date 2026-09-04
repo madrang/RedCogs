@@ -17,7 +17,7 @@ class KimiApiProvider(Provider):
         """The vision tool: image analysis, only with a Kimi provider."""
         return [analyze_image_tool(self.vision_model)]
 
-    def extra_payload(self, session_id: int) -> dict:
+    def extra_payload(self, session_id: int, model: str = "", nsfw: bool = False) -> dict:
         # Kimi-specific field: enables context caching per session.
         return {"prompt_cache_key": str(session_id)}
 
