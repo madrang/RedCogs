@@ -125,6 +125,12 @@ class Provider:
         resolves per request like any preset."""
         return self.models[0]
 
+    def preset_fallback(self, model: str) -> str | None:
+        """The preset one step up in cost from the preset of the model, for
+        an overload fallback. None when the provider ranks no presets or
+        the model sits in none."""
+        return None
+
     def resolve_model(self, name: str) -> str:
         """Map a display name to its model id, pass anything else through."""
         return name

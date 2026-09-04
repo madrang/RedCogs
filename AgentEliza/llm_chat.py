@@ -425,6 +425,45 @@ class ChatEngine:
             request that runs the tool keeps its model."""
             session.model_override = model_id
 
+        # A staged overload notice: the wrapper fills it, the reply loop
+        # yields it as the leading segment, so the user always sees the
+        # error even when the fallback rescues the request.
+        overload_notice = []
+
+        async def chat_with_overload_fallback(request_payload):
+            """One reply-path chat request with the overload fallback: a
+            429 that names model overload moves the conversation to the
+            next preset up in cost and retries once on it. The move rides
+            the session override, so it holds for the conversation and
+            dies with it. The error still reaches the user: the notice is
+            staged with the fallback name and yields ahead of the answer.
+            Any other failure passes through."""
+            try:
+                return await self.api.chat_request(api_key, request_payload)
+            except ChatError as e:
+                overloaded = (
+                    e.kind == "rate_limit"
+                    and isinstance(e.raw, dict)
+                    and "overloaded" in str(e.raw.get("error") or "").lower()
+                )
+                if preset is None or not overloaded:
+                    raise
+                fallback = preset.preset_fallback(request_payload.get("model") or "")
+                if not fallback:
+                    raise
+                log.warning(
+                    "The model %s is overloaded: the conversation moves to the preset %s for now."
+                    , request_payload.get("model"), fallback,
+                )
+                overload_notice.append(
+                    f"⚠️ {e}\n```\n{json.dumps(e.raw, ensure_ascii=False)[:1500]}\n```"
+                    f"\nThe preset {fallback} answers this conversation for now."
+                )
+                await set_conversation_model(fallback)
+                request_payload["model"] = fallback
+                request_payload.update(preset.extra_payload(session_id, fallback, gated))
+                return await self.api.chat_request(api_key, request_payload)
+
         # The tool rounds of this reply: assistant calls and tool results, as
         # the API sent them. The session keeps them until a compaction.
         exchange = []
@@ -433,12 +472,15 @@ class ChatEngine:
         emitted = False
         for _ in range(rounds):
             try:
-                data = await self.api.chat_request(api_key, payload)
+                data = await chat_with_overload_fallback(payload)
             finally:
                 # The idle and cache clock counts from the last provider
                 # contact, not from the user message: a long generation or a
                 # tool round re-warms the cache when its answer arrives.
                 session.touch()
+            if overload_notice:
+                # The overload notice leads the reply, ahead of any model text.
+                yield overload_notice.pop(0)
             round_usage = data.get("usage") or {}
             for key in usage:
                 usage[key] += round_usage.get(key) or 0
@@ -522,9 +564,12 @@ class ChatEngine:
         # The rounds are spent: one last pass without tools, so the model can answer with what it found.
         payload["tool_choice"] = "none"
         try:
-            data = await self.api.chat_request(api_key, payload)
+            data = await chat_with_overload_fallback(payload)
         finally:
             session.touch()
+        if overload_notice:
+            # The overload notice leads the reply, ahead of the closing text.
+            yield overload_notice.pop(0)
         round_usage = data.get("usage") or {}
         for key in usage:
             usage[key] += round_usage.get(key) or 0

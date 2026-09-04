@@ -103,8 +103,9 @@ VENICE_CHAT_CAPABILITIES = ("large context", "vision", "uncensored", "code")
 # 18+ gate (a different model with its own capability set), and the
 # capabilities the preset provides. A trait value is a cost scale from 0
 # to 1: the input price of the model over the priciest catalog model
-# (Kimi, read 2026-09-03 through scripts/list_models.py). A value of 0 is
-# omitted: GLM Lite, the cheapest, carries an empty traits object. The
+# (Kimi and Aion tie at the ceiling, read 2026-09-03 through
+# scripts/list_models.py). A value of 0 is omitted: GLM Lite, the
+# cheapest, carries an empty traits object. The
 # presence of a key still means the preset provides the capability. The
 # catalog order is preference order: the first preset that satisfies a
 # request wins. The short names are the only model handle the agent ever
@@ -135,6 +136,36 @@ VENICE_CHAT_PRESETS = {
   , "Inkling": {
         "normal": "inkling"
       , "traits": {"vision": 0.33, "code": 0.33}
+    }
+  , "DeepSeek Lite": {
+        "normal": "deepseek-v4-flash-0731"
+      , "traits": {"large context": 0.05, "code": 0.05}
+    }
+  , "DeepSeek Pro": {
+        "normal": "deepseek-v4-pro"
+      , "traits": {"large context": 0.44, "code": 0.44}
+    }
+  , "Gemma": {
+        "normal": "google-gemma-4-31b-it"
+      , "traits": {"vision": 0.03}
+      , "nsfw": "gemma-4-uncensored"
+      , "nsfw_traits": {"vision": 0.04}
+    }
+  , "Aion Mini": {
+        "normal": "aion-labs-aion-3-0-mini"
+      , "traits": {"uncensored": 0.23}
+    }
+  , "Aion": {
+        "normal": "aion-labs-aion-3-0"
+      , "traits": {"uncensored": 1.0}
+    }
+  , "Qwen Lite": {
+        "normal": "qwen3-6-35b-a3b"
+      , "traits": {"vision": 0.03, "code": 0.03, "uncensored": 0.03}
+    }
+  , "Qwen": {
+        "normal": "qwen-3-8-27b"
+      , "traits": {"vision": 0.12, "code": 0.12, "uncensored": 0.12}
     }
 }
 
@@ -527,6 +558,13 @@ class VeniceApiProvider(Provider):
       , "gemini-3-5-flash"
       , "aion-labs-aion-3-0"
       , "inkling"
+      , "deepseek-v4-flash-0731"
+      , "deepseek-v4-pro"
+      , "google-gemma-4-31b-it"
+      , "gemma-4-uncensored"
+      , "aion-labs-aion-3-0-mini"
+      , "qwen3-6-35b-a3b"
+      , "qwen-3-8-27b"
     ]
     context_lengths = {
         "z-ai-glm-5-3": 1_000_000
@@ -538,6 +576,13 @@ class VeniceApiProvider(Provider):
       , "gemini-3-5-flash": 1_000_000
       , "aion-labs-aion-3-0": 128_000
       , "inkling": 524_288
+      , "deepseek-v4-flash-0731": 1_000_000
+      , "deepseek-v4-pro": 1_000_000
+      , "google-gemma-4-31b-it": 256_000
+      , "gemma-4-uncensored": 256_000
+      , "aion-labs-aion-3-0-mini": 128_000
+      , "qwen3-6-35b-a3b": 256_000
+      , "qwen-3-8-27b": 262_144
     }
     # The curated models with the supportsVision flag of the live model list:
     # they accept image input through the chat contract. `eliza providers`
@@ -549,6 +594,10 @@ class VeniceApiProvider(Provider):
       , "z-ai-glm-5-3-flash"
       , "gemini-3-5-flash"
       , "inkling"
+      , "google-gemma-4-31b-it"
+      , "gemma-4-uncensored"
+      , "qwen3-6-35b-a3b"
+      , "qwen-3-8-27b"
     }
     # Documented balance-and-limits endpoint, readable with the inference key.
     usage_url = "https://api.venice.ai/api/v1/api_keys/rate_limits"
@@ -618,6 +667,25 @@ class VeniceApiProvider(Provider):
             if preset.get("normal") == self.models[0]:
                 return name
         return self.models[0]
+
+    def preset_fallback(self, model: str) -> str | None:
+        """The preset one step up in cost from the preset holding the
+        model (either variant), cycling to the cheapest at the ceiling.
+        The cost of a preset is its highest trait value, 0 for a plain
+        one. None when the model sits in no preset."""
+        ranked = []
+        current = None
+        for name, preset in VENICE_CHAT_PRESETS.items():
+            values = [*preset.get("traits", {}).values(), *preset.get("nsfw_traits", {}).values(), 0.0]
+            entry = (max(values), name)
+            ranked.append(entry)
+            if model in (preset.get("normal"), preset.get("nsfw")):
+                current = entry
+        if current is None:
+            return None
+        ranked.sort()
+        nxt = ranked[(ranked.index(current) + 1) % len(ranked)]
+        return None if nxt == current else nxt[1]
 
     def extra_payload(self, session_id: int, model: str = "", nsfw: bool = False) -> dict:
         # Venice appends its own system prompt unless told off; the harness
