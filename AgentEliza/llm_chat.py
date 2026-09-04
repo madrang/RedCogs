@@ -459,6 +459,14 @@ class ChatEngine:
                     session, additions, exchange, message, guild_id=guild_id, channel_id=channel_id, user_id=user_id, usage=usage
                 )
                 segment = self._final_segment(message, emitted)
+                # One line per reply: a silent model would otherwise leave no
+                # trace at all, and a wrong model behind a preset name would
+                # stay invisible.
+                log.info(
+                    "Reply for session %s: model %s, %d tool rounds, closing %s."
+                    , session_id, payload.get("model"), len(exchange)
+                    , "silent (the no-reply tag or an empty close)" if segment is None else "posted",
+                )
                 if segment is not None:
                     yield segment
                 return
@@ -529,6 +537,14 @@ class ChatEngine:
                 session, additions, exchange, message, guild_id=guild_id, channel_id=channel_id, user_id=user_id, usage=usage
             )
             segment = self._final_segment(message, emitted)
+            # One line per reply: a silent model would otherwise leave no
+            # trace at all, and a wrong model behind a preset name would
+            # stay invisible.
+            log.info(
+                "Reply for session %s: model %s, %d tool rounds, closing %s."
+                , session_id, payload.get("model"), len(exchange)
+                , "silent (the no-reply tag or an empty close)" if segment is None else "posted",
+            )
             if segment is not None:
                 yield segment
             return
