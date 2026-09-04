@@ -191,7 +191,14 @@ class Eliza(commands.Cog):
         return (await self.config.base_url()) or DEFAULT_PROVIDER.base_url
 
     async def model_name(self) -> str:
-        return (await self.config.model_name()) or DEFAULT_PROVIDER.models[0]
+        """The configured model string. A cleared configuration falls back
+        to the default of the ACTIVE provider, not the global one — a
+        preset name resolves per request on providers that carry presets."""
+        stored = await self.config.model_name()
+        if stored:
+            return stored
+        preset = await self.current_preset()
+        return preset.default_model() if preset is not None else DEFAULT_PROVIDER.models[0]
 
     async def current_preset(self):
         """The provider matching the configured base URL, or None for a custom provider."""
@@ -850,9 +857,12 @@ class Eliza(commands.Cog):
         preset = provider_named(target)
         if preset is not None:
             await self.config.base_url.set(preset.base_url)
-            await self.config.model_name.set(preset.models[0])
+            # The default of the provider, a preset name where one exists:
+            # the request-time resolution maps it, gate-aware.
+            default = preset.default_model()
+            await self.config.model_name.set(default)
             await ctx.send(
-                f"Provider set to **{preset.name}**: `{preset.base_url}`, model `{preset.models[0]}`. "
+                f"Provider set to **{preset.name}**: `{preset.base_url}`, model `{preset.preset_name(default) or default}`. "
                 f"Check it with the `eliza status` command."
             )
             return
@@ -887,7 +897,11 @@ class Eliza(commands.Cog):
         """Set the model the agent uses. Known names come from the provider list, others are allowed. Use `clear` to reset."""
         if model_name.lower() == "clear":
             await self.config.model_name.clear()
-            await ctx.send(f"The model has been reset to the default: `{DEFAULT_PROVIDER.models[0]}`.")
+            # The default of the ACTIVE provider, not the global one.
+            preset = await self.current_preset()
+            default = preset.default_model() if preset is not None else DEFAULT_PROVIDER.models[0]
+            display = preset.preset_name(default) or default if preset is not None else default
+            await ctx.send(f"The model has been reset to the default: `{display}`.")
             return
         preset = await self.current_preset()
         # A preset name of the provider stores as the name itself: the

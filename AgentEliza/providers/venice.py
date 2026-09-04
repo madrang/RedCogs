@@ -610,6 +610,15 @@ class VeniceApiProvider(Provider):
         cost = data.get("cost") or {}
         return float(cost.get("usd") or cost.get("diem") or 0)
 
+    def default_model(self) -> str:
+        """The default of a cleared configuration: the preset NAME of the
+        first model, so the default resolves per request like any preset —
+        the 18+ variant behind the gate, the normal id elsewhere."""
+        for name, preset in VENICE_CHAT_PRESETS.items():
+            if preset.get("normal") == self.models[0]:
+                return name
+        return self.models[0]
+
     def extra_payload(self, session_id: int, model: str = "", nsfw: bool = False) -> dict:
         # Venice appends its own system prompt unless told off; the harness
         # ships its own. prompt_cache_key routes a session to one backend.

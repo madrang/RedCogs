@@ -25,10 +25,12 @@ class ZaiProvider(Provider):
     """Z.AI quota monitor (undocumented, reverse-engineered; may change)."""
 
     usage_url = "https://api.z.ai/api/monitor/usage/quota/limit"
-    # Reported by the owner: glm-5.3 and glm-5.2 run a 1M-token context.
+    # glm-5.3 and glm-5.2 run a 1M-token context: 1000000, the size the live
+    # Venice model list reports for the same models, not the 1048576 of 2^20
+    # (the owner reported the 1M figure as too big in live use).
     context_lengths = {
-        "glm-5.3": 1_048_576
-      , "glm-5.2": 1_048_576
+        "glm-5.3": 1_000_000
+      , "glm-5.2": 1_000_000
     }
     def native_tools(self) -> list:
         """The vision tool: image analysis, only with a Z.AI provider."""

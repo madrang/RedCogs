@@ -119,6 +119,12 @@ class Provider:
         provider names no cost."""
         return 0.0
 
+    def default_model(self) -> str:
+        """The model of a cleared configuration: the first entry of the
+        list. A provider may return a preset name instead, so the default
+        resolves per request like any preset."""
+        return self.models[0]
+
     def resolve_model(self, name: str) -> str:
         """Map a display name to its model id, pass anything else through."""
         return name
