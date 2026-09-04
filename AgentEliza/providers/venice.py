@@ -211,8 +211,10 @@ VENICE_IMAGE_DARK_MAX = 8
 VENICE_CHAT_CAPABILITIES = ("large context", "vision", "uncensored", "code")
 # Chat presets: a short display name for the agent and the user, the model
 # id behind it, an optional NSFW variant id for conversations behind the
-# 18+ gate (a different model with its own capability set), the capability
-# names the preset provides, and the cost scale of the preset. The cost is
+# 18+ gate, the capability names the preset provides, and the cost scale
+# of the preset. The variant carries the same capabilities as the normal
+# id: a model whose capabilities differ joins the catalog under its own
+# preset. The cost is
 # the operating cost of the model — 10x the input price plus 1x the output
 # and cache-read prices, each per 1M tokens (the operating_usd_per_m column
 # of scripts/list_models.py) — over the priciest catalog model (Kimi at the
@@ -238,7 +240,6 @@ VENICE_CHAT_PRESETS = {
       , "traits": ["vision"]
       , "cost": 0.0
       , "nsfw": "gemma-4-uncensored"
-      , "nsfw_traits": ["vision"]
     }
 
     # Z.AI
@@ -247,7 +248,6 @@ VENICE_CHAT_PRESETS = {
       , "traits": []
       , "cost": -0.02
       , "nsfw": "olafangensan-glm-4.7-flash-heretic"
-      , "nsfw_traits": []
     }
   , "GLM Vision": {
         "normal": "z-ai-glm-5-3-flash"
@@ -770,14 +770,15 @@ def _environment_tool() -> dict:
         for name, preset in VENICE_CHAT_PRESETS.items():
             remaining = [trait for trait in requested if trait != "uncensored"]
             if adult:
-                # The 18+ variant is the uncensored build of the preset; the
-                # other capabilities must hold for the variant itself. A
-                # preset without a variant can still be uncensored by
-                # itself, its normal id is the uncensored build. The stored
-                # value is the preset name: the request-time resolution
-                # picks the variant by the gate of the moment.
+                # The 18+ variant shares the trait list of the preset: a
+                # variant joins a preset only when it carries the same
+                # capabilities. A preset without a variant can still be
+                # uncensored by itself, its normal id is the uncensored
+                # build. The stored value is the preset name: the
+                # request-time resolution picks the variant by the gate of
+                # the moment.
                 variant = preset.get("nsfw")
-                if variant is not None and all(trait in preset.get("nsfw_traits", ()) for trait in remaining):
+                if variant is not None and all(trait in preset["traits"] for trait in remaining):
                     await set_conversation_model(name)
                     granted = ", ".join(sorted(requested))
                     return (
