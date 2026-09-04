@@ -16,6 +16,7 @@
     , "min_python_version": [ 3, 11, 0 ]
     , "requirements": [
         "mcp>=2"
+      , "Pillow"
     ]
     , "hidden": false
     , "end_user_data_statement": "This cog stores per-user long-term memory, conversation summaries, usage stats, and rate windows, managed by the AI agent and the bot admins. All of it is deleted on an end-user data request."

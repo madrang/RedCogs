@@ -2,6 +2,7 @@ from urllib.parse import urlparse
 
 import asyncio
 import base64
+import io
 import random
 import re
 
@@ -10,6 +11,13 @@ import aiohttp
 from ..llm_chat import ChatError
 from ..tools.base import DISCORD_FILE_HOSTS, _cap
 from .base import Provider, analyze_image_tool
+
+# The pixel decoder of the blank-refusal check. Guarded: without Pillow
+# the check cannot run and a flagged answer posts with its [venice] line.
+try:
+    from PIL import Image, ImageStat
+except ImportError:
+    Image = None
 
 # The limit types of the rate-limits endpoint, spelled out for the usage rows.
 VENICE_LIMIT_NAMES = {"RPM": "requests/min", "RPD": "requests/day", "TPM": "tokens/min"}
@@ -188,12 +196,14 @@ VENICE_IMAGE_TRAIT_LABELS = {
     "copyrighted_material": "refuses copyrighted material"
   , "uncensored": "uncensored"
 }
-# The refusal asset of the endpoint: a uniform blank image that compresses
-# far below any real render (exactly 1926 bytes live, while the smallest
-# real render of the 2026-09-03 sweep weighed 193 KB). No image decoder
-# rides the cog, so the decoded size stands in for the pixel check. The
-# ceiling sits just above the observed asset.
-VENICE_IMAGE_BLANK_MAX_BYTES = 2048
+# The refusal render of the endpoint: a uniform blank image (exactly 1926
+# bytes live as webp, while the smallest real render of the 2026-09-03
+# sweep weighed 193 KB). The pixel check decides blankness — no size
+# ceiling: a 7.5 KB uniform blank read live on 2026-09-05 proved the
+# compressed size spans too wide.
+# A per-channel ceiling for the all-dark read of the pixel check: a
+# refused render is uniform black, dark noise sits under this.
+VENICE_IMAGE_DARK_MAX = 8
 # The capabilities the agent can ask of the environment tool. One settled
 # vocabulary: the same words in the schema enum, the catalog traits, and
 # the tool answers. The code trait mirrors the optimizedForCode flag of
@@ -211,11 +221,27 @@ VENICE_CHAT_CAPABILITIES = ("large context", "vision", "uncensored", "code")
 # preference order: the first preset that satisfies a request wins. The
 # short names are the only model handle the agent ever sees.
 VENICE_CHAT_PRESETS = {
-    "GLM 1M": {
-        "normal": "z-ai-glm-5-3"
+    "DeepSeek Lite": {
+        "normal": "deepseek-v4-flash-0731"
       , "traits": ["large context", "code"]
-      , "cost": 0.39
+      , "cost": 0.0
     }
+  , "DeepSeek Pro": {
+        "normal": "deepseek-v4-pro"
+      , "traits": ["large context", "code"]
+      , "cost": 0.33
+    }
+
+    # Google
+  , "Gemma": {
+        "normal": "google-gemma-4-31b-it"
+      , "traits": ["vision"]
+      , "cost": 0.0
+      , "nsfw": "gemma-4-uncensored"
+      , "nsfw_traits": ["vision"]
+    }
+
+    # Z.AI
   , "GLM Lite": {
         "normal": "zai-org-glm-4.7-flash"
       , "traits": []
@@ -228,48 +254,24 @@ VENICE_CHAT_PRESETS = {
       , "traits": ["large context", "vision", "code"]
       , "cost": 0.0
     }
-  , "Kimi": {
-        "normal": "kimi-k3"
-      , "traits": ["large context", "vision", "code"]
-      , "cost": 1.0
+  , "GLM 1M": {
+        "normal": "z-ai-glm-5-3"
+      , "traits": ["large context", "code"]
+      , "cost": 0.39
     }
-  , "Venice Uncensored": {
-        "normal": "venice-uncensored-1-2"
-      , "traits": ["vision", "uncensored"]
-      , "cost": 0.01
-    }
+
   , "Inkling": {
         "normal": "inkling"
       , "traits": ["vision", "code"]
       , "cost": 0.29
     }
-  , "DeepSeek Lite": {
-        "normal": "deepseek-v4-flash-0731"
-      , "traits": ["large context", "code"]
-      , "cost": 0.0
+
+  , "Kimi": {
+        "normal": "kimi-k3"
+      , "traits": ["large context", "vision", "code"]
+      , "cost": 1.0
     }
-  , "DeepSeek Pro": {
-        "normal": "deepseek-v4-pro"
-      , "traits": ["large context", "code"]
-      , "cost": 0.33
-    }
-  , "Gemma": {
-        "normal": "google-gemma-4-31b-it"
-      , "traits": ["vision"]
-      , "cost": 0.0
-      , "nsfw": "gemma-4-uncensored"
-      , "nsfw_traits": ["vision"]
-    }
-  , "Aion Mini": {
-        "normal": "aion-labs-aion-3-0-mini"
-      , "traits": ["uncensored"]
-      , "cost": 0.16
-    }
-  , "Aion": {
-        "normal": "aion-labs-aion-3-0"
-      , "traits": ["uncensored"]
-      , "cost": 0.80
-    }
+
   , "Qwen Lite": {
         "normal": "qwen3-6-35b-a3b"
       , "traits": ["vision", "code", "uncensored"]
@@ -280,8 +282,23 @@ VENICE_CHAT_PRESETS = {
       , "traits": ["vision", "code", "uncensored"]
       , "cost": 0.10
     }
-}
 
+  , "Aion Mini": {
+        "normal": "aion-labs-aion-3-0-mini"
+      , "traits": ["uncensored"]
+      , "cost": 0.16
+    }
+  , "Aion": {
+        "normal": "aion-labs-aion-3-0"
+      , "traits": ["uncensored"]
+      , "cost": 0.80
+    }
+  , "Venice Uncensored": {
+        "normal": "venice-uncensored-1-2"
+      , "traits": ["vision", "uncensored"]
+      , "cost": 0.01
+    }
+}
 
 def _header_flag(headers, name: str) -> str:
     """The yes/no/unknown text of a boolean response header."""
@@ -306,6 +323,41 @@ def _moderation_status(headers) -> tuple[str, str]:
         if flag == "yes"
     ]
     return violation, f"[venice] {', '.join(raised)}" if raised else ""
+
+
+def _blank_check(data: bytes) -> bool | None:
+    """True when the image is a uniform fill or near-black, False when it
+    holds content, None when no decoder can read it."""
+    if Image is None:
+        return None
+    try:
+        with Image.open(io.BytesIO(data)) as decoded:
+            picture = decoded.convert("RGB")
+            colors = picture.getcolors(maxcolors=2)
+            if colors is not None:
+                # Two colors at most: one is a uniform fill, two is content.
+                return len(colors) == 1
+            stat = ImageStat.Stat(picture)
+            return all(maximum <= VENICE_IMAGE_DARK_MAX for _minimum, maximum in stat.extrema)
+    except Exception:
+        return None
+
+
+def _refusal_error(what: str, data: bytes, violation: str, status: str) -> str | None:
+    """The error text when the endpoint refused the request, else None: the
+    image posts. A refusal needs the violation flag and the pixel check
+    reading blank. No size stand-in: without a decoder the check cannot
+    run and a flagged answer posts (the [venice] line already names the
+    flag), a real render posts the same way."""
+    if violation != "yes":
+        return None
+    if _blank_check(data) is not True:
+        return None
+    return (
+        f"Error: the {what} was refused: the answer is a blank image of {len(data)} bytes "
+        f"and the endpoint flags a content violation. {status}. Nothing was posted. "
+        "Describe the subject instead of naming it, or pick a model without the refusal flag."
+    )
 
 
 def _search_tool() -> dict:
@@ -525,15 +577,9 @@ def _image_tool() -> dict:
             return "Error: the image generation returned unreadable image data."
         if not raw:
             return "Error: the image generation returned an empty image."
-        if len(raw) <= VENICE_IMAGE_BLANK_MAX_BYTES and violation == "yes":
-            # A refusal needs both marks: the tiny image and the violation
-            # flag. Without the flag, a small image posts: the agent assumes
-            # it holds content.
-            return (
-                f"Error: the generation was refused: the answer is a blank image of {len(raw)} bytes "
-                f"and the endpoint flags a content violation. {status}. Nothing was posted. "
-                "Describe the subject instead of naming it, or pick a model without the refusal flag."
-            )
+        refused = _refusal_error("generation", raw, violation, status)
+        if refused is not None:
+            return refused
         # The format stays the endpoint default (webp). The id names the file:
         # each image of a conversation lands under its own name.
         name = re.sub(r"[\s/\\]+", "-", str(data.get("id") or "venice-image"))[:100]
@@ -643,14 +689,9 @@ def _edit_tool() -> dict:
         if not isinstance(data, (bytes, bytearray)) or not data:
             return "Error: the image edit returned no image."
         violation, status = _moderation_status(headers)
-        if len(data) <= VENICE_IMAGE_BLANK_MAX_BYTES and violation == "yes":
-            # A refusal needs both marks: the tiny image and the violation
-            # flag, the same gate as generate.
-            return (
-                f"Error: the edit was refused: the answer is a blank image of {len(data)} bytes "
-                f"and the endpoint flags a content violation. {status}. Nothing was posted. "
-                "Describe the subject instead of naming it, or pick a model without the refusal flag."
-            )
+        refused = _refusal_error("edit", bytes(data), violation, status)
+        if refused is not None:
+            return refused
         if send_file is None:
             return "Error: the image posting is not available here."
         # The binary answer carries no generation id: the answer format
@@ -840,16 +881,20 @@ class VeniceApiProvider(Provider):
     # they accept image input through the chat contract. `eliza providers`
     # marks them, and the later direct image path rides on this set.
     vision_models = {
-        "venice-uncensored-1-2"
-      , "kimi-k3"
-      , "qwen-3-8-max"
+        "gemma-4-uncensored"
       , "z-ai-glm-5-3-flash"
-      , "gemini-3-5-flash"
-      , "inkling"
-      , "google-gemma-4-31b-it"
-      , "gemma-4-uncensored"
+
       , "qwen3-6-35b-a3b"
       , "qwen-3-8-27b"
+      , "qwen-3-8-max"
+
+      , "gemini-3-5-flash"
+
+      , "inkling"
+      , "kimi-k3"
+
+        # Under Tests! TODO: Validate if we keep it.
+      , "venice-uncensored-1-2"
     }
     # Documented balance-and-limits endpoint, readable with the inference key.
     usage_url = "https://api.venice.ai/api/v1/api_keys/rate_limits"
