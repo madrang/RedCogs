@@ -12,6 +12,10 @@ _STATS_DEFAULT = {
     , "cached_tokens": 0
     , "cost": 0.0
     , "cost_months": {}
+    , "tool_calls": 0
+    , "images": 0
+    , "inpaints": 0
+    , "music": 0
 }
 _RATE_DEFAULT = {
       "count": 0
@@ -59,7 +63,11 @@ class ScopeStats:
         prompt_tokens, completion_tokens, cached_tokens, and cost — the
         generic cost metric of the provider (its currency or its compute
         units; 0 when the provider names none). The cost lands in the scope
-        total and in the bucket of the current UTC month.
+        total and in the bucket of the current UTC month. The integer
+        counters ride along: tool_calls (every executed call of the
+        interaction) and the media counters a native tool declares
+        (images, inpaints, music — a generation counts only when it
+        succeeds).
         """
         ids = {"guild": guild_id, "channel": channel_id, "user": user_id}
         cost = float(usage.get("cost") or 0)
@@ -69,7 +77,10 @@ class ScopeStats:
             group = self._group(scope, scope_id)
             async with group.stats() as stats:
                 stats["messages"] = stats.get("messages", 0) + 1
-                for key in ("prompt_tokens", "completion_tokens", "cached_tokens"):
+                for key in (
+                    "prompt_tokens", "completion_tokens", "cached_tokens"
+                  , "tool_calls", "images", "inpaints", "music"
+                ):
                     stats[key] = stats.get(key, 0) + (usage.get(key) or 0)
                 if cost:
                     stats["cost"] = stats.get("cost", 0.0) + cost
@@ -122,6 +133,22 @@ class ScopeStats:
     async def get(self, scope: str, scope_id: int) -> dict:
         """The stats dict of one scope instance."""
         return await self._group(scope, scope_id).stats()
+
+    async def top_costs(self, count: int = 5) -> list[tuple[str, int, float]]:
+        """The scopes with the highest known cost total, guild and user
+        scopes, in descending order. Each entry is (scope, scope_id,
+        cost). A scope with no cost stays off the list."""
+        entries = []
+        for scope, all_data in (
+            ("guild", await self.config.all_guilds())
+          , ("user", await self.config.all_users())
+        ):
+            for scope_id, data in (all_data or {}).items():
+                cost = float(((data or {}).get("stats") or {}).get("cost") or 0)
+                if cost > 0:
+                    entries.append((scope, int(scope_id), cost))
+        entries.sort(key=lambda entry: entry[2], reverse=True)
+        return entries[:count]
 
     async def rate(self, scope: str, scope_id: int) -> dict:
         """The rate window dict of one scope instance."""

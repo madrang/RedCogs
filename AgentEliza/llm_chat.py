@@ -267,7 +267,10 @@ class ChatEngine:
         """The reply work of generate_reply. The caller holds the session lock."""
         preset = await self.api.current_preset()
         cache_ttl = getattr(preset, "cache_ttl", None) or DEFAULT_CACHE_TTL
-        usage = {"prompt_tokens": 0, "completion_tokens": 0, "cached_tokens": 0, "cost": 0.0}
+        usage = {
+            "prompt_tokens": 0, "completion_tokens": 0, "cached_tokens": 0, "cost": 0.0
+          , "tool_calls": 0, "images": 0, "inpaints": 0, "music": 0
+        }
         # Context expiry: idle past the cache lifetime, or a compaction.
         # Only then is the system message rebuilt (prompt, memory, summary).
         # An agent memory update is already in the context as a tool call, so no reload between.
@@ -334,11 +337,16 @@ class ChatEngine:
             stamp = f"{datetime.now(timezone.utc):{MESSAGE_TIME_FORMAT}}"
         tools, routes, replaced = await self.mcp.gather_tools(preset, api_key)
         native_routes = {}
+        media_counts = {}
         if preset is not None:
             # Native provider tools (for example the Z.AI vision tool) join
             # the MCP tools: a provider tool takes the harness name it reuses.
+            # A tool that declares "media" names the usage counter a
+            # successful call increments (images, inpaints, music).
             for entry in preset.native_tools():
                 native_routes[entry["name"]] = entry["handler"]
+                if entry.get("media"):
+                    media_counts[entry["name"]] = entry["media"]
                 replaced.add(entry["name"])
                 tools.append({
                     "type": "function"
@@ -620,6 +628,13 @@ class ChatEngine:
                     # A tool failure must not kill the reply: the model gets the error as the tool result.
                     log.exception("The tool %s failed:", name)
                     result_text = f"Error: the tool {name} failed: {type(e).__name__}: {e}"
+                # The counters of the scope stats: every executed call counts,
+                # a media generation counts only when it answers without an
+                # error line (the uniform failure prefix of every tool).
+                usage["tool_calls"] += 1
+                media = media_counts.get(name)
+                if media and not result_text.startswith("Error:"):
+                    usage[media] = usage.get(media, 0) + 1
                 result = {
                     "role": "tool"
                     , "tool_call_id": call.get("id", "")

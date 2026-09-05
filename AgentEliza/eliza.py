@@ -1291,7 +1291,9 @@ class Eliza(commands.Cog):
     @eliza_group.command(name="stats")
     @commands.admin()
     async def eliza_stats(self, ctx: commands.Context, member: discord.Member = None) -> None:
-        """Show the usage stats and rate windows of the current server, channel, and user."""
+        """Show the usage stats and rate windows of the current server, channel, and user.
+
+        The bot owner also sees the top known costs across every server and user scope."""
         targets = [("channel", ctx.channel.id, "Channel")]
         if ctx.guild is not None:
             targets.insert(0, ("guild", ctx.guild.id, "Server"))
@@ -1309,12 +1311,33 @@ class Eliza(commands.Cog):
             if cost:
                 month_cost = (stats.get("cost_months") or {}).get(month_key(), 0)
                 cost_text = f" Cost: {cost:.2f} total, {month_cost:.2f} this month."
+            media_bits = []
+            for key, word in (("images", "image"), ("inpaints", "inpaint"), ("music", "song")):
+                count = stats.get(key) or 0
+                if count:
+                    media_bits.append(f"{count:,} {word}{'s' if count != 1 else ''}")
+            media_text = f" Media: {', '.join(media_bits)}." if media_bits else ""
+            calls = stats.get("tool_calls") or 0
+            calls_text = f" Tool calls: {calls:,}." if calls else ""
             lines.append(
                 f"**{label}** — {stats.get('messages', 0)} messages, "
                 f"{stats.get('prompt_tokens', 0):,} input tokens, "
                 f"{stats.get('completion_tokens', 0):,} output tokens, "
-                f"{stats.get('cached_tokens', 0):,} cached.{cost_text} Interactions: {window}."
+                f"{stats.get('cached_tokens', 0):,} cached.{media_text}{calls_text}{cost_text} Interactions: {window}."
             )
+        if await self.bot.is_owner(ctx.author):
+            top = await self.scope_stats.top_costs()
+            if top:
+                lines.append("")
+                lines.append("**Top known costs** — servers and users across the bot:")
+                for place, (scope, scope_id, cost) in enumerate(top, 1):
+                    if scope == "guild":
+                        guild = self.bot.get_guild(scope_id)
+                        label = f"Server {guild.name}" if guild else f"Server {scope_id}"
+                    else:
+                        known = self.bot.get_user(scope_id)
+                        label = f"User {known}" if known else f"User <@{scope_id}>"
+                    lines.append(f"{place}. {label} — {cost:.2f}")
         embed = discord.Embed(
             title="Usage stats",
             description="\n".join(lines),

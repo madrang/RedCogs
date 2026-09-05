@@ -609,6 +609,9 @@ def _image_tool() -> dict:
         model_notes.append(f"{image_model} ({', '.join(labels)})" if labels else image_model)
     return {
         "name": "generate_image"
+        # The usage counter a successful generation increments (the engine
+        # counts the call into the scope stats).
+      , "media": "images"
         , "description": (
             "Generate one image from a text prompt through Venice and post it to the conversation. "
             f"Known models: {', '.join(model_notes)}. "
@@ -722,6 +725,9 @@ def _edit_tool() -> dict:
         model_notes.append(f"{edit_model} ({', '.join(labels)})" if labels else edit_model)
     return {
         "name": "edit_image"
+        # The usage counter a successful edit increments (the engine counts
+        # the call into the scope stats).
+      , "media": "inpaints"
         , "description": (
             "Edit one image through Venice and post the result to the conversation. "
             "The image is the http(s) URL of the picture: an attachment of a message, "
