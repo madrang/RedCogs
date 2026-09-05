@@ -5,6 +5,7 @@ import base64
 import io
 import random
 import re
+import time
 
 import aiohttp
 
@@ -21,6 +22,16 @@ except ImportError:
 
 # The limit types of the rate-limits endpoint, spelled out for the usage rows.
 VENICE_LIMIT_NAMES = {"RPM": "requests/min", "RPD": "requests/day", "TPM": "tokens/min"}
+# The bundled credit plan of the key: the monthly allowance, and the bank
+# ceiling — Venice keeps at most three months of allowance (300%), the
+# rest is lost. The rate-limits endpoint reports the balance under
+# data.balances.BUNDLED_CREDITS, and the usage row reads it in credits and
+# percent. The feature gates to come read the balance a lot, so a copy at
+# most VENICE_CREDIT_CACHE_SECONDS old serves from the cache.
+VENICE_CREDIT_ALLOWANCE = 22500
+VENICE_CREDIT_BANK_MONTHS = 3
+VENICE_CREDIT_CACHE_SECONDS = 120
+_CREDIT_CACHE = {"balance": None, "read": 0.0}
 # The augment endpoints are experimental and billed per request ($0.01 each).
 VENICE_QUERY_MAX_CHARS = 400
 VENICE_SEARCH_MAX_LIMIT = 20
@@ -1055,52 +1066,49 @@ class VeniceApiProvider(Provider):
         """One line per chat preset for the eliza providers list."""
         return [preset_menu_line(name, preset) for name, preset in VENICE_CHAT_PRESETS.items()]
 
-    async def fetch_usage(self, session, api_key: str):
-        """The rate-limits answer plus the billing allowance. /billing/balance
-        needs an ADMIN key, so an inference key keeps the plain row without
-        an error. The billing answer says the plan currency, and the
-        allowance of the plan: the remaining credit and, when the plan
-        reports one, the reserve it draws from."""
-        rows, error = await super().fetch_usage(session, api_key)
-        if error or not rows:
-            return rows, error
+    async def bundled_credits(self, session, api_key: str):
+        """The bundled credit balance of the key, at most
+        VENICE_CREDIT_CACHE_SECONDS old. None when the endpoint reports no
+        balance. The usage polls refresh the cache; a stale cache
+        re-fetches the rate-limits answer here, and a failed fetch keeps
+        the last value."""
+        now = time.monotonic()
+        if _CREDIT_CACHE["balance"] is not None and now - _CREDIT_CACHE["read"] < VENICE_CREDIT_CACHE_SECONDS:
+            return _CREDIT_CACHE["balance"]
         try:
             async with session.get(
-                "https://api.venice.ai/api/v1/billing/balance"
+                self.usage_url
                 , headers={"Authorization": f"Bearer {api_key}"}
                 , timeout=aiohttp.ClientTimeout(total=15),
             ) as response:
                 if response.status != 200:
-                    # An inference key cannot read the billing endpoint.
-                    return rows, error
+                    return _CREDIT_CACHE["balance"]
                 try:
-                    billing = await response.json(content_type=None)
+                    data = await response.json(content_type=None)
                 except Exception:
-                    return rows, error
+                    return _CREDIT_CACHE["balance"]
         except (aiohttp.ClientError, asyncio.TimeoutError):
-            return rows, error
-        if not isinstance(billing, dict):
-            return rows, error
-        parts = []
-        currency = billing.get("consumptionCurrency")
-        if currency:
-            parts.append(f"plan currency {currency}")
-        balances = billing.get("balances") or {}
-        remaining = balances.get("diem")
-        reserve = billing.get("diemEpochAllocation")
-        if isinstance(remaining, (int, float)) and isinstance(reserve, (int, float)) and reserve:
-            parts.append(f"allowance {remaining:g} of {reserve:g} points left this epoch")
-        elif isinstance(balances.get("usd"), (int, float)):
-            parts.append(f"credit balance ${balances['usd']:g}")
-        if billing.get("canConsume") is False:
-            rows[0]["exhausted"] = True
-        if parts:
-            rows[0]["text"] += f"; {'; '.join(parts)}"
-        return rows, error
+            return _CREDIT_CACHE["balance"]
+        self._remember_credits(data)
+        return _CREDIT_CACHE["balance"]
+
+    @staticmethod
+    def _remember_credits(data: dict):
+        """The bundled credit balance of a rate-limits answer, None when it
+        reports none. A reported balance lands in the cache with its read
+        time."""
+        payload = data.get("data") if isinstance(data.get("data"), dict) else {}
+        balance = (payload.get("balances") or {}).get("BUNDLED_CREDITS")
+        if isinstance(balance, (int, float)):
+            _CREDIT_CACHE["balance"] = balance
+            _CREDIT_CACHE["read"] = time.monotonic()
+            return balance
+        return None
 
     def parse_usage(self, data: dict) -> list:
         payload = data.get("data") if isinstance(data.get("data"), dict) else {}
         balances = payload.get("balances") or {}
+        bundled = self._remember_credits(data)
         usd = balances.get("USD")
         diem = balances.get("DIEM")
         tier = payload.get("apiTier") or {}
@@ -1112,7 +1120,18 @@ class VeniceApiProvider(Provider):
             and usd <= 0
             and diem <= 0
         )
-        text = f"available ${usd} USD, {diem} Diem, tier {tier.get('id') or 'unknown'}"
+        parts = [f"tier {tier.get('id') or 'unknown'}"]
+        if isinstance(usd, (int, float)):
+            parts.append(f"${usd:g} USD available")
+        if isinstance(diem, (int, float)):
+            parts.append(f"{diem:g} Diem available")
+        if isinstance(bundled, (int, float)):
+            percent = min(bundled / VENICE_CREDIT_ALLOWANCE, VENICE_CREDIT_BANK_MONTHS) * 100
+            parts.append(
+                f"bundled credits {bundled:,.6g} of {VENICE_CREDIT_ALLOWANCE:,} "
+                f"({percent:.0f}%, bank cap {VENICE_CREDIT_BANK_MONTHS * 100:.0f}%)"
+            )
+        text = ", ".join(parts)
         # The endpoint reports per-model limits only: the consumption lives in
         # the x-ratelimit-* response headers, which a poll cannot read. The
         # highest amount of each type stands for the whole key.
