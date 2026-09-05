@@ -611,8 +611,20 @@ class ChatEngine:
                 except json.JSONDecodeError:
                     arguments = {}
                 name = function.get("name", "")
+                media = media_counts.get(name)
+                media_refusal = (
+                    # The bot owner bypasses the media windows, like the
+                    # interaction limits. A generation still counts: the
+                    # channel budget stays honest.
+                    await self.scope_stats.media_refusal(guild_id=guild_id, channel_id=channel_id, user_id=user_id)
+                    if media and not is_owner else None
+                )
                 try:
-                    if name in routes:
+                    if media_refusal is not None:
+                        # The hourly media windows are full: the call never
+                        # reaches the provider, the model sees the refusal.
+                        result_text = media_refusal
+                    elif name in routes:
                         # Routes win: a provider tool can take a harness name.
                         result_text = await self.mcp.run_tool(name, arguments, routes)
                     elif name in native_routes:
@@ -630,11 +642,13 @@ class ChatEngine:
                     result_text = f"Error: the tool {name} failed: {type(e).__name__}: {e}"
                 # The counters of the scope stats: every executed call counts,
                 # a media generation counts only when it answers without an
-                # error line (the uniform failure prefix of every tool).
+                # error line (the uniform failure prefix of every tool — the
+                # window refusal carries it too) and takes one slot of the
+                # hourly media windows.
                 usage["tool_calls"] += 1
-                media = media_counts.get(name)
                 if media and not result_text.startswith("Error:"):
                     usage[media] = usage.get(media, 0) + 1
+                    await self.scope_stats.count_media(guild_id=guild_id, channel_id=channel_id, user_id=user_id)
                 result = {
                     "role": "tool"
                     , "tool_call_id": call.get("id", "")

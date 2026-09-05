@@ -3,6 +3,11 @@ import time
 RATE_WINDOW_SECONDS = 3600
 # The cost history keeps this many month keys, the current one included.
 COST_MONTHS_KEPT = 13
+# The hourly allowance of media generations, images and inpaints summed
+# (a music tool joins the same windows): per user, and per channel of a
+# guild. A direct message knows only the user window.
+MEDIA_RATE_USER = 8
+MEDIA_RATE_CHANNEL = 32
 
 # Default counters registered at each scope.
 _STATS_DEFAULT = {
@@ -49,7 +54,8 @@ class ScopeStats:
         for register in (config.register_guild, config.register_channel, config.register_user):
             register(
                 stats=dict(_STATS_DEFAULT)
-                , rate=dict(_RATE_DEFAULT)
+              , rate=dict(_RATE_DEFAULT)
+              , media_rate=dict(_RATE_DEFAULT)
             )
 
     def _group(self, scope: str, scope_id: int):
@@ -133,6 +139,57 @@ class ScopeStats:
     async def get(self, scope: str, scope_id: int) -> dict:
         """The stats dict of one scope instance."""
         return await self._group(scope, scope_id).stats()
+
+    async def media_refusal(self, *, guild_id, channel_id, user_id) -> str | None:
+        """The refusal text when one more media generation would pass an
+        hourly window, else None. The user window (MEDIA_RATE_USER) counts
+        everywhere; the channel window (MEDIA_RATE_CHANNEL) counts in a
+        guild only. Images and inpaints share the windows; the count rises
+        on a successful generation only, so the text starts with the
+        uniform error prefix and never counts as one."""
+        ids = {"user": user_id}
+        if guild_id is not None:
+            ids["channel"] = channel_id
+        limits = {"user": MEDIA_RATE_USER, "channel": MEDIA_RATE_CHANNEL}
+        now = int(time.time())
+        live = {
+            scope: scope_id
+            for scope, scope_id in ids.items()
+            if scope_id is not None and limits.get(scope)
+        }
+        for scope, scope_id in live.items():
+            group = self._group(scope, scope_id)
+            async with group.media_rate() as rate:
+                if now - rate.get("start", 0) >= RATE_WINDOW_SECONDS:
+                    rate["start"] = now
+                    rate["count"] = 0
+        for scope, scope_id in live.items():
+            group = self._group(scope, scope_id)
+            rate = await group.media_rate()
+            if rate.get("count", 0) >= limits[scope]:
+                reset = rate.get("start", now) + RATE_WINDOW_SECONDS
+                return (
+                    f"Error: the {scope} generation limit is reached ({limits[scope]} per hour). "
+                    f"Try again <t:{reset}:R>."
+                )
+        return None
+
+    async def count_media(self, *, guild_id, channel_id, user_id) -> None:
+        """Count one successful media generation into the hourly windows:
+        the user window everywhere, the channel window in a guild."""
+        ids = {"user": user_id}
+        if guild_id is not None:
+            ids["channel"] = channel_id
+        now = int(time.time())
+        for scope, scope_id in ids.items():
+            if scope_id is None:
+                continue
+            group = self._group(scope, scope_id)
+            async with group.media_rate() as rate:
+                if now - rate.get("start", 0) >= RATE_WINDOW_SECONDS:
+                    rate["start"] = now
+                    rate["count"] = 0
+                rate["count"] = rate.get("count", 0) + 1
 
     async def top_costs(self, count: int = 5) -> list[tuple[str, int, float]]:
         """The scopes with the highest known cost total, guild and user
