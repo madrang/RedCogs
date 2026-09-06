@@ -10,6 +10,18 @@ import discord
 # A guild channel reports its own limit in guild.filesize_limit (boosted servers get more).
 FILE_SEND_DM_MAX_BYTES = 26_214_400
 
+# The files posted per channel id since the load of the module. The reply
+# stream reads the count between segments: a tool that posts a file below
+# the open message seals it, because Discord renders the attachments of a
+# message under its text, and an edit after the file would rewrite the
+# timeline of the answer.
+_CHANNEL_POSTS: dict[int, int] = {}
+
+
+def channel_post_count(channel_id: int) -> int:
+    """The number of files posted to a channel through post_file."""
+    return _CHANNEL_POSTS.get(channel_id, 0)
+
 
 async def post_file(channel, data: bytes, name: str, caption: str | None = None) -> str:
     """Post one file to a channel: the permission check, the upload limit,
@@ -28,6 +40,7 @@ async def post_file(channel, data: bytes, name: str, caption: str | None = None)
         sent = await channel.send(content=caption or None, file=discord.File(io.BytesIO(data), filename=name))
     except (discord.Forbidden, discord.HTTPException) as e:
         return f"Error: the file send failed: {e}."
+    _CHANNEL_POSTS[channel.id] = _CHANNEL_POSTS.get(channel.id, 0) + 1
     # The posted URL names the file for the follow-ups of the agent (an
     # image edit or a vision call). It is signed and expires after about
     # 24 hours.

@@ -23,8 +23,10 @@ from .memory import Memory
 from .pages import paginate
 from .polls import PollManager
 from .providers import DEFAULT_PROVIDER, PROVIDERS, provider_for, provider_named
+from .providers.venice import VENICE_CREDIT_ALLOWANCE, VENICE_CREDIT_BANK_MONTHS, VENICE_CREDIT_CACHE_SECONDS
 from .stats import ScopeStats, month_key
 from .tools import HarnessOptions, HarnessTools, MESSAGE_TIME_FORMAT
+from .tools.files import channel_post_count
 from .workspace import Workspace
 
 log = logging.getLogger("red.agenteliza")
@@ -79,6 +81,8 @@ class Eliza(commands.Cog):
         self._filter_timeouts = {}
         # Usage endpoint cache: (monotonic timestamp, rows) or None.
         self._usage_cache = None
+        # The derived bundled credit balance: (read time, balance).
+        self._credit_cache = (0.0, None)
         # Init config. The identifier must stay unique and stable.
         self.config = Config.get_conf(self, identifier="agenteliza", force_registration=True)
         self.config.register_global(
@@ -90,6 +94,11 @@ class Eliza(commands.Cog):
             , limit_user=20
             , limit_channel=100
             , limit_server=500
+            # The bundled credit cycle seed of the Venice key: the epoch of
+            # the cycle start and the pool standing there. 0 = unset, the
+            # credit derivation stays off. Set with `eliza setcredit`.
+            , credit_cycle_start=0
+            , credit_cycle_pool=0
             , dm_rules=DEFAULT_DM_RULES
             , polls={}
         )
@@ -246,7 +255,45 @@ class Eliza(commands.Cog):
             return None, "The API key is not set. Use the `eliza setkey` command first."
         if self.session is None or self.session.closed:
             self.session = self._new_session()
-        return await provider.fetch_usage(self.session, api_key)
+        rows, error = await provider.fetch_usage(self.session, api_key)
+        if not error and rows and hasattr(provider, "bundled_credits"):
+            # The Venice row gains the derived bundled credit balance.
+            balance = await self.bundled_credits()
+            if isinstance(balance, (int, float)):
+                percent = min(balance / VENICE_CREDIT_ALLOWANCE, VENICE_CREDIT_BANK_MONTHS) * 100
+                rows[0]["text"] += (
+                    f", bundled credits {balance:,.6g} of {VENICE_CREDIT_ALLOWANCE:,} "
+                    f"({percent:.0f}%, bank cap {VENICE_CREDIT_BANK_MONTHS * 100:.0f}%)"
+                )
+        return rows, error
+
+    async def bundled_credits(self):
+        """The derived bundled credit balance of the Venice key, at most
+        VENICE_CREDIT_CACHE_SECONDS old (the analytics answer caches 10
+        minutes server-side). None while the cycle seed is unset (the
+        `eliza setcredit` command sets it), the provider has no derivation,
+        or no answer was ever read; a failed read keeps the last value."""
+        provider = provider_for(await self._base_url())
+        getter = getattr(provider, "bundled_credits", None)
+        if getter is None:
+            return None
+        cycle_start = await self.config.credit_cycle_start()
+        cycle_pool = await self.config.credit_cycle_pool()
+        if not cycle_start or not cycle_pool:
+            return None
+        now = time.monotonic()
+        if self._credit_cache[0] and now - self._credit_cache[0] < VENICE_CREDIT_CACHE_SECONDS:
+            return self._credit_cache[1]
+        api_key = await self.config.api_key()
+        if not api_key:
+            return self._credit_cache[1]
+        if self.session is None or self.session.closed:
+            self.session = self._new_session()
+        balance = await getter(self.session, api_key, cycle_start, cycle_pool)
+        if balance is None:
+            return self._credit_cache[1]
+        self._credit_cache = (now, balance)
+        return balance
 
     async def _usage_rows(self):
         """The provider usage rows, cached. None when the check fails: never block on a failure."""
@@ -724,13 +771,16 @@ class Eliza(commands.Cog):
                 )
                 return
 
-    async def _sync_pages(self, channel, sent: list, text: str, previous: str, mentions: discord.AllowedMentions, *, final: bool) -> tuple[bool, bool]:
+    async def _sync_pages(self, channel, sent: list, text: str, previous: str, mentions: discord.AllowedMentions, *, final: bool, base: int = 0) -> tuple[bool, bool]:
         """Edit or send the pages that changed since previous. Caps the inline pages.
 
-        Returns (alive, overflow): alive False on a permanent send
-        failure, overflow True when the text has more pages than the
-        inline cap. A sealed page never changes, so in practice only the
-        last page is edited and the rest are sends.
+        base is the index of the first message of the current block: a
+        file posted mid-reply seals the messages before it, and the next
+        block maps its pages to the messages after base. Returns (alive,
+        overflow): alive False on a permanent send failure, overflow True
+        when the text has more pages than the inline cap. A sealed page
+        never changes, so in practice only the last page is edited and
+        the rest are sends.
         """
         pages = paginate(text, old_content=previous or None, final=final)
         overflow = len(pages) > LONG_REPLY_MAX_PAGES
@@ -738,10 +788,11 @@ class Eliza(commands.Cog):
             if not page.updated:
                 continue
             # The agent may mention: its answer is the sender's intent.
+            slot = base + index
             try:
-                if index < len(sent):
+                if slot < len(sent):
                     result = await self._discord_call(
-                        lambda: sent[index].edit(content=page.content, allowed_mentions=mentions),
+                        lambda: sent[slot].edit(content=page.content, allowed_mentions=mentions),
                         "The reply page edit",
                     )
                 else:
@@ -754,28 +805,44 @@ class Eliza(commands.Cog):
                 return False, overflow
             if result is None:
                 return False, overflow
-            if index >= len(sent):
+            if slot >= len(sent):
                 sent.append(result)
         return True, overflow
 
     async def _stream_reply(self, channel, segments, mentions: discord.AllowedMentions, *, tag: str) -> tuple[bool, bool]:
         """Post the segments of a reply as they arrive: the open page is edited, full pages stay.
 
-        Returns (yielded, posted): yielded when the agent produced any
-        text, posted when at least one message reached the channel. A
+        A file a tool posts mid-reply seals the open block: Discord
+        renders the attachments of a message under its text, so an edit
+        after the file would move the newer text above it. The next text
+        starts a fresh block of messages below the file. Returns
+        (yielded, posted): yielded when the agent produced any text,
+        posted when at least one message reached the channel. A
         permanent send failure stops the posting, but the segments are
         drained to the end: the session record and the lock need the
         full run.
         """
         sent: list[discord.Message] = []
         parts: list[str] = []
+        block: list[str] = []
         previous = ""
+        base = 0
+        posts = channel_post_count(channel.id)
         alive = True
         async for segment in segments:
+            files = channel_post_count(channel.id)
+            if files != posts:
+                # A tool posted a file below the open block: the messages
+                # sent so far seal, the next text starts below the file.
+                posts = files
+                base = len(sent)
+                previous = ""
+                block = []
             parts.append(segment)
+            block.append(segment)
             if alive:
-                text = "\n\n".join(parts)
-                alive, _ = await self._sync_pages(channel, sent, text, previous, mentions, final=False)
+                text = "\n\n".join(block)
+                alive, _ = await self._sync_pages(channel, sent, text, previous, mentions, final=False, base=base)
                 if alive:
                     previous = text
         if not parts:
@@ -783,7 +850,7 @@ class Eliza(commands.Cog):
         if not alive:
             return True, bool(sent)
         full = "\n\n".join(parts)
-        alive, overflow = await self._sync_pages(channel, sent, full, previous, mentions, final=True)
+        alive, overflow = await self._sync_pages(channel, sent, "\n\n".join(block), previous, mentions, final=True, base=base)
         posted = bool(sent)
         if alive and overflow:
             # The inline pages stand as the head: the rest rides in a file.
@@ -1061,6 +1128,45 @@ class Eliza(commands.Cog):
             await ctx.send("The usage throttle is disabled.")
         else:
             await ctx.send(f"The cog stops answering when a provider limit reaches {percent}%.")
+
+    @eliza_group.command(name="setcredit")
+    @commands.admin()
+    async def eliza_setcredit(self, ctx: commands.Context, when: str, pool: float) -> None:
+        """Set the bundled credit cycle seed of the Venice key: the cycle start
+        (a Unix epoch or an ISO 8601 timestamp, UTC — for example 2026-09-03T13:13:35Z)
+        and the credit pool standing at that moment. The derived balance reads
+        from this seed. `setcredit clear 0` removes it."""
+        if when.lower() == "clear":
+            await self.config.credit_cycle_start.set(0)
+            await self.config.credit_cycle_pool.set(0)
+            self._credit_cache = (0.0, None)
+            await ctx.send("The credit cycle seed is removed. The balance derivation is off.")
+            return
+        epoch = None
+        if re.fullmatch(r"\d{9,12}", when):
+            epoch = float(when)
+        else:
+            try:
+                parsed = datetime.fromisoformat(when.replace("Z", "+00:00"))
+                if parsed.tzinfo is None:
+                    parsed = parsed.replace(tzinfo=timezone.utc)
+                epoch = parsed.timestamp()
+            except ValueError:
+                epoch = None
+        if epoch is None or pool <= 0:
+            await ctx.send(
+                "Give the cycle start as a Unix epoch or an ISO 8601 timestamp (UTC), "
+                "and a positive pool. Example: `setcredit 2026-09-03T13:13:35Z 22500`."
+            )
+            return
+        await self.config.credit_cycle_start.set(epoch)
+        await self.config.credit_cycle_pool.set(pool)
+        self._credit_cache = (0.0, None)
+        seed_time = f"<t:{int(epoch)}:F>"
+        await ctx.send(
+            f"The credit cycle seed is set: the pool held {pool:,.6g} credits at {seed_time}. "
+            "The derived balance reads from it on the next usage check."
+        )
 
     @eliza_group.command(name="forgetme")
     async def eliza_forgetme(self, ctx: commands.Context) -> None:

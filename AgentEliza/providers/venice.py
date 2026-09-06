@@ -2,10 +2,12 @@ from urllib.parse import urlparse
 
 import asyncio
 import base64
+import calendar
 import io
 import random
 import re
 import time
+from datetime import datetime, timedelta, timezone
 
 import aiohttp
 
@@ -22,16 +24,22 @@ except ImportError:
 
 # The limit types of the rate-limits endpoint, spelled out for the usage rows.
 VENICE_LIMIT_NAMES = {"RPM": "requests/min", "RPD": "requests/day", "TPM": "tokens/min"}
-# The bundled credit plan of the key: the monthly allowance, and the bank
-# ceiling — Venice keeps at most three months of allowance (300%), the
-# rest is lost. The rate-limits endpoint reports the balance under
-# data.balances.BUNDLED_CREDITS, and the usage row reads it in credits and
-# percent. The feature gates to come read the balance a lot, so a copy at
-# most VENICE_CREDIT_CACHE_SECONDS old serves from the cache.
+# The bundled credit plan: the monthly allowance, and the bank ceiling —
+# Venice keeps at most three months of allowance (300%), the rest is
+# lost. No keyed endpoint reports the balance, so the value is derived
+# from the usage analytics: the byDate USD sums are the value of every
+# consumption regardless of the paying pool (validated against an
+# account session, 2026-09-06), and the balance is the bank-capped
+# accrual minus the spend since the cycle anchor, at 100 credits per
+# dollar. The analytics answer caches 10 minutes server-side, so the
+# caller cache matches it. The seed — the cycle start of the pool and
+# the balance standing there — is per-install data: it lives in Config
+# (`eliza setcredit`), never in this file. The analytics serves explicit
+# date ranges of any age (a June 2026 window verified live, 2026-09-06),
+# so the walk reads its whole history from the seed.
 VENICE_CREDIT_ALLOWANCE = 22500
 VENICE_CREDIT_BANK_MONTHS = 3
-VENICE_CREDIT_CACHE_SECONDS = 120
-_CREDIT_CACHE = {"balance": None, "read": 0.0}
+VENICE_CREDIT_CACHE_SECONDS = 600
 # The augment endpoints are experimental and billed per request ($0.01 each).
 VENICE_QUERY_MAX_CHARS = 400
 VENICE_SEARCH_MAX_LIMIT = 20
@@ -329,6 +337,57 @@ VENICE_CHAT_PRESETS = {
       , "cost": 0.01
     }
 }
+
+def _next_month(moment: datetime) -> datetime:
+    """The same day and time one calendar month later — the refill cadence
+    of the subscription — clamped to the end of the shorter month."""
+    year, month = (moment.year, moment.month + 1) if moment.month < 12 else (moment.year + 1, 1)
+    day = min(moment.day, calendar.monthrange(year, month)[1])
+    return moment.replace(year=year, month=month, day=day)
+
+
+def _cycle_spend(spend: dict, start: datetime, end: datetime) -> float:
+    """The USD consumption of one cycle, sliced by whole UTC dates: the
+    dates from the cycle start through the refill day — the refill day
+    closes the old cycle, a slight low bias on the balance."""
+    total = 0.0
+    day = start.date()
+    while day <= end.date():
+        total += spend.get(day.isoformat(), 0.0)
+        day += timedelta(days=1)
+    return total
+
+
+def walk_credits(data: dict, cycle_start: float, cycle_pool: float):
+    """The derived bundled credit balance of an analytics answer, None
+    when it carries no byDate rows. Walks the credit cycles from the seed
+    (the cycle start epoch and the pool standing there): each refill adds
+    the allowance under the bank cap, each cycle spends its whole-date
+    USD sums at 100 credits per dollar."""
+    spend = {}
+    for row in (data or {}).get("byDate") or []:
+        if not isinstance(row, dict) or not isinstance(row.get("date"), str):
+            continue
+        try:
+            spend[row["date"]] = float(row.get("USD") or 0)
+        except (TypeError, ValueError):
+            continue
+    if not spend:
+        return None
+    anchor = datetime.fromtimestamp(cycle_start, tz=timezone.utc)
+    pool = float(cycle_pool)
+    now = datetime.now(timezone.utc)
+    while True:
+        refill = _next_month(anchor)
+        if refill > now:
+            break
+        pool = min(
+            pool - _cycle_spend(spend, anchor, refill) * 100 + VENICE_CREDIT_ALLOWANCE
+          , VENICE_CREDIT_BANK_MONTHS * VENICE_CREDIT_ALLOWANCE
+        )
+        anchor = refill
+    return max(pool - _cycle_spend(spend, anchor, now) * 100, 0.0)
+
 
 def _header_flag(headers, name: str) -> str:
     """The yes/no/unknown text of a boolean response header."""
@@ -1066,49 +1125,35 @@ class VeniceApiProvider(Provider):
         """One line per chat preset for the eliza providers list."""
         return [preset_menu_line(name, preset) for name, preset in VENICE_CHAT_PRESETS.items()]
 
-    async def bundled_credits(self, session, api_key: str):
-        """The bundled credit balance of the key, at most
-        VENICE_CREDIT_CACHE_SECONDS old. None when the endpoint reports no
-        balance. The usage polls refresh the cache; a stale cache
-        re-fetches the rate-limits answer here, and a failed fetch keeps
-        the last value."""
-        now = time.monotonic()
-        if _CREDIT_CACHE["balance"] is not None and now - _CREDIT_CACHE["read"] < VENICE_CREDIT_CACHE_SECONDS:
-            return _CREDIT_CACHE["balance"]
+    async def bundled_credits(self, session, api_key: str, cycle_start: float, cycle_pool: float):
+        """The bundled credit balance derived from the usage analytics,
+        None when the answer cannot be read. cycle_start is the epoch of
+        the credit cycle start, cycle_pool the balance standing there —
+        the per-install seed the caller holds. The caller owns the cache:
+        the analytics answer caches 10 minutes server-side, a faster poll
+        buys nothing."""
+        start = datetime.fromtimestamp(cycle_start, tz=timezone.utc)
+        end = datetime.now(timezone.utc) + timedelta(days=1)
         try:
             async with session.get(
-                self.usage_url
+                "https://api.venice.ai/api/v1/billing/usage-analytics"
+                , params={"startDate": start.date().isoformat(), "endDate": end.date().isoformat()}
                 , headers={"Authorization": f"Bearer {api_key}"}
                 , timeout=aiohttp.ClientTimeout(total=15),
             ) as response:
                 if response.status != 200:
-                    return _CREDIT_CACHE["balance"]
+                    return None
                 try:
                     data = await response.json(content_type=None)
                 except Exception:
-                    return _CREDIT_CACHE["balance"]
+                    return None
         except (aiohttp.ClientError, asyncio.TimeoutError):
-            return _CREDIT_CACHE["balance"]
-        self._remember_credits(data)
-        return _CREDIT_CACHE["balance"]
-
-    @staticmethod
-    def _remember_credits(data: dict):
-        """The bundled credit balance of a rate-limits answer, None when it
-        reports none. A reported balance lands in the cache with its read
-        time."""
-        payload = data.get("data") if isinstance(data.get("data"), dict) else {}
-        balance = (payload.get("balances") or {}).get("BUNDLED_CREDITS")
-        if isinstance(balance, (int, float)):
-            _CREDIT_CACHE["balance"] = balance
-            _CREDIT_CACHE["read"] = time.monotonic()
-            return balance
-        return None
+            return None
+        return walk_credits(data, cycle_start, cycle_pool)
 
     def parse_usage(self, data: dict) -> list:
         payload = data.get("data") if isinstance(data.get("data"), dict) else {}
         balances = payload.get("balances") or {}
-        bundled = self._remember_credits(data)
         usd = balances.get("USD")
         diem = balances.get("DIEM")
         tier = payload.get("apiTier") or {}
@@ -1125,12 +1170,6 @@ class VeniceApiProvider(Provider):
             parts.append(f"${usd:g} USD available")
         if isinstance(diem, (int, float)):
             parts.append(f"{diem:g} Diem available")
-        if isinstance(bundled, (int, float)):
-            percent = min(bundled / VENICE_CREDIT_ALLOWANCE, VENICE_CREDIT_BANK_MONTHS) * 100
-            parts.append(
-                f"bundled credits {bundled:,.6g} of {VENICE_CREDIT_ALLOWANCE:,} "
-                f"({percent:.0f}%, bank cap {VENICE_CREDIT_BANK_MONTHS * 100:.0f}%)"
-            )
         text = ", ".join(parts)
         # The endpoint reports per-model limits only: the consumption lives in
         # the x-ratelimit-* response headers, which a poll cannot read. The

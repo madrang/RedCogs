@@ -4,6 +4,7 @@ import asyncio
 import base64
 import json
 import logging
+import re
 from collections.abc import AsyncIterator
 from datetime import datetime, timezone
 from urllib.parse import urlparse
@@ -58,6 +59,13 @@ BACKFILL_SCAN_MAX = 99
 EMPTY_REPLY = "(empty answer)"
 # The tag that lets the agent refuse to reply. The harness sends nothing.
 NO_REPLY_TAG = "[no-reply]"
+
+
+def collapse_blank_lines(text: str) -> str:
+    """A run of blank lines collapses to one blank line. The blank runs at
+    both ends drop. The models pad the notes between their tool calls with
+    long empty sections."""
+    return re.sub(r"(?:[ \t]*\n){3,}", "\n\n", text).strip()
 
 
 class ChatError(Exception):
@@ -591,19 +599,19 @@ class ChatEngine:
             # Reasoning is the exception: Kimi accepts reasoning_content back,
             # the newer vLLM dialect uses reasoning. Echo the field the
             # provider sent, so the session keeps it until a compaction.
-            echo = {"role": "assistant", "content": message.get("content") or ""}
+            text = collapse_blank_lines(message.get("content") or "")
+            echo = {"role": "assistant", "content": text}
             for key in ("reasoning_content", "reasoning"):
                 if message.get(key):
                     echo[key] = message[key]
             echo["tool_calls"] = tool_calls
             messages.append(echo)
             exchange.append(echo)
-            text = (message.get("content") or "").strip()
             if text and text != NO_REPLY_TAG:
                 # A note the model wrote alongside its calls: the caller
                 # posts it while the tools run.
                 emitted = True
-                yield message["content"]
+                yield text
             for call in tool_calls:
                 function = call.get("function", {})
                 try:
@@ -731,7 +739,7 @@ class ChatEngine:
         content = message.get("content") or ""
         if isinstance(content, list):
             content = "".join(part.get("text") or "" for part in content if isinstance(part, dict))
-        content = content.strip()
+        content = collapse_blank_lines(content)
         if content and content != NO_REPLY_TAG:
             # The flattened text, not the raw field: a content array
             # (a vision answer in parts) posts as its text.
@@ -752,7 +760,12 @@ class ChatEngine:
             session.append(addition["role"], addition["content"])
         for part in exchange:
             session.append_message(part)
-        final = {"role": "assistant", "content": message.get("content") or ""}
+        final_content = message.get("content") or ""
+        if isinstance(final_content, str):
+            # A content array (a vision answer in parts) stays as the
+            # provider sent it: the next request takes the parts back.
+            final_content = collapse_blank_lines(final_content)
+        final = {"role": "assistant", "content": final_content}
         for key in ("reasoning_content", "reasoning"):
             if message.get(key):
                 final[key] = message[key]
