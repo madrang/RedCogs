@@ -15,20 +15,25 @@ WEB_TIMEOUT = aiohttp.ClientTimeout(total=30)
 WEB_SEARCH_URL = "https://html.duckduckgo.com/html/?q="
 WEB_SEARCH_MAX_RESULTS = 8
 # DuckDuckGo answers a non-browser request with an anomaly page (202). The
-# check scores the full header set: the User-Agent alone passes only
-# sometimes. No brotli in Accept-Encoding: the Brotli package is not a
-# dependency.
+# check scores the full header set: a browser User-Agent alone passes only
+# sometimes. The set mirrors a Chrome navigation of a current release, and
+# the client hints (sec-ch-ua) must agree with the User-Agent. No brotli or
+# zstd in Accept-Encoding: neither decoder is a dependency, and a claimed
+# encoding the client cannot decode buys an unreadable body.
 BROWSER_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-    "Accept-Language": "en-US,en;q=0.5",
+    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+    "Accept-Language": "en-US,en;q=0.9",
     "Accept-Encoding": "gzip, deflate",
-    "DNT": "1",
     "Upgrade-Insecure-Requests": "1",
     "Sec-Fetch-Dest": "document",
     "Sec-Fetch-Mode": "navigate",
     "Sec-Fetch-Site": "none",
     "Sec-Fetch-User": "?1",
+    "sec-ch-ua": '"Google Chrome";v="149", "Chromium";v="149", "Not)A;Brand";v="24"',
+    "sec-ch-ua-mobile": "?0",
+    "sec-ch-ua-platform": '"Linux"',
+    "Priority": "u=0, i",
 }
 # Tags whose content is not page text.
 _SKIP_TAGS = {"script", "style", "noscript", "template", "head"}
