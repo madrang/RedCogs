@@ -180,7 +180,9 @@ class Session:
         if len(self.messages) <= 1 + keep:
             return []
         cut = len(self.messages) - keep
-        while cut > 1 and self.messages[cut].get("role") == "tool":
+        # The turn at the cut is the first kept one: a tool result there
+        # would lose its call. keep 0 cuts at the end, where no turn sits.
+        while cut > 1 and cut < len(self.messages) and self.messages[cut].get("role") == "tool":
             cut -= 1
         if cut <= 1:
             return []

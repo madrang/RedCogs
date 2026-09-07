@@ -239,11 +239,13 @@ class Eliza(commands.Cog):
             return model
         return preset.preset_name(model) or model
 
-    async def context_length(self, preset) -> int | None:
-        """The context size of the configured model, None when unknown."""
+    async def context_length(self, preset, model: str | None = None) -> int | None:
+        """The context size of a request model in tokens, None when unknown.
+        model is the conversation's request model (a session override
+        included); None reads the configured model."""
         if preset is None:
             return None
-        return preset.context_length(await self.model_name())
+        return preset.context_length(model or await self.model_name())
 
     async def _fetch_usage(self):
         """Query the active provider usage endpoint. Return (rows, error_message)."""
@@ -493,7 +495,12 @@ class Eliza(commands.Cog):
         read the channel names of another.
         """
         preset = await self.current_preset()
-        context_tokens = await self.context_length(preset)
+        reading = self.history.sessions.get(session_id) if session_id is not None else None
+        # The size budget of the reading conversation, its override included:
+        # the same window the compaction trigger uses.
+        context_tokens = await self.context_length(
+            preset, reading.model_override if reading is not None else None
+        )
         cache_ttl = getattr(preset, "cache_ttl", None) or DEFAULT_CACHE_TTL
         stamp = f"{datetime.now(timezone.utc):{MESSAGE_TIME_FORMAT}}"
         if context_tokens:
@@ -510,7 +517,6 @@ class Eliza(commands.Cog):
             )
         vision_model = getattr(preset, "vision_model", None)
         model_display = (preset.preset_name(await self.model_name()) or await self.model_name()) if preset is not None else await self.model_name()
-        reading = self.history.sessions.get(session_id) if session_id is not None else None
         if reading is not None and reading.model_override:
             override = (preset.preset_name(reading.model_override) or reading.model_override) if preset is not None else reading.model_override
             model_display = f"{model_display} (this conversation: {override})"
@@ -531,7 +537,7 @@ class Eliza(commands.Cog):
             f"- Context expiry: a context idle for {cache_ttl} s or more rebuilds on the next message. "
             f"Idle compaction starts at {int(cache_ttl * COMPACTION_AT)} s."
         )
-        session = self.history.sessions.get(session_id) if session_id is not None else None
+        session = reading
         if session is not None:
             turns = max(len(session.messages) - 1, 0)
             estimate = session.size // CHARS_PER_TOKEN

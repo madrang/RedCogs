@@ -3,7 +3,7 @@
 import asyncio
 import time
 
-from AgentEliza.history import History
+from AgentEliza.history import History, Session
 
 
 class _NoMemory:
@@ -11,6 +11,21 @@ class _NoMemory:
 
     async def read_summary(self, scope: str, session_id: int) -> str:
         return ""
+
+
+def test_plan_compaction_at_keep_zero_unloads_every_turn() -> None:
+    session = Session("user")
+    session.start_context("system")
+    session.append("user", "one")
+    session.append_message({"role": "assistant", "content": "", "tool_calls": [{"id": "1", "function": {"name": "echo", "arguments": "{}"}}]})
+    session.append_message({"role": "tool", "tool_call_id": "1", "content": "result"})
+    # No turn stays verbatim: the block covers every turn after the system
+    # message, a trailing tool exchange included.
+    assert session.plan_compaction(0) == session.messages[1:]
+    # A session with no turns holds nothing to unload.
+    empty = Session("user")
+    empty.start_context("system")
+    assert empty.plan_compaction(0) == []
 
 
 async def test_parallel_sessions_do_not_serialize() -> None:

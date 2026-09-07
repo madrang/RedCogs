@@ -116,7 +116,7 @@ class FakeApi:
     async def current_preset(self):
         return self.preset
 
-    async def context_length(self, preset):
+    async def context_length(self, preset, model=None):
         return None
 
     async def model_name(self):
@@ -142,8 +142,10 @@ class FakePreset:
     cache_ttl = 300
     vision_models: set = set()
 
-    def __init__(self, native=()):
+    def __init__(self, native=(), context_lengths=None, fallback=None):
         self._native = list(native)
+        self.context_lengths = dict(context_lengths or {})
+        self.fallback = fallback
 
     def native_tools(self):
         return self._native
@@ -152,7 +154,10 @@ class FakePreset:
         return model
 
     def context_length(self, model_name):
-        return None
+        return self.context_lengths.get(model_name)
+
+    def preset_fallback(self, model):
+        return self.fallback
 
     def extra_payload(self, session_id, model=None, nsfw=False):
         return {}
@@ -225,10 +230,23 @@ class FakeScopeStats:
 
 
 class FakeCompactor:
-    """The compactor stand-in: a compaction never fires."""
+    """The compactor stand-in: a scripted compaction answer, every call recorded.
 
-    async def compact(self, session_id, session, api_key, preset):
-        return None
+    usage None refuses the move a compaction gates. apply, when set, runs on
+    the session before the answer, the way the real compaction rewrites it."""
+
+    def __init__(self, usage=None, apply=None):
+        self.usage = usage
+        self.apply = apply
+        self.calls: list[tuple[int, int]] = []
+
+    async def compact(self, session_id, session, api_key, preset, keep=16):
+        self.calls.append((session_id, keep))
+        if self.usage is None:
+            return None
+        if self.apply is not None:
+            self.apply(session)
+        return self.usage
 
 
 class FakeBot:

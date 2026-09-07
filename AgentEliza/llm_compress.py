@@ -180,12 +180,15 @@ class Compressor:
             return
         preset = await self.api.current_preset()
         cache_ttl = getattr(preset, "cache_ttl", None) or DEFAULT_CACHE_TTL
-        context_length = await self.api.context_length(preset)
         for session_id, session in list(self.history.sessions.items()):
             if session.last_compaction >= session.last_active:
                 continue
             if time.monotonic() < session.compaction_retry_at:
                 continue
+            # The size budget follows the conversation's model, an override
+            # included: a session on a smaller-window preset compacts at its
+            # own window, not the configured one.
+            context_length = await self.api.context_length(preset, session.model_override)
             # Idle trigger, and a size pre-trigger just below the reply-path
             # budget: the compaction runs in the background instead of on the
             # next message of the user.

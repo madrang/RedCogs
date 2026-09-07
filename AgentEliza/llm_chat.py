@@ -283,7 +283,10 @@ class ChatEngine:
         # Only then is the system message rebuilt (prompt, memory, summary).
         # An agent memory update is already in the context as a tool call, so no reload between.
         expired = not session.messages or session.idle() >= cache_ttl
-        if session.messages and self.history.needs_compaction(session, cache_ttl, await self.api.context_length(preset)):
+        # The conversation's model string, an override included: it decides
+        # the compaction budget here and the request model below.
+        request_model = session.model_override or await self.api.model_name()
+        if session.messages and self.history.needs_compaction(session, cache_ttl, await self.api.context_length(preset, request_model)):
             compact_usage = await self.compactor.compact(session_id, session, api_key, preset)
             if compact_usage is not None:
                 for key in usage:
@@ -388,7 +391,6 @@ class ChatEngine:
             )
 
         gated = await channel_nsfw()
-        request_model = session.model_override or await self.api.model_name()
         # A vision chat model sees the images of the conversation directly.
         # The resolved request model decides, an override included: a preset
         # name maps to its id first, and the provider's vision_models set
@@ -453,22 +455,37 @@ class ChatEngine:
         async def set_conversation_model(model_id):
             """Override the chat model of this conversation, for native
             provider tools. None restores the configured model. Returns
-            None when the override stored, an error text when the target
-            model holds a smaller context window than the current model:
-            the accumulated turns would not fit the next request. The
-            override rides the session: it survives a context restart and
-            dies with the session. It answers the next and later requests,
-            the request that runs the tool keeps its model."""
-            if model_id is not None and preset is not None:
-                current = session.model_override or await self.api.model_name()
+            None when the override stored, an error text when the move
+            failed: a target that holds a smaller context window than the
+            current model compacts the session first, and a failed
+            compaction refuses the move — the turns would not fit the
+            next request. The compaction keeps no verbatim turns (keep
+            0) and runs on the current model, the one whose window still
+            holds the turns, so the new model starts from the summary.
+            The override rides the session: it survives a context
+            restart and dies with the session. It answers the next and
+            later requests, the request that runs the tool keeps its
+            model."""
+            if preset is not None:
+                configured = await self.api.model_name()
+                current = session.model_override or configured
+                target = model_id if model_id is not None else configured
                 current_window = preset.context_length(current)
-                target_window = preset.context_length(model_id)
-                if current_window and target_window and target_window < current_window:
-                    return (
-                        f"Error: {model_id} holds a smaller context window "
-                        f"({target_window:,} tokens) than the active model ({current_window:,}). "
-                        "A switch that shrinks the context needs a compaction first."
-                    )
+                target_window = preset.context_length(target)
+                if (
+                    current_window and target_window and target_window < current_window
+                    and len(session.messages) > 1
+                ):
+                    compact_usage = await self.compactor.compact(session_id, session, api_key, preset, keep=0)
+                    if compact_usage is None:
+                        name = model_id if model_id is not None else "the default model"
+                        reason = f" ({session.error})" if session.error else ""
+                        return (
+                            f"Error: the condense before the move to {name} failed{reason}. "
+                            "The conversation keeps its current model."
+                        )
+                    for key in usage:
+                        usage[key] += compact_usage.get(key) or 0
             session.model_override = model_id
             return None
 
@@ -505,6 +522,11 @@ class ChatEngine:
                 turn_content = [{"type": "text", "text": text}, *parts]
         additions.append({"role": "user", "content": turn_content})
         messages = [*session.messages, *additions]
+        # The session turns this request was built from. A model switch onto
+        # a smaller window compacts the session mid-reply: the identity
+        # change marks it, and the overload-fallback retry rebuilds its
+        # payload on the compacted context.
+        turns_at_request = session.messages
         payload = {
             "model": request_model
             , "messages": messages
@@ -531,9 +553,11 @@ class ChatEngine:
             conversation to the next preset up in cost and retries once on
             it. The move rides
             the session override, so it holds for the conversation and
-            dies with it. The error still reaches the user: the notice is
-            staged with the fallback name and yields ahead of the answer.
-            Any other failure passes through."""
+            dies with it. A fallback onto a smaller context window
+            compacts the session at the move, and the retry rides the
+            compacted context. The error still reaches the user: the
+            notice is staged with the fallback name and yields ahead of
+            the answer. Any other failure passes through."""
             try:
                 return await self.api.chat_request(api_key, request_payload)
             except ChatError as e:
@@ -555,7 +579,20 @@ class ChatEngine:
                     f"⚠️ {e}\n```\n{json.dumps(e.raw, ensure_ascii=False)[:1500]}\n```"
                     f"\nThe preset {fallback} answers this conversation for now."
                 )
-                await set_conversation_model(fallback)
+                error = await set_conversation_model(fallback)
+                if error:
+                    # The move needed a compaction that failed: the
+                    # conversation keeps its model, the original error stands.
+                    raise
+                if session.messages is not turns_at_request:
+                    # The switch compacted the session: the retry rides the
+                    # compacted context, with the turns of this reply after
+                    # it. additions and exchange name those turns: a second
+                    # move of the same reply splices again, and the session
+                    # block sits at no fixed offset of messages anymore.
+                    # The splice stays in place, so the later rounds and
+                    # the closing pass keep appending to the same list.
+                    messages[:] = [*session.messages, *additions, *exchange]
                 request_payload["model"] = fallback
                 request_payload.update(preset.extra_payload(session_id, fallback, gated))
                 return await self.api.chat_request(api_key, request_payload)

@@ -901,7 +901,9 @@ def _environment_tool() -> dict:
         if "default" in requested:
             if len(requested) > 1:
                 return 'Error: "default" accepts no other capability.'
-            await set_conversation_model(None)
+            error = await set_conversation_model(None)
+            if error:
+                return error
             return "The environment is back to the default configuration. The change answers the next message."
         unknown = [item for item in requested if item not in VENICE_CHAT_CAPABILITIES]
         if unknown:
@@ -930,8 +932,8 @@ def _environment_tool() -> dict:
                 if variant is not None and all(trait in preset["traits"] for trait in remaining):
                     error = await set_conversation_model(name)
                     if error:
-                        # A smaller context window refused the move: the
-                        # next candidate gets the turn.
+                        # The condense before the switch failed: the next
+                        # candidate gets the turn.
                         refused.append(name)
                         continue
                     granted = ", ".join(sorted(requested))
@@ -966,7 +968,7 @@ def _environment_tool() -> dict:
             for name, preset in VENICE_CHAT_PRESETS.items()
             if not preset.get("disabled")
         )
-        detail = f" Refused for a smaller context window: {', '.join(refused)}." if refused else ""
+        detail = f" Switch refused (the condense before it failed): {', '.join(refused)}." if refused else ""
         return f"Error: no environment preset provides: {', '.join(sorted(requested))}.{detail} Available: {menu}."
 
     return {
@@ -1138,23 +1140,17 @@ class VeniceApiProvider(Provider):
         the model (either variant), cycling to the cheapest at the ceiling.
         The cost of a preset is its cost property, 0 when the entry names
         none. A disabled preset never takes the move — the operator hid it
-        from the agent — and neither does a preset with a smaller context
-        window than the current one: the accumulated turns would not fit
-        the next request. A session that sits on an excluded preset (a
-        user choice) moves to the cheapest enabled preset above it. None
-        when the model sits in no preset."""
+        from the agent. A preset with a smaller context window takes the
+        move: the switch compacts the session onto its window first (the
+        set_conversation_model closure of the engine). A session that sits
+        on an excluded preset (a user choice) moves to the cheapest
+        enabled preset above it. None when the model sits in no preset."""
         ranked = []
         current = None
-        current_window = None
         for name, preset in VENICE_CHAT_PRESETS.items():
             if model in (preset.get("normal"), preset.get("nsfw")):
                 current = (preset.get("cost", 0.0), name)
-                current_window = self.context_length(preset["normal"])
             if preset.get("disabled"):
-                continue
-            window = self.context_length(preset["normal"])
-            if current_window and window and window < current_window:
-                # The move never shrinks the context window.
                 continue
             ranked.append((preset.get("cost", 0.0), name))
         if current is None or not ranked:

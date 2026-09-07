@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 
 from aiohttp import ClientConnectionError
 
-from AgentEliza.providers.venice import VeniceApiProvider
+from AgentEliza.providers.venice import VeniceApiProvider, _environment_tool
 from tests.AgentEliza.fakes import FakeResponse, FakeSession
 
 USAGE_ANSWER = {
@@ -117,3 +117,38 @@ async def test_bundled_credits_answers_none_on_failures() -> None:
     assert await provider.bundled_credits(
         FakeSession(ClientConnectionError("boom")), "test-key", seed.timestamp(), 22500
     ) is None
+
+
+def test_preset_fallback_steps_onto_a_smaller_window() -> None:
+    # The ladder ranks cost alone: the move from GLM 1M (a 1M window) steps
+    # up to Aion (128K), and the switch condenses the session at the move.
+    assert VeniceApiProvider().preset_fallback("z-ai-glm-5-3") == "Aion"
+    # The ceiling cycles to the cheapest enabled preset.
+    assert VeniceApiProvider().preset_fallback("kimi-k3") == "DeepSeek Lite"
+
+
+async def test_the_environment_tool_names_a_failed_switch() -> None:
+    entry = _environment_tool()
+
+    async def refused(model_id):
+        return "Error: the condense before the move failed."
+
+    answer = await entry["handler"](
+        {"capabilities": ["roleplay"]}
+        , None, None, None, None, None, refused
+    )
+    assert answer.startswith("Error: no environment preset provides: roleplay.")
+    assert "Switch refused (the condense before it failed): Aion Mini, Aion." in answer
+
+
+async def test_the_environment_tool_returns_the_failed_restore() -> None:
+    entry = _environment_tool()
+
+    async def refused(model_id):
+        return "Error: the condense before the move failed."
+
+    answer = await entry["handler"](
+        {"capabilities": ["default"]}
+        , None, None, None, None, None, refused
+    )
+    assert answer == "Error: the condense before the move failed."
