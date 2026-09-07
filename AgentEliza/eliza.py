@@ -809,13 +809,37 @@ class Eliza(commands.Cog):
                 sent.append(result)
         return True, overflow
 
+    async def _post_overflow_file(self, channel, text: str, tag: str, mentions: discord.AllowedMentions, part: int) -> bool:
+        """The overflow file of one spilled text block. True when the file
+        reached the channel, False after the failure note."""
+        name = f"eliza-reply-{tag}.txt" if part <= 1 else f"eliza-reply-{tag}-{part}.txt"
+        file = discord.File(io.BytesIO(text.encode("utf-8")), filename=name)
+        try:
+            result = await self._discord_call(
+                lambda: channel.send("[...] the answer continues in the attached file", file=file, allowed_mentions=mentions),
+                "The reply file send",
+            )
+        except discord.HTTPException as e:
+            log.warning("The reply file send failed permanently: %s", e)
+            result = None
+        if result is not None:
+            return True
+        with contextlib.suppress(discord.HTTPException):
+            await self._discord_call(
+                lambda: channel.send("[...] the answer continues, but the file upload failed", allowed_mentions=mentions),
+                "The reply page send",
+            )
+        return False
+
     async def _stream_reply(self, channel, segments, mentions: discord.AllowedMentions, *, tag: str) -> tuple[bool, bool]:
         """Post the segments of a reply as they arrive: the open page is edited, full pages stay.
 
         A file a tool posts mid-reply seals the open block: Discord
         renders the attachments of a message under its text, so an edit
         after the file would move the newer text above it. The next text
-        starts a fresh block of messages below the file. Returns
+        starts a fresh block of messages below the file. A block that
+        spills past the inline cap closes with its own text file at its
+        place in the reply. Returns
         (yielded, posted): yielded when the agent produced any text,
         posted when at least one message reached the channel. A
         permanent send failure stops the posting, but the segments are
@@ -823,55 +847,51 @@ class Eliza(commands.Cog):
         full run.
         """
         sent: list[discord.Message] = []
-        parts: list[str] = []
         block: list[str] = []
         previous = ""
         base = 0
         posts = channel_post_count(channel.id)
         alive = True
+        spilled = False
+        overflow_files = 0
+        posted = False
+        yielded = False
+
+        async def close_block() -> None:
+            """Close the open block: flush its held-back fences into the
+            pages, post its overflow file, reset for the next block."""
+            nonlocal alive, base, previous, block, spilled, overflow_files, posted
+            if block and alive:
+                text = "\n\n".join(block)
+                alive, spilled_now = await self._sync_pages(channel, sent, text, previous, mentions, final=True, base=base)
+                if alive and (spilled or spilled_now):
+                    overflow_files += 1
+                    if await self._post_overflow_file(channel, text, tag, mentions, overflow_files):
+                        posted = True
+            base = len(sent)
+            previous = ""
+            block = []
+            spilled = False
+
         async for segment in segments:
-            files = channel_post_count(channel.id)
-            if files != posts:
-                # A tool posted a file below the open block: the messages
-                # sent so far seal, the next text starts below the file.
-                posts = files
-                base = len(sent)
-                previous = ""
-                block = []
-            parts.append(segment)
+            yielded = True
+            media = channel_post_count(channel.id)
+            if media != posts:
+                # A tool posted a file below the open block: the block
+                # closes here, the next text starts below the file.
+                posts = media
+                await close_block()
             block.append(segment)
             if alive:
                 text = "\n\n".join(block)
-                alive, _ = await self._sync_pages(channel, sent, text, previous, mentions, final=False, base=base)
+                alive, spilled_now = await self._sync_pages(channel, sent, text, previous, mentions, final=False, base=base)
+                spilled = spilled or spilled_now
                 if alive:
                     previous = text
-        if not parts:
+        if not yielded:
             return False, False
-        if not alive:
-            return True, bool(sent)
-        full = "\n\n".join(parts)
-        alive, overflow = await self._sync_pages(channel, sent, "\n\n".join(block), previous, mentions, final=True, base=base)
-        posted = bool(sent)
-        if alive and overflow:
-            # The inline pages stand as the head: the rest rides in a file.
-            file = discord.File(io.BytesIO(full.encode("utf-8")), filename=f"eliza-reply-{tag}.txt")
-            try:
-                result = await self._discord_call(
-                    lambda: channel.send("[...] the answer continues in the attached file", file=file, allowed_mentions=mentions),
-                    "The reply file send",
-                )
-            except discord.HTTPException as e:
-                log.warning("The reply file send failed permanently: %s", e)
-                result = None
-            if result is None:
-                with contextlib.suppress(discord.HTTPException):
-                    await self._discord_call(
-                        lambda: channel.send("[...] the full answer could not be attached: the file upload failed", allowed_mentions=mentions),
-                        "The reply page send",
-                    )
-            else:
-                posted = True
-        return True, posted
+        await close_block()
+        return True, posted or bool(sent)
 
     @commands.Cog.listener()
     async def on_raw_poll_vote_add(self, payload: discord.RawPollVoteActionEvent) -> None:
