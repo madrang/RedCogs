@@ -409,14 +409,16 @@ class Eliza(commands.Cog):
                 await asyncio.sleep(delay)
                 delay *= 2
 
-    async def provider_post(self, api_key: str, path: str, *, json_body=None, data=None, binary=False) -> tuple[dict | bytes, dict]:
+    async def provider_post(self, api_key: str, path: str, *, json_body=None, data=None, binary=False, timeout=120) -> tuple[dict | bytes, dict]:
         """One POST to a REST path of the chat provider, for the native tools
         of a provider (the Venice augment set). Return the JSON answer and
         the response headers (a case-insensitive mapping) as a tuple; with
         binary=True a non-JSON 200 answer returns the raw bytes instead
-        (an image endpoint). Raise ChatError on any failure: the caller
-        owns the error text. Connect-level failures retry like
-        chat_request."""
+        (an image endpoint). timeout is the total cap of one attempt: the
+        120 s default fits the augment scrape, an image render passes the
+        inference-grade cap of chat_request. Raise ChatError on any
+        failure: the caller owns the error text. Connect-level failures
+        retry like chat_request."""
         if self.session is None or self.session.closed:
             self.session = self._new_session()
         base_url = await self._base_url()
@@ -428,10 +430,9 @@ class Eliza(commands.Cog):
                     headers={"Authorization": f"Bearer {api_key}"},
                     json=json_body,
                     data=data,
-                    # The augment scrape falls back to a headless browser: a
-                    # slow page needs a long total. sock_connect fails a
-                    # stalled connect fast so the retry probes again sooner.
-                    timeout=aiohttp.ClientTimeout(total=120, sock_connect=15),
+                    # sock_connect fails a stalled connect fast so the
+                    # retry probes again sooner.
+                    timeout=aiohttp.ClientTimeout(total=timeout, sock_connect=15),
                 ) as response:
                     raw = await response.read()
                     body = raw.decode("utf-8", "replace")

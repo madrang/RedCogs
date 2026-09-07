@@ -433,9 +433,9 @@ class ChatEngine:
                 return None
             return body, content_type
 
-        async def api_post(path, *, json_body=None, data=None, binary=False):
+        async def api_post(path, *, json_body=None, data=None, binary=False, timeout=120):
             """One POST to a REST path of the active provider, for native provider tools."""
-            return await self.api.provider_post(api_key, path, json_body=json_body, data=data, binary=binary)
+            return await self.api.provider_post(api_key, path, json_body=json_body, data=data, binary=binary, timeout=timeout)
 
         # The images the native tools posted in this reply: a vision chat
         # model sees them through the harness note the tool loop builds.

@@ -149,6 +149,12 @@ VENICE_IMAGE_DIALECTS = {
 # after some use.
 VENICE_IMAGE_RESOLUTION = "2K"
 VENICE_IMAGE_QUALITY = "medium"
+# The total timeout of one image render attempt: a 2K render at high
+# quality (gpt-image-2-edit, the model that takes no quality parameter)
+# runs past the 120 s augment default of provider_post. The value matches
+# the inference cap of chat_request — a server-side render waits like a
+# long generation.
+VENICE_RENDER_TIMEOUT = 900
 # aspect_ratio to pixels for the pixel-dialect models: sides at most 1280,
 # multiples of 16 — every pixel model's widthHeightDivisor divides it (16 on
 # venice-sd35 and wai-Illustrious, 8 on z-image-turbo, lustify-v8, chroma),
@@ -703,7 +709,7 @@ def _image_tool() -> dict:
             # where Discord itself gates the channel behind 18+.
             body["safe_mode"] = False
         try:
-            data, headers = await api_post("/image/generate", json_body=body)
+            data, headers = await api_post("/image/generate", json_body=body, timeout=VENICE_RENDER_TIMEOUT)
         except ChatError as e:
             return f"Error: the image generation failed: {e}"
         # The moderation signals of the endpoint: a content violation is the
@@ -830,7 +836,7 @@ def _edit_tool() -> dict:
             # where Discord itself gates the channel behind 18+.
             body["safe_mode"] = False
         try:
-            data, headers = await api_post("/image/edit", json_body=body, binary=True)
+            data, headers = await api_post("/image/edit", json_body=body, binary=True, timeout=VENICE_RENDER_TIMEOUT)
         except ChatError as e:
             return f"Error: the image edit failed: {e}"
         if not isinstance(data, (bytes, bytearray)) or not data:
