@@ -1070,7 +1070,7 @@ class VeniceApiProvider(Provider):
     # the 300 s floor assumes the cache dead no later than it surely is.
     cache_ttl = 300
     # The vision model of analyze_image on this provider.
-    vision_model = "venice-uncensored-1-2"
+    vision_model = "gemma-4-uncensored"
 
     def native_tools(self) -> list:
         """The provider tools: the vision tool, the augment set, the image
