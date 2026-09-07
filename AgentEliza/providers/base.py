@@ -73,7 +73,7 @@ def analyze_image_tool(model: str, validate=None) -> dict:
             "type": "object"
             , "properties": {
                 "url": {"type": "string", "description": "The http(s) URL of the image."}
-                , "question": {"type": "string", "description": "What to answer about the image. Default: describe it."}
+                , "question": {"type": "string", "default": "Describe this image.", "description": "What to answer about the image."}
             }
             , "required": ["url"]
         }

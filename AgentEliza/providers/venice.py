@@ -522,7 +522,7 @@ def _search_tool() -> dict:
             "type": "object"
             , "properties": {
                 "query": {"type": "string", "description": "The search query, at most 400 characters."}
-                , "limit": {"type": "integer", "description": f"How many results to return, 1 to {VENICE_SEARCH_MAX_LIMIT}. Default 10."}
+                , "limit": {"type": "integer", "default": 10, "description": f"How many results to return, 1 to {VENICE_SEARCH_MAX_LIMIT}."}
             }
             , "required": ["query"]
         }
@@ -611,8 +611,10 @@ def _parse_tool() -> dict:
 def _model_property(catalog: dict) -> dict:
     """The model parameter of an image tool: the enum of the preset names
     (the fixed set of accepted values, the JSON Schema way — the handler
-    refuses anything outside it) and a description that names the default,
-    the dialect groups, and the trait groups of the catalog."""
+    refuses anything outside it) and a description that names the dialect
+    groups and the trait groups of the catalog. The default model rides
+    the schema default field: the first catalog entry, the one a blank
+    ask takes."""
     groups: dict = {}
     dialect_groups: dict = {}
     for preset_name, entry in catalog.items():
@@ -623,10 +625,10 @@ def _model_property(catalog: dict) -> dict:
             dialect_groups.setdefault(dialect, []).append(preset_name)
     notes = [f"{dialect.capitalize()} models: {', '.join(names)}." for dialect, names in dialect_groups.items()]
     notes.extend(f"{VENICE_IMAGE_TRAIT_LABELS[trait].capitalize()}: {', '.join(names)}." for trait, names in groups.items())
-    description = f"The model preset name. Default {next(iter(catalog))}."
+    description = "The model preset name."
     if notes:
         description += " " + " ".join(notes)
-    return {"type": "string", "enum": list(catalog), "description": description}
+    return {"type": "string", "enum": list(catalog), "default": next(iter(catalog)), "description": description}
 
 
 def _image_tool() -> dict:
@@ -865,18 +867,24 @@ def _edit_tool() -> dict:
       , "media": "inpaints"
         , "description": (
             "Edit one image through Venice. "
-            "The result joins the current message as an attachment, and the tool "
-            "answer names the posted file. "
+            "The result joins the current message as an attachment, and the tool answer names the posted file. "
             "A model that refuses copyrighted material says so in the model field: "
             "describe the subject instead of naming it, or pick another model."
         )
         , "parameters": {
             "type": "object"
             , "properties": {
-                "image": {"type": "string", "description": "The http(s) URL of the picture to edit. Use an attachment of the conversation, or the URL a generate_image answer names."}
+                "image": {
+                    "type": "string"
+                    , "description": "The http(s) URL of the picture to edit. Use an attachment of the conversation, or the URL a generate_image answer names."
+                }
                 , "prompt": {"type": "string", "description": "What to change in the picture."}
                 , "model": _model_property(VENICE_EDIT_MODELS)
-                , "aspect_ratio": {"type": "string", "description": "The aspect ratio of the result, for example 1:1, 16:9, or 9:16. Default auto keeps the shape of the input image."}
+                , "aspect_ratio": {
+                    "type": "string"
+                    , "default": "auto"
+                    , "description": "The aspect ratio of the result, for example 1:1, 16:9, or 9:16. Auto keeps the shape of the input image."
+                }
             }
             , "required": ["image", "prompt"]
         }
