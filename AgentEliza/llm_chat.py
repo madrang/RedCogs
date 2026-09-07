@@ -452,11 +452,25 @@ class ChatEngine:
 
         async def set_conversation_model(model_id):
             """Override the chat model of this conversation, for native
-            provider tools. None restores the configured model. The override
-            rides the session: it survives a context restart and dies with
-            the session. It answers the next and later requests, the
-            request that runs the tool keeps its model."""
+            provider tools. None restores the configured model. Returns
+            None when the override stored, an error text when the target
+            model holds a smaller context window than the current model:
+            the accumulated turns would not fit the next request. The
+            override rides the session: it survives a context restart and
+            dies with the session. It answers the next and later requests,
+            the request that runs the tool keeps its model."""
+            if model_id is not None and preset is not None:
+                current = session.model_override or await self.api.model_name()
+                current_window = preset.context_length(current)
+                target_window = preset.context_length(model_id)
+                if current_window and target_window and target_window < current_window:
+                    return (
+                        f"Error: {model_id} holds a smaller context window "
+                        f"({target_window:,} tokens) than the active model ({current_window:,}). "
+                        "A switch that shrinks the context needs a compaction first."
+                    )
             session.model_override = model_id
+            return None
 
         # The user turn of this message. On a vision chat model the images
         # of the message join as image_url parts (a data URI, fetched with

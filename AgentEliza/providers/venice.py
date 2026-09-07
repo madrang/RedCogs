@@ -244,9 +244,18 @@ VENICE_IMAGE_TRAIT_LABELS = {
 VENICE_IMAGE_DARK_MAX = 8
 # The capabilities the agent can ask of the environment tool. One settled
 # vocabulary: the same words in the schema enum, the catalog traits, and
-# the tool answers. The code trait mirrors the optimizedForCode flag of
-# the live model list.
-VENICE_CHAT_CAPABILITIES = ("large context", "vision", "uncensored", "code")
+# the tool answers, in the language a user types — no spec terms. The
+# coding trait mirrors the optimizedForCode flag of the live model list.
+# The roleplay and storytelling traits ride the Aion pair, and the short
+# answers and long answers traits mark the size pairs — the lite and mini
+# presets answer briefly, the regular and pro presets at length — on the
+# operator's word, 2026-09-06. A blind A/B run of fresh subjects
+# (2026-09-06) picked the words: the literal nsfw token went unmapped
+# under the earlier adult word, and nothing went unmapped under this set.
+VENICE_CHAT_CAPABILITIES = (
+    "vision", "nsfw", "long context", "coding"
+  , "roleplay", "storytelling", "short answers", "long answers"
+)
 # Chat presets: a short display name for the agent and the user, the model
 # id behind it, an optional NSFW variant id for conversations behind the
 # 18+ gate, the capability names the preset provides, and the cost scale
@@ -259,81 +268,95 @@ VENICE_CHAT_CAPABILITIES = ("large context", "vision", "uncensored", "code")
 # ceiling, read 2026-09-04), anchored at DeepSeek Lite = 0: a preset
 # cheaper than the default carries a negative cost. The catalog order is
 # preference order: the first preset that satisfies a request wins. The
-# short names are the only model handle the agent ever sees.
+# short names are the only model handle the agent ever sees. An entry may
+# carry disabled True: the environment tool and the overload fallback skip
+# it, so the agent cannot reach it, while the user commands (setmodel, the
+# providers menu) keep it.
 VENICE_CHAT_PRESETS = {
     "DeepSeek Lite": {
+        # No coding trait by the operator's word, 2026-09-06: a coding request upgrades to DeepSeek Pro, the next preset that carries it.
         "normal": "deepseek-v4-flash-0731"
-      , "traits": ["large context", "code"]
+      , "traits": ["long context", "short answers"]
       , "cost": 0.0
     }
   , "DeepSeek Pro": {
         "normal": "deepseek-v4-pro"
-      , "traits": ["large context", "code"]
+      , "traits": ["long context", "coding", "long answers"]
       , "cost": 0.33
     }
 
     # Google
   , "Gemma": {
+        # Disabled for the agent: the model accepts at most 20 tool
+        # definitions, the harness offers more on every reply.
         "normal": "google-gemma-4-31b-it"
       , "traits": ["vision"]
       , "cost": 0.0
       , "nsfw": "gemma-4-uncensored"
+      , "disabled": True
     }
 
     # Z.AI
   , "GLM Lite": {
+        # Disabled for the agent: the negative-cost preset stays a manual
+        # choice of the operator.
         "normal": "zai-org-glm-4.7-flash"
-      , "traits": []
+      , "traits": ["short answers"]
       , "cost": -0.02
       , "nsfw": "olafangensan-glm-4.7-flash-heretic"
+      , "disabled": True
     }
   , "GLM Vision": {
         "normal": "z-ai-glm-5-3-flash"
-      , "traits": ["large context", "vision", "code"]
+      , "traits": ["long context", "vision", "coding"]
       , "cost": 0.0
     }
   , "GLM 1M": {
         "normal": "z-ai-glm-5-3"
-      , "traits": ["large context", "code"]
+      , "traits": ["long context", "coding", "long answers"]
       , "cost": 0.39
     }
 
   , "Inkling": {
         "normal": "inkling"
-      , "traits": ["vision", "code"]
+      , "traits": ["vision", "coding"]
       , "cost": 0.29
     }
 
   , "Kimi": {
         "normal": "kimi-k3"
-      , "traits": ["large context", "vision", "code"]
+      , "traits": ["long context", "vision", "coding", "long answers"]
       , "cost": 1.0
     }
 
   , "Qwen Lite": {
+        # No coding trait by the operator's word, 2026-09-06: a coding request upgrades to Qwen, the next preset that carries it.
         "normal": "qwen3-6-35b-a3b"
-      , "traits": ["vision", "code", "uncensored"]
+      , "traits": ["vision", "nsfw", "short answers"]
       , "cost": 0.0
     }
   , "Qwen": {
         "normal": "qwen-3-8-27b"
-      , "traits": ["vision", "code", "uncensored"]
+      , "traits": ["vision", "coding", "nsfw", "long answers"]
       , "cost": 0.10
     }
 
+  # The Aion pair carries roleplay and storytelling on the operator's word, 2026-09-06.
   , "Aion Mini": {
+        # Model based on DeepSeek
         "normal": "aion-labs-aion-3-0-mini"
-      , "traits": ["uncensored"]
+      , "traits": ["nsfw", "roleplay", "storytelling", "short answers"]
       , "cost": 0.16
     }
   , "Aion": {
+        # Model based on GLM-5.1
         "normal": "aion-labs-aion-3-0"
-      , "traits": ["uncensored"]
+      , "traits": ["nsfw", "roleplay", "storytelling", "long answers"]
       , "cost": 0.80
     }
   , "Venice Uncensored": {
         "normal": "venice-uncensored-1-2"
-      , "traits": ["vision", "uncensored"]
+      , "traits": ["vision", "nsfw"]
       , "cost": 0.01
     }
 }
@@ -886,12 +909,16 @@ def _environment_tool() -> dict:
                 f"Error: unknown capability: {', '.join(unknown)}. "
                 f"Known capabilities: {', '.join(VENICE_CHAT_CAPABILITIES)}."
             )
-        adult = "uncensored" in requested
-        if adult and (channel_nsfw is None or not await channel_nsfw()):
-            return "Error: the uncensored capability needs a conversation behind the 18+ gate."
+        gated = "nsfw" in requested
+        if gated and (channel_nsfw is None or not await channel_nsfw()):
+            return "Error: the nsfw capability needs a conversation behind the 18+ gate."
+        refused = []
         for name, preset in VENICE_CHAT_PRESETS.items():
-            remaining = [trait for trait in requested if trait != "uncensored"]
-            if adult:
+            if preset.get("disabled"):
+                # A disabled preset stays invisible to the agent.
+                continue
+            remaining = [trait for trait in requested if trait != "nsfw"]
+            if gated:
                 # The 18+ variant shares the trait list of the preset: a
                 # variant joins a preset only when it carries the same
                 # capabilities. A preset without a variant can still be
@@ -901,14 +928,22 @@ def _environment_tool() -> dict:
                 # the moment.
                 variant = preset.get("nsfw")
                 if variant is not None and all(trait in preset["traits"] for trait in remaining):
-                    await set_conversation_model(name)
+                    error = await set_conversation_model(name)
+                    if error:
+                        # A smaller context window refused the move: the
+                        # next candidate gets the turn.
+                        refused.append(name)
+                        continue
                     granted = ", ".join(sorted(requested))
                     return (
                         f"The environment now provides: {granted}. Active preset: {name} (18+ variant). "
                         "The change answers the next message."
                     )
-                if variant is None and "uncensored" in preset.get("traits", ()) and all(trait in preset["traits"] for trait in remaining):
-                    await set_conversation_model(name)
+                if variant is None and "nsfw" in preset.get("traits", ()) and all(trait in preset["traits"] for trait in remaining):
+                    error = await set_conversation_model(name)
+                    if error:
+                        refused.append(name)
+                        continue
                     granted = ", ".join(sorted(requested))
                     return (
                         f"The environment now provides: {granted}. Active preset: {name}. "
@@ -917,14 +952,22 @@ def _environment_tool() -> dict:
             else:
                 traits = preset.get("traits", ())
                 if all(trait in traits for trait in requested):
-                    await set_conversation_model(name)
+                    error = await set_conversation_model(name)
+                    if error:
+                        refused.append(name)
+                        continue
                     granted = ", ".join(sorted(requested))
                     return (
                         f"The environment now provides: {granted}. Active preset: {name}. "
                         "The change answers the next message."
                     )
-        menu = "; ".join(preset_menu_line(name, preset) for name, preset in VENICE_CHAT_PRESETS.items())
-        return f"Error: no environment preset provides: {', '.join(sorted(requested))}. Available: {menu}."
+        menu = "; ".join(
+            preset_menu_line(name, preset)
+            for name, preset in VENICE_CHAT_PRESETS.items()
+            if not preset.get("disabled")
+        )
+        detail = f" Refused for a smaller context window: {', '.join(refused)}." if refused else ""
+        return f"Error: no environment preset provides: {', '.join(sorted(requested))}.{detail} Available: {menu}."
 
     return {
         "name": "configure_environment"
@@ -932,7 +975,7 @@ def _environment_tool() -> dict:
             "Configure the environment of this conversation for the current task. "
             "State the capabilities the task needs. The change answers the next message. "
             f"Capabilities: {', '.join(VENICE_CHAT_CAPABILITIES)}, and \"default\" to restore the default environment. "
-            "The uncensored capability needs a conversation behind the 18+ gate."
+            "The nsfw capability needs a conversation behind the 18+ gate."
         )
         , "parameters": {
             "type": "object"
@@ -1091,20 +1134,35 @@ class VeniceApiProvider(Provider):
         return self.models[0]
 
     def preset_fallback(self, model: str) -> str | None:
-        """The preset one step up in cost from the preset holding the
-        model (either variant), cycling to the cheapest at the ceiling.
+        """The enabled preset one step up in cost from the preset holding
+        the model (either variant), cycling to the cheapest at the ceiling.
         The cost of a preset is its cost property, 0 when the entry names
-        none. None when the model sits in no preset."""
+        none. A disabled preset never takes the move — the operator hid it
+        from the agent — and neither does a preset with a smaller context
+        window than the current one: the accumulated turns would not fit
+        the next request. A session that sits on an excluded preset (a
+        user choice) moves to the cheapest enabled preset above it. None
+        when the model sits in no preset."""
         ranked = []
         current = None
+        current_window = None
         for name, preset in VENICE_CHAT_PRESETS.items():
-            entry = (preset.get("cost", 0.0), name)
-            ranked.append(entry)
             if model in (preset.get("normal"), preset.get("nsfw")):
-                current = entry
-        if current is None:
+                current = (preset.get("cost", 0.0), name)
+                current_window = self.context_length(preset["normal"])
+            if preset.get("disabled"):
+                continue
+            window = self.context_length(preset["normal"])
+            if current_window and window and window < current_window:
+                # The move never shrinks the context window.
+                continue
+            ranked.append((preset.get("cost", 0.0), name))
+        if current is None or not ranked:
             return None
         ranked.sort()
+        if current not in ranked:
+            above = [entry for entry in ranked if entry > current]
+            return (above[0] if above else ranked[0])[1]
         nxt = ranked[(ranked.index(current) + 1) % len(ranked)]
         return None if nxt == current else nxt[1]
 
