@@ -344,7 +344,10 @@ class Eliza(commands.Cog):
 
         A stalled connect (flaky DNS, dead route) raises a ClientError or a
         TimeoutError. Retry those like the Discord calls: 4 attempts, 4/8/16 s
-        backoff. An HTTP error answer is a real reply of the API: not retried.
+        backoff. The total time budget is not one of them: a request that
+        runs past it fails at once, the generation may have run (and billed)
+        server-side and a retry would run it again. An HTTP error answer is
+        a real reply of the API: not retried.
         The error body follows the OpenAI-style envelope `error: {code,
         message}` with an optional `contentFilter` array. The presence of
         `contentFilter` marks a provider content filter rejection, whatever
@@ -355,15 +358,21 @@ class Eliza(commands.Cog):
         base_url = await self._base_url()
         delay = 4
         for attempt in range(4):
+            # The total budget rides the asyncio scope, not aiohttp: only a
+            # scope expiry marks itself (expired), so the except below
+            # separates the total — a request that already ran and may have
+            # billed — from the sock_connect stall that retries. The scope
+            # caps the whole request: a long generation on a large context
+            # needs several minutes.
+            scope = asyncio.timeout(900)
             try:
-                async with self.session.post(
+                async with scope, self.session.post(
                     f"{base_url}/chat/completions",
                     headers={"Authorization": f"Bearer {api_key}"},
                     json=payload,
-                    # total caps the whole request: a long generation on a
-                    # large context needs several minutes. sock_connect fails
-                    # a stalled connect fast so the retry probes again sooner.
-                    timeout=aiohttp.ClientTimeout(total=900, sock_connect=15),
+                    # sock_connect fails a stalled connect fast so the
+                    # retry probes again sooner.
+                    timeout=aiohttp.ClientTimeout(total=None, sock_connect=15),
                 ) as response:
                     body = await response.text()
                     try:
@@ -402,6 +411,13 @@ class Eliza(commands.Cog):
                         raise ChatError("http", f"The API returned an error (HTTP {response.status}): {detail}", raw=data)
                     return data
             except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+                if isinstance(e, asyncio.TimeoutError) and scope.expired():
+                    log.warning("The API request ran past its 900 s time budget.")
+                    raise ChatError(
+                        "connection"
+                        , "The request ran past its 900 s time budget without an answer."
+                        , raw=e,
+                    ) from e
                 if attempt == 3:
                     log.warning("The API request failed after %d attempts: %s: %s", attempt + 1, type(e).__name__, e)
                     raise ChatError("connection", f"The connection to the API failed: {type(e).__name__}: {e}", raw=e) from e
@@ -418,21 +434,27 @@ class Eliza(commands.Cog):
         120 s default fits the augment scrape, an image render passes the
         inference-grade cap of chat_request. Raise ChatError on any
         failure: the caller owns the error text. Connect-level failures
-        retry like chat_request."""
+        retry like chat_request; the total time budget does not — the call
+        may have run and billed server-side, a retry would run it again."""
         if self.session is None or self.session.closed:
             self.session = self._new_session()
         base_url = await self._base_url()
         delay = 4
         for attempt in range(4):
+            # The total budget rides the asyncio scope, not aiohttp: only a
+            # scope expiry marks itself (expired), so the except below
+            # separates the total — a call that already ran and may have
+            # billed — from the sock_connect stall that retries.
+            scope = asyncio.timeout(timeout)
             try:
-                async with self.session.post(
+                async with scope, self.session.post(
                     f"{base_url}{path}",
                     headers={"Authorization": f"Bearer {api_key}"},
                     json=json_body,
                     data=data,
                     # sock_connect fails a stalled connect fast so the
                     # retry probes again sooner.
-                    timeout=aiohttp.ClientTimeout(total=timeout, sock_connect=15),
+                    timeout=aiohttp.ClientTimeout(total=None, sock_connect=15),
                 ) as response:
                     raw = await response.read()
                     body = raw.decode("utf-8", "replace")
@@ -471,6 +493,13 @@ class Eliza(commands.Cog):
                         raw=parsed,
                     )
             except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+                if isinstance(e, asyncio.TimeoutError) and scope.expired():
+                    log.warning("The provider endpoint %s ran past its %d s time budget.", path, timeout)
+                    raise ChatError(
+                        "connection"
+                        , f"The request ran past its {timeout} s time budget without an answer."
+                        , raw=e,
+                    ) from e
                 if attempt == 3:
                     log.warning("The provider endpoint %s failed after %d attempts: %s: %s", path, attempt + 1, type(e).__name__, e)
                     raise ChatError("connection", f"The connection to the API failed: {type(e).__name__}: {e}", raw=e) from e
