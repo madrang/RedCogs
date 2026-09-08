@@ -1,5 +1,6 @@
 """The Venice provider over HTTP: the usage endpoint and the credit fetch."""
 
+import base64
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
@@ -149,3 +150,55 @@ async def test_the_environment_tool_returns_the_failed_restore() -> None:
     engine = SimpleNamespace(channel_nsfw=None, set_conversation_model=refused)
     answer = await entry["handler"]({"capabilities": ["default"]}, engine)
     assert answer == "Error: the condense before the move failed."
+
+
+async def test_the_edit_tool_drops_gpt_image_to_1k() -> None:
+    posts: list = []
+
+    async def api_post(path, *, json_body=None, data=None, binary=False, timeout=120):
+        posts.append(json_body)
+        return b"pngdata", {"content-type": "image/png"}
+
+    async def send_file(name, raw):
+        return f"The file {name} has been sent."
+
+    engine = SimpleNamespace(fetch_url=None, api_post=api_post, send_file=send_file, channel_nsfw=None)
+    tools = {tool["name"]: tool for tool in VeniceApiProvider().native_tools()}
+    ask = {"image": "https://example.com/pic.png", "prompt": "add a red dot"}
+    await tools["edit_image"]["handler"]({**ask, "model": "GPT Image"}, engine)
+    # The quality field is unreachable on this model, so its 2K bill is
+    # the default high: it renders 1K instead.
+    assert posts[0]["resolution"] == "1K"
+    assert "quality" not in posts[0]
+    await tools["edit_image"]["handler"]({**ask, "model": "Nano Banana"}, engine)
+    # Every other tier model keeps the 2K preset.
+    assert posts[1]["resolution"] == "2K"
+
+
+async def test_the_background_remove_tool_passes_the_url_or_the_bytes() -> None:
+    posts: list = []
+    fetches: list = []
+
+    async def api_post(path, *, json_body=None, data=None, binary=False, timeout=120):
+        posts.append((path, json_body))
+        return b"pngdata", {"content-type": "image/png"}
+
+    async def fetch_url(url):
+        fetches.append(url)
+        return (b"img", "image/png")
+
+    async def send_file(name, raw):
+        return f"The file {name} has been sent."
+
+    engine = SimpleNamespace(fetch_url=fetch_url, api_post=api_post, send_file=send_file, channel_nsfw=None)
+    tools = {tool["name"]: tool for tool in VeniceApiProvider().native_tools()}
+    entry = tools["remove_background"]
+    answer = await entry["handler"]({"image": "https://example.com/pic.jpg"}, engine)
+    # A foreign URL rides the body as image_url.
+    assert answer.startswith("The file background-removed-")
+    assert posts[0] == ("/image/background-remove", {"image_url": "https://example.com/pic.jpg"})
+    await entry["handler"]({"image": "https://cdn.discordapp.com/attachments/1/2/pic.png"}, engine)
+    # A Discord download rides the body as base64 in image.
+    assert fetches == ["https://cdn.discordapp.com/attachments/1/2/pic.png"]
+    assert posts[1][0] == "/image/background-remove"
+    assert posts[1][1]["image"] == base64.b64encode(b"img").decode("ascii")

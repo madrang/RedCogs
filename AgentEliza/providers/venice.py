@@ -149,9 +149,8 @@ VENICE_IMAGE_DIALECTS = {
 # after some use.
 VENICE_IMAGE_RESOLUTION = "2K"
 VENICE_IMAGE_QUALITY = "medium"
-# The total timeout of one image render attempt: a 2K render at high
-# quality (gpt-image-2-edit, the model that takes no quality parameter)
-# runs past the 120 s augment default of provider_post. The value matches
+# The total timeout of one image render attempt: a 2K edit render runs
+# past the 120 s augment default of provider_post. The value matches
 # the inference cap of chat_request — a server-side render waits like a
 # long generation.
 VENICE_RENDER_TIMEOUT = 900
@@ -184,9 +183,10 @@ VENICE_SEED_MAX = 999_999_999
 # request parameters for both quality-table models carrying the field,
 # gpt-image-2-edit and grok-imagine-image-2-0-edit, while the same
 # requests without it succeeded on nano-banana-2-edit and
-# qwen-image-3-pro-edit) — gpt-image-2-edit renders 2K at its default
-# quality high ($0.52, the resolution-only request verified live
-# 2026-09-05), grok-imagine-image-2-0-edit defaults to medium
+# qwen-image-3-pro-edit) — gpt-image-2-edit renders 1K at its default
+# quality high ($0.34; the model rides VENICE_EDIT_MODEL_RESOLUTIONS,
+# its 2K high bill $0.52 priced it out of the 2K preset),
+# grok-imagine-image-2-0-edit defaults to medium
 # so its 2K price is $0.10 either way.
 # Each entry holds its capability traits (plain names) and its real cost
 # in USD per edit; the comment names the release date (the created field,
@@ -197,7 +197,7 @@ VENICE_EDIT_MODELS = {
   , "Qwen": {"model": "qwen-image-3-pro-edit", "traits": [], "cost": 0.09}  # released Jul 15, 2026
   , "Luma": {"model": "luma-uni-1-edit", "traits": [], "cost": 0.06}  # released Jun 16, 2026
   , "Wan": {"model": "wan-2-7-pro-edit", "traits": [], "cost": 0.094}  # released Apr 22, 2026
-  , "GPT Image": {"model": "gpt-image-2-edit", "traits": [], "cost": 0.52}  # released Apr 20, 2026
+  , "GPT Image": {"model": "gpt-image-2-edit", "traits": [], "cost": 0.34}  # released Apr 20, 2026
   , "FireRed": {"model": "firered-image-edit", "traits": [], "cost": 0.04}  # released Mar 24, 2026
   , "Nano Banana": {"model": "nano-banana-2-edit", "traits": [], "cost": 0.14}  # released Feb 25, 2026
   , "Flux": {"model": "flux-2-max-edit", "traits": [], "cost": 0.12}  # released Jan 4, 2026
@@ -214,14 +214,25 @@ VENICE_EDIT_TIER_MODELS = {
   , "grok-imagine-image-2-0-edit"
   , "qwen-image-3-pro-edit"
 }
+# The edit models that render below the 2K preset: gpt-image-2-edit
+# takes no quality parameter (the body field answers 400 unrecognized
+# key, and the chat model feature suffix does not reach the image
+# endpoints — a suffixed model id answers 400 Invalid model id, both
+# live 2026-09-08), so 2K bills its default quality high $0.52. It
+# renders 1K high $0.34 instead. An id missing here keeps
+# VENICE_IMAGE_RESOLUTION.
+VENICE_EDIT_MODEL_RESOLUTIONS = {"gpt-image-2-edit": "1K"}
 # The edit models that take the quality preset: the tool sends them the
 # medium constant of generate, so a quality-table model skips its high
 # default and its catalog cost matches the bill. The set is empty — no
 # model works with the parameter today (both quality-table models of the
-# live list answered 400 for it, live 2026-09-05). A model that works
-# with it joins here.
-# TODO: check the Venice.ai docs and revalidate this later — the docs
-# still carry the parameter and their request example uses it.
+# live list answered 400 for it, live 2026-09-05; gpt-image-2-edit
+# revalidated 2026-09-08, the same 400 unrecognized key under a spec
+# that still carries its quality table). A model that works with it
+# joins here.
+# TODO: revalidate later — the docs still carry the parameter, their
+# request example uses it, and the live spec carries the quality table
+# (2K medium $0.14 on gpt-image-2-edit).
 VENICE_EDIT_QUALITY_MODELS: set[str] = set()
 # The edit answer formats of the endpoint, mapped to file extensions.
 VENICE_EDIT_FORMATS = {"image/png": "png", "image/jpeg": "jpg", "image/webp": "webp"}
@@ -851,11 +862,12 @@ def _edit_tool() -> dict:
             # auto is the endpoint default: the edit keeps the input shape.
             body["aspect_ratio"] = aspect_ratio
         if model in VENICE_EDIT_TIER_MODELS:
-            # The tier models render at the 2K preset, the quality models
-            # at medium — the same convention as generate, so the catalog
-            # cost matches the bill. A model out of the quality set
-            # renders at its default quality (gpt-image-2-edit, high).
-            body["resolution"] = VENICE_IMAGE_RESOLUTION
+            # The tier models render at the 2K preset (the override map
+            # drops a model below it), the quality models at medium —
+            # the same convention as generate, so the catalog cost
+            # matches the bill. A model out of the quality set renders
+            # at its default quality (gpt-image-2-edit, high).
+            body["resolution"] = VENICE_EDIT_MODEL_RESOLUTIONS.get(model, VENICE_IMAGE_RESOLUTION)
             if model in VENICE_EDIT_QUALITY_MODELS:
                 body["quality"] = VENICE_IMAGE_QUALITY
         if engine.channel_nsfw is not None and await engine.channel_nsfw():
@@ -912,6 +924,78 @@ def _edit_tool() -> dict:
                 }
             }
             , "required": ["image", "prompt"]
+        }
+        , "handler": handler
+    }
+
+
+def _background_remove_tool() -> dict:
+    """The background removal endpoint as a native tool: one image in, a
+    PNG with a transparent background out, posted to the conversation.
+    The endpoint takes no model and no other dial (additionalProperties
+    false): a foreign URL rides the body as image_url, a Discord download
+    as base64 in image. The binary answer posts as a file. The per-call
+    price is unpublished for API keys (the live model list carries no
+    backgroundRemove price), so no catalog entry and no cost ride this
+    tool."""
+
+    async def handler(arguments, engine):
+        image = str(arguments.get("image") or "").strip()
+        if not image.startswith(("http://", "https://")):
+            return "Error: the image must be the http(s) URL of the picture."
+        body = {}
+        if urlparse(image).netloc.lower() in DISCORD_FILE_HOSTS:
+            # The Discord file hosts need an authorized download: the
+            # image rides the body as base64 instead of the URL.
+            if engine.fetch_url is None:
+                return "Error: the Discord download is not available here."
+            fetched = await engine.fetch_url(image)
+            if fetched is None:
+                return "Error: the download of the Discord file failed."
+            body["image"] = base64.b64encode(fetched[0]).decode("ascii")
+        else:
+            body["image_url"] = image
+        try:
+            data, headers = await engine.api_post("/image/background-remove", json_body=body, binary=True)
+        except ChatError as e:
+            return f"Error: the background removal failed: {e}"
+        if not isinstance(data, (bytes, bytearray)) or not data:
+            return "Error: the background removal returned no image."
+        violation, status = _moderation_status(headers)
+        refused = _refusal_error("background removal", bytes(data), violation, status)
+        if refused is not None:
+            return refused
+        if engine.send_file is None:
+            return "Error: the image posting is not available here."
+        # The binary answer carries no id: the answer format (a
+        # content-type header) names the extension, the endpoint and a
+        # random token name the file.
+        content_type = str(headers.get("content-type") or "").split(";")[0].strip().lower()
+        extension = VENICE_EDIT_FORMATS.get(content_type, "png")
+        name = f"background-removed-{random.randint(0, 0xFFFF):04x}.{extension}"
+        sent = await engine.send_file(name, bytes(data))
+        if status:
+            return f"{sent}\n{status}"
+        return sent
+
+    return {
+        "name": "remove_background"
+        # The usage counter a successful removal increments: it produces
+        # an image post, so it rides the generate windows.
+      , "media": "images"
+        , "description": (
+            "Remove the background of one image through Venice. "
+            "The result joins the current message as an attachment, and the tool answer names the posted file."
+        )
+        , "parameters": {
+            "type": "object"
+            , "properties": {
+                "image": {
+                    "type": "string"
+                    , "description": "The http(s) URL of the picture. Use an attachment of the conversation, or the URL a generate_image answer names."
+                }
+            }
+            , "required": ["image"]
         }
         , "handler": handler
     }
@@ -1116,13 +1200,13 @@ class VeniceApiProvider(Provider):
 
     def native_tools(self) -> list:
         """The provider tools: the vision tool, the augment set, the image
-        generation and edit, and the environment tool. web_search takes the
-        harness name, so the Venice search replaces the DuckDuckGo default
-        while this provider is active. web_scrape, parse_document,
-        generate_image, edit_image, and configure_environment join as
-        additions; the harness web_fetch keeps its place, it reads the
-        Discord file hosts with the bot
-        token."""
+        generation and edit, the background removal, and the environment
+        tool. web_search takes the harness name, so the Venice search
+        replaces the DuckDuckGo default while this provider is active.
+        web_scrape, parse_document, generate_image, edit_image,
+        remove_background, and configure_environment join as additions;
+        the harness web_fetch keeps its place, it reads the Discord file
+        hosts with the bot token."""
         return [
             analyze_image_tool(self.vision_model)
           , _search_tool()
@@ -1130,6 +1214,7 @@ class VeniceApiProvider(Provider):
           , _parse_tool()
           , _image_tool()
           , _edit_tool()
+          , _background_remove_tool()
           , _environment_tool()
         ]
 
