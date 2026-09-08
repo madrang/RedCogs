@@ -2,6 +2,10 @@
 
 import base64
 import json
+from datetime import datetime, timezone
+from types import SimpleNamespace
+
+import discord
 
 from AgentEliza.history import History
 from AgentEliza.llm_chat import ChatEngine, ChatError, IncomingMessage
@@ -12,10 +16,10 @@ from tests.AgentEliza.fakes import (
 )
 
 
-def build_engine(api: FakeApi, *, harness_tools=None, stats=None, config=None, compactor=None) -> ChatEngine:
+def build_engine(api: FakeApi, *, harness_tools=None, stats=None, config=None, compactor=None, bot=None) -> ChatEngine:
     memory = FakeMemory()
     return ChatEngine(
-        FakeBot()
+        bot or FakeBot()
         , config or FakeConfig({"api_key": "test-key"})
         , History(memory)
         , memory
@@ -158,6 +162,42 @@ async def test_a_successful_generation_counts_and_consumes() -> None:
     assert stats.media_counts[0].user_id == 7
     assert stats.records[-1]["images"] == 1
     assert stats.records[-1]["tool_calls"] == 1
+
+
+async def test_a_fresh_session_backfills_the_channel_history() -> None:
+    earlier = SimpleNamespace(
+        id=11
+      , author=SimpleNamespace(id=7, bot=False, display_name="Madrang")
+      , type=discord.MessageType.default
+      , content="earlier"
+      , attachments=[]
+      , reference=None
+      , guild=None
+      , mentions=[]
+      , created_at=datetime(2026, 9, 8, 6, 0, tzinfo=timezone.utc)
+    )
+
+    class Channel:
+        def history(self, limit=100, oldest_first=False):
+            async def walk():
+                yield earlier
+
+            return walk()
+
+    class BackfillBot(FakeBot):
+        user = SimpleNamespace(id=5, name="TestBot")
+
+        def get_channel(self, channel_id):
+            return Channel()
+
+    api = FakeApi([close("Hello there.")])
+    engine = build_engine(api, bot=BackfillBot())
+    assert await drain(engine, "hi") == ["Hello there."]
+    # The turn of the earlier message rode the fresh context.
+    assert any(
+        isinstance(message["content"], str) and "earlier" in message["content"]
+        for message in api.requests[0]["messages"]
+    )
 
 
 async def test_a_blocked_usage_yields_the_notice_and_calls_nothing() -> None:

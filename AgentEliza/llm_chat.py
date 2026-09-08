@@ -385,7 +385,7 @@ class ChatEngine:
                     session.inject_summary()
                 channel = self.bot.get_channel(channel_id)
                 if channel is not None:
-                    for turn in await self._backfill_turns(channel, name, message_id):
+                    for turn in await self._backfill_turns(channel, name, message.message_id):
                         session.append(turn["role"], turn["content"])
         session.touch()
         speaker = message.speaker
