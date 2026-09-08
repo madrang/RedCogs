@@ -1,9 +1,11 @@
 """The reply engine flow: segments, tools, refusals, and the record."""
 
+import base64
 import json
 
 from AgentEliza.history import History
-from AgentEliza.llm_chat import ChatEngine, ChatError
+from AgentEliza.llm_chat import ChatEngine, ChatError, IncomingMessage
+from AgentEliza.providers.base import analyze_image_impl
 from tests.AgentEliza.fakes import (
     FakeApi, FakeBot, FakeCompactor, FakeConfig, FakeHarnessTools, FakeMCP,
     FakeMemory, FakePreset, FakeScopeStats,
@@ -28,9 +30,9 @@ def build_engine(api: FakeApi, *, harness_tools=None, stats=None, config=None, c
 async def drain(engine: ChatEngine, content: str) -> list[str]:
     return [
         segment
-        async for segment in engine.generate_reply(
-            100, content, user_id=7, user_name="Madrang", bot_name="TestBot"
-        )
+        async for segment in engine.generate_reply(IncomingMessage(
+            channel_id=100, content=content, user_id=7, user_name="Madrang", bot_name="TestBot"
+        ))
     ]
 
 
@@ -109,7 +111,7 @@ async def test_a_failing_tool_becomes_the_result_text() -> None:
 async def test_a_full_media_window_refuses_the_generation() -> None:
     ran: list = []
 
-    async def handler(arguments, call_api, fetch_url, api_post, send_file, channel_nsfw, set_conversation_model):
+    async def handler(arguments, engine):
         ran.append(arguments)
         return "The image has been sent."
 
@@ -136,7 +138,7 @@ async def test_a_full_media_window_refuses_the_generation() -> None:
 
 
 async def test_a_successful_generation_counts_and_consumes() -> None:
-    async def handler(arguments, call_api, fetch_url, api_post, send_file, channel_nsfw, set_conversation_model):
+    async def handler(arguments, engine):
         return "The image has been sent."
 
     preset = FakePreset(native=[{
@@ -150,7 +152,10 @@ async def test_a_successful_generation_counts_and_consumes() -> None:
     stats = FakeScopeStats()
     engine = build_engine(api, stats=stats)
     assert await drain(engine, "hi") == ["Done."]
-    assert stats.media_counts == [(None, 100, 7)]
+    # The generation counted into the scope of the message.
+    assert stats.media_counts[0].guild_id is None
+    assert stats.media_counts[0].channel_id == 100
+    assert stats.media_counts[0].user_id == 7
     assert stats.records[-1]["images"] == 1
     assert stats.records[-1]["tool_calls"] == 1
 
@@ -180,8 +185,8 @@ def call_with(name: str, arguments: dict, call_id: str = "1") -> dict:
 def switch_tool(record: list):
     """A native tool that moves the conversation model and records the answer."""
 
-    async def handler(arguments, call_api, fetch_url, api_post, send_file, channel_nsfw, set_conversation_model):
-        record.append(await set_conversation_model(arguments["model"]))
+    async def handler(arguments, engine):
+        record.append(await engine.set_conversation_model(arguments["model"]))
         return "switched"
 
     return {
@@ -192,6 +197,21 @@ def switch_tool(record: list):
             , "properties": {"model": {"type": "string", "description": "The target model."}}
             , "required": ["model"]
         }
+        , "handler": handler
+    }
+
+
+def show_tool(record: list):
+    """A native tool that offers an image to the conversation and records the answer."""
+
+    async def handler(arguments, engine):
+        record.append((engine.vision_chat, await engine.show_image("photo.png", b"pngbytes", "image/png")))
+        return "read"
+
+    return {
+        "name": "read_image"
+        , "description": "Read an image."
+        , "parameters": {"type": "object", "properties": {}}
         , "handler": handler
     }
 
@@ -244,9 +264,9 @@ async def test_a_failed_condense_refuses_the_switch() -> None:
 async def test_the_default_restore_onto_a_smaller_window_condenses() -> None:
     answers: list = []
 
-    async def handler(arguments, call_api, fetch_url, api_post, send_file, channel_nsfw, set_conversation_model):
-        await set_conversation_model("big")
-        answers.append(await set_conversation_model(None))
+    async def handler(arguments, engine):
+        await engine.set_conversation_model("big")
+        answers.append(await engine.set_conversation_model(None))
         return "switched"
 
     preset = FakePreset(
@@ -380,3 +400,120 @@ async def test_a_second_overload_move_in_one_reply_keeps_the_exchange() -> None:
     assert [message["role"] for message in retry["messages"]] == ["system", "user", "assistant", "tool"]
     assert retry["messages"][1]["content"].endswith("Madrang <@7>: again")
     assert retry["messages"][3]["tool_call_id"] == retry["messages"][2]["tool_calls"][0]["id"]
+
+
+async def test_a_vision_conversation_takes_the_image_a_tool_reads() -> None:
+    record: list = []
+    preset = FakePreset(native=[show_tool(record)])
+    preset.vision_models = {"test-model"}
+    api = FakeApi([close("Hello there."), call_with("read_image", {}), close("Done.")], preset=preset)
+    engine = build_engine(api)
+    assert await drain(engine, "hi") == ["Hello there."]
+    assert await drain(engine, "look") == ["Done."]
+    # The conversation model sees images, so the offer joined.
+    assert record == [(True, True)]
+    # The note rides the round after the tool result, as image parts.
+    last = api.requests[-1]
+    assert [message["role"] for message in last["messages"]] == [
+        "system", "user", "assistant", "user", "assistant", "tool", "user"
+    ]
+    note = last["messages"][-1]["content"]
+    assert [part["type"] for part in note] == ["text", "image_url"]
+    assert note[1]["image_url"]["url"] == f"data:image/png;base64,{base64.b64encode(b'pngbytes').decode('ascii')}"
+
+
+async def test_a_plain_conversation_refuses_the_image_offer() -> None:
+    record: list = []
+    preset = FakePreset(native=[show_tool(record)])
+    api = FakeApi([close("Hello there."), call_with("read_image", {}), close("Done.")], preset=preset)
+    engine = build_engine(api)
+    assert await drain(engine, "hi") == ["Hello there."]
+    assert await drain(engine, "look") == ["Done."]
+    # The conversation model reads text only: the offer refused, no note.
+    assert record == [(False, False)]
+    last = api.requests[-1]
+    assert [message["role"] for message in last["messages"]] == [
+        "system", "user", "assistant", "user", "assistant", "tool"
+    ]
+
+
+async def test_analyze_image_hands_a_vision_conversation_the_image() -> None:
+    calls: list = []
+    fetches: list = []
+    shown: list = []
+
+    async def call_api(payload):
+        calls.append(payload)
+        return {"choices": [{"message": {"content": "a description"}}]}
+
+    async def fetch_url(url):
+        fetches.append(url)
+        return (b"img", "image/png")
+
+    async def show_image(name, data, mime):
+        shown.append((name, data, mime))
+        return True
+
+    answer = await analyze_image_impl(
+        {"url": "https://example.com/pic.jpg", "question": "what is it"}
+        , call_api, fetch_url, model="vision-model", vision_chat=True, show_image=show_image
+    )
+    assert answer.startswith("The image joined this conversation")
+    # Any host downloads for the offer, and no second model answers between.
+    assert fetches == ["https://example.com/pic.jpg"]
+    assert shown == [("pic.jpg", b"img", "image/png")]
+    assert calls == []
+
+
+async def test_analyze_image_of_a_plain_conversation_answers_through_the_vision_model() -> None:
+    calls: list = []
+    fetches: list = []
+    shown: list = []
+
+    async def call_api(payload):
+        calls.append(payload)
+        return {"choices": [{"message": {"content": "a description"}}]}
+
+    async def fetch_url(url):
+        fetches.append(url)
+        return (b"img", "image/png")
+
+    async def show_image(name, data, mime):
+        shown.append((name, data, mime))
+        return True
+
+    answer = await analyze_image_impl(
+        {"url": "https://cdn.discordapp.com/attachments/1/2/photo.png"}
+        , call_api, fetch_url, model="vision-model", show_image=show_image
+    )
+    assert answer == "a description"
+    # The Discord download feeds the vision call as a data URI, and the
+    # offer never ran: the conversation reads text only.
+    assert fetches == ["https://cdn.discordapp.com/attachments/1/2/photo.png"]
+    assert shown == []
+    part = calls[0]["messages"][0]["content"][0]
+    assert part["image_url"]["url"].startswith("data:image/png;base64,")
+
+
+async def test_analyze_image_of_a_plain_conversation_passes_a_foreign_url_remote() -> None:
+    calls: list = []
+    fetches: list = []
+
+    async def call_api(payload):
+        calls.append(payload)
+        return {"choices": [{"message": {"content": "a description"}}]}
+
+    async def fetch_url(url):
+        fetches.append(url)
+        return (b"img", "image/png")
+
+    answer = await analyze_image_impl(
+        {"url": "https://example.com/pic.jpg"}
+        , call_api, fetch_url, model="vision-model"
+    )
+    assert answer == "a description"
+    # A foreign URL rides the vision call as-is: no download of a page the
+    # conversation cannot see.
+    assert fetches == []
+    part = calls[0]["messages"][0]["content"][0]
+    assert part["image_url"]["url"] == "https://example.com/pic.jpg"

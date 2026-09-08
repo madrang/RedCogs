@@ -218,14 +218,14 @@ class FakeScopeStats:
         self.media_counts: list = []
         self.records: list[dict] = []
 
-    async def media_refusal(self, *, guild_id, channel_id, user_id):
-        self.media_checks.append((guild_id, channel_id, user_id))
+    async def media_refusal(self, scope):
+        self.media_checks.append(scope)
         return self.refusal
 
-    async def count_media(self, *, guild_id, channel_id, user_id):
-        self.media_counts.append((guild_id, channel_id, user_id))
+    async def count_media(self, scope):
+        self.media_counts.append(scope)
 
-    async def record(self, *, guild_id, channel_id, user_id, usage):
+    async def record(self, scope, usage):
         self.records.append(usage)
 
 

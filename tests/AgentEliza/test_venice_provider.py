@@ -1,6 +1,7 @@
 """The Venice provider over HTTP: the usage endpoint and the credit fetch."""
 
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 from aiohttp import ClientConnectionError
 
@@ -133,10 +134,8 @@ async def test_the_environment_tool_names_a_failed_switch() -> None:
     async def refused(model_id):
         return "Error: the condense before the move failed."
 
-    answer = await entry["handler"](
-        {"capabilities": ["roleplay"]}
-        , None, None, None, None, None, refused
-    )
+    engine = SimpleNamespace(channel_nsfw=None, set_conversation_model=refused)
+    answer = await entry["handler"]({"capabilities": ["roleplay"]}, engine)
     assert answer.startswith("Error: no environment preset provides: roleplay.")
     assert "Switch refused (the condense before it failed): Aion Mini, Aion." in answer
 
@@ -147,8 +146,6 @@ async def test_the_environment_tool_returns_the_failed_restore() -> None:
     async def refused(model_id):
         return "Error: the condense before the move failed."
 
-    answer = await entry["handler"](
-        {"capabilities": ["default"]}
-        , None, None, None, None, None, refused
-    )
+    engine = SimpleNamespace(channel_nsfw=None, set_conversation_model=refused)
+    answer = await entry["handler"]({"capabilities": ["default"]}, engine)
     assert answer == "Error: the condense before the move failed."

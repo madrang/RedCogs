@@ -271,7 +271,7 @@ VENICE_CHAT_CAPABILITIES = (
 # the operating cost of the model — 10x the input price plus 1x the output
 # and cache-read prices, each per 1M tokens (the operating_usd_per_m column
 # of scripts/list_models.py) — over the priciest catalog model (Kimi at the
-# ceiling, read 2026-09-04), anchored at DeepSeek Lite = 0: a preset
+# ceiling, read 2026-09-08), anchored at DeepSeek Lite = 0: a preset
 # cheaper than the default carries a negative cost. The catalog order is
 # preference order: the first preset that satisfies a request wins. The
 # short names are the only model handle the agent ever sees. An entry may
@@ -293,19 +293,41 @@ VENICE_CHAT_PRESETS = {
 
     # Google
   , "Gemma": {
-        # Disabled for the agent: the model accepts at most 20 tool
-        # definitions, the harness offers more on every reply.
+        # Disabled for the agent: the model accepts at most 20 tool definitions, the harness offers more on every reply.
         "normal": "google-gemma-4-31b-it"
       , "traits": ["vision"]
-      , "cost": 0.0
+      , "cost": -0.01
       , "nsfw": "gemma-4-uncensored"
+      , "disabled": True
+    }
+    , "Gemini": {
+        # Disabled, untested.
+        "normal": "gemini-3-8-flash"
+      , "traits": ["vision"]
+      , "cost": 0.22
+      , "disabled": True
+    }
+
+    # Meta
+  , "Llama Lite": {
+        # Disabled, untested - 128K Ctx.
+        "normal": "llama-3.2-3b"  # released Oct 3, 2024
+      , "traits": ["long context", "short answers"]
+      , "cost": 0.0
+      , "disabled": True
+    }
+  , "Llama": {
+        # Disabled, untested - 128K Ctx.
+        "normal": "llama-3.3-70b"  # released Feb 19, 2026
+      , "traits": ["long context", "coding", "long answers"]
+      , "cost": 0.14
       , "disabled": True
     }
 
     # Z.AI
   , "GLM Lite": {
-        # Disabled for the agent: the negative-cost preset stays a manual
-        # choice of the operator.
+        # Disabled for the agent: Low quality output.
+        # The negative-cost preset stays a manual choice of the operator.
         "normal": "zai-org-glm-4.7-flash"
       , "traits": ["short answers"]
       , "cost": -0.02
@@ -323,12 +345,14 @@ VENICE_CHAT_PRESETS = {
       , "cost": 0.39
     }
 
+    # Thinking Machines
   , "Inkling": {
         "normal": "inkling"
       , "traits": ["vision", "coding"]
       , "cost": 0.29
     }
 
+    # MoonshotAI
   , "Kimi": {
         "normal": "kimi-k3"
       , "traits": ["long context", "vision", "coding", "long answers"]
@@ -360,6 +384,7 @@ VENICE_CHAT_PRESETS = {
       , "traits": ["nsfw", "roleplay", "storytelling", "long answers"]
       , "cost": 0.80
     }
+
   , "Venice Uncensored": {
         "normal": "venice-uncensored-1-2"
       , "traits": ["vision", "nsfw"]
@@ -481,7 +506,7 @@ def _refusal_error(what: str, data: bytes, violation: str, status: str) -> str |
 def _search_tool() -> dict:
     """The augment search as a native tool, under the harness web_search name."""
 
-    async def handler(arguments, call_api, fetch_url=None, api_post=None, send_file=None, channel_nsfw=None, set_conversation_model=None):
+    async def handler(arguments, engine):
         query = str(arguments.get("query") or "").strip()
         if not query:
             return "Error: the query must be a non-empty string."
@@ -496,7 +521,7 @@ def _search_tool() -> dict:
         if limit is not None:
             body["limit"] = max(1, min(VENICE_SEARCH_MAX_LIMIT, limit))
         try:
-            data, _headers = await api_post("/augment/search", json_body=body)
+            data, _headers = await engine.api_post("/augment/search", json_body=body)
         except ChatError as e:
             return f"Error: the search failed: {e}"
         results = data.get("results") or []
@@ -533,12 +558,12 @@ def _search_tool() -> dict:
 def _scrape_tool() -> dict:
     """The augment scrape as a native tool: one page as markdown."""
 
-    async def handler(arguments, call_api, fetch_url=None, api_post=None, send_file=None, channel_nsfw=None, set_conversation_model=None):
+    async def handler(arguments, engine):
         url = str(arguments.get("url") or "").strip()
         if not url.startswith(("http://", "https://")):
             return "Error: the url must be an http(s) URL."
         try:
-            data, _headers = await api_post("/augment/scrape", json_body={"url": url})
+            data, _headers = await engine.api_post("/augment/scrape", json_body={"url": url})
         except ChatError as e:
             return f"Error: the scrape failed: {e}"
         content = data.get("content")
@@ -568,13 +593,13 @@ def _scrape_tool() -> dict:
 def _parse_tool() -> dict:
     """The augment text parser as a native tool: one document as text."""
 
-    async def handler(arguments, call_api, fetch_url=None, api_post=None, send_file=None, channel_nsfw=None, set_conversation_model=None):
+    async def handler(arguments, engine):
         url = str(arguments.get("url") or "").strip()
         if not url.startswith(("http://", "https://")):
             return "Error: the url must be the http(s) URL of a document."
-        if fetch_url is None:
+        if engine.fetch_url is None:
             return "Error: the document download is not available here."
-        fetched = await fetch_url(url)
+        fetched = await engine.fetch_url(url)
         if fetched is None:
             return "Error: the download of the document failed."
         body, content_type = fetched
@@ -582,7 +607,7 @@ def _parse_tool() -> dict:
         form = aiohttp.FormData()
         form.add_field("file", body, filename=name, content_type=content_type)
         try:
-            data, _headers = await api_post("/augment/text-parser", data=form)
+            data, _headers = await engine.api_post("/augment/text-parser", data=form)
         except ChatError as e:
             return f"Error: the parse failed: {e}"
         text = data.get("text")
@@ -645,7 +670,7 @@ def _image_tool() -> dict:
     then the tool answers with an error and posts nothing. Without the
     flag, a small image posts as content."""
 
-    async def handler(arguments, call_api, fetch_url=None, api_post=None, send_file=None, channel_nsfw=None, set_conversation_model=None):
+    async def handler(arguments, engine):
         prompt = str(arguments.get("prompt") or "").strip()
         if not prompt:
             return "Error: the prompt must be a non-empty string."
@@ -706,12 +731,12 @@ def _image_tool() -> dict:
         negative_prompt = str(arguments.get("negative_prompt") or "").strip()
         if negative_prompt:
             body["negative_prompt"] = negative_prompt
-        if channel_nsfw is not None and await channel_nsfw():
+        if engine.channel_nsfw is not None and await engine.channel_nsfw():
             # The endpoint default true blurs adult content: it drops only
             # where Discord itself gates the channel behind 18+.
             body["safe_mode"] = False
         try:
-            data, headers = await api_post("/image/generate", json_body=body, timeout=VENICE_RENDER_TIMEOUT)
+            data, headers = await engine.api_post("/image/generate", json_body=body, timeout=VENICE_RENDER_TIMEOUT)
         except ChatError as e:
             return f"Error: the image generation failed: {e}"
         # The moderation signals of the endpoint: a content violation is the
@@ -720,7 +745,7 @@ def _image_tool() -> dict:
         images = data.get("images") or []
         if not images:
             return "Error: the image generation returned no image."
-        if send_file is None:
+        if engine.send_file is None:
             return "Error: the image posting is not available here."
         try:
             raw = base64.b64decode(images[0])
@@ -734,7 +759,7 @@ def _image_tool() -> dict:
         # The format stays the endpoint default (webp). The id names the file:
         # each image of a conversation lands under its own name.
         name = re.sub(r"[\s/\\]+", "-", str(data.get("id") or "venice-image"))[:100]
-        sent = await send_file(f"{name}.webp", raw)
+        sent = await engine.send_file(f"{name}.webp", raw)
         if status:
             return f"{sent}\n{status}"
         return sent
@@ -781,7 +806,7 @@ def _edit_tool() -> dict:
     flags report like generate_image: only a flag that reads yes appears,
     and a blank refusal needs both marks."""
 
-    async def handler(arguments, call_api, fetch_url=None, api_post=None, send_file=None, channel_nsfw=None, set_conversation_model=None):
+    async def handler(arguments, engine):
         image = str(arguments.get("image") or "").strip()
         if not image.startswith(("http://", "https://")):
             return "Error: the image must be the http(s) URL of the picture to edit."
@@ -813,9 +838,9 @@ def _edit_tool() -> dict:
         if urlparse(image).netloc.lower() in DISCORD_FILE_HOSTS:
             # The Discord file hosts need an authorized download: the image
             # rides the body as base64 instead of the URL.
-            if fetch_url is None:
+            if engine.fetch_url is None:
                 return "Error: the Discord download is not available here."
-            fetched = await fetch_url(image)
+            fetched = await engine.fetch_url(image)
             if fetched is None:
                 return "Error: the download of the Discord file failed."
             body["image"] = base64.b64encode(fetched[0]).decode("ascii")
@@ -833,12 +858,12 @@ def _edit_tool() -> dict:
             body["resolution"] = VENICE_IMAGE_RESOLUTION
             if model in VENICE_EDIT_QUALITY_MODELS:
                 body["quality"] = VENICE_IMAGE_QUALITY
-        if channel_nsfw is not None and await channel_nsfw():
+        if engine.channel_nsfw is not None and await engine.channel_nsfw():
             # The endpoint default true blurs adult content: it drops only
             # where Discord itself gates the channel behind 18+.
             body["safe_mode"] = False
         try:
-            data, headers = await api_post("/image/edit", json_body=body, binary=True, timeout=VENICE_RENDER_TIMEOUT)
+            data, headers = await engine.api_post("/image/edit", json_body=body, binary=True, timeout=VENICE_RENDER_TIMEOUT)
         except ChatError as e:
             return f"Error: the image edit failed: {e}"
         if not isinstance(data, (bytes, bytearray)) or not data:
@@ -847,7 +872,7 @@ def _edit_tool() -> dict:
         refused = _refusal_error("edit", bytes(data), violation, status)
         if refused is not None:
             return refused
-        if send_file is None:
+        if engine.send_file is None:
             return "Error: the image posting is not available here."
         # The binary answer carries no generation id: the answer format
         # (a content-type header) names the extension, the model and a
@@ -855,7 +880,7 @@ def _edit_tool() -> dict:
         content_type = str(headers.get("content-type") or "").split(";")[0].strip().lower()
         extension = VENICE_EDIT_FORMATS.get(content_type, "png")
         name = f"{model}-{random.randint(0, 0xFFFF):04x}.{extension}"
-        sent = await send_file(name, bytes(data))
+        sent = await engine.send_file(name, bytes(data))
         if status:
             return f"{sent}\n{status}"
         return sent
@@ -900,8 +925,8 @@ def _environment_tool() -> dict:
     conversation behind the 18+ gate. The agent never sees a model id: the
     short preset name is its only handle."""
 
-    async def handler(arguments, call_api, fetch_url=None, api_post=None, send_file=None, channel_nsfw=None, set_conversation_model=None):
-        if set_conversation_model is None:
+    async def handler(arguments, engine):
+        if engine.set_conversation_model is None:
             return "Error: the environment configuration is not available here."
         raw = arguments.get("capabilities")
         items = [raw] if isinstance(raw, str) else list(raw) if isinstance(raw, list) else []
@@ -915,7 +940,7 @@ def _environment_tool() -> dict:
         if "default" in requested:
             if len(requested) > 1:
                 return 'Error: "default" accepts no other capability.'
-            error = await set_conversation_model(None)
+            error = await engine.set_conversation_model(None)
             if error:
                 return error
             return "The environment is back to the default configuration. The change answers the next message."
@@ -926,7 +951,7 @@ def _environment_tool() -> dict:
                 f"Known capabilities: {', '.join(VENICE_CHAT_CAPABILITIES)}."
             )
         gated = "nsfw" in requested
-        if gated and (channel_nsfw is None or not await channel_nsfw()):
+        if gated and (engine.channel_nsfw is None or not await engine.channel_nsfw()):
             return "Error: the nsfw capability needs a conversation behind the 18+ gate."
         refused = []
         for name, preset in VENICE_CHAT_PRESETS.items():
@@ -944,7 +969,7 @@ def _environment_tool() -> dict:
                 # the moment.
                 variant = preset.get("nsfw")
                 if variant is not None and all(trait in preset["traits"] for trait in remaining):
-                    error = await set_conversation_model(name)
+                    error = await engine.set_conversation_model(name)
                     if error:
                         # The condense before the switch failed: the next
                         # candidate gets the turn.
@@ -956,7 +981,7 @@ def _environment_tool() -> dict:
                         "The change answers the next message."
                     )
                 if variant is None and "nsfw" in preset.get("traits", ()) and all(trait in preset["traits"] for trait in remaining):
-                    error = await set_conversation_model(name)
+                    error = await engine.set_conversation_model(name)
                     if error:
                         refused.append(name)
                         continue
@@ -968,7 +993,7 @@ def _environment_tool() -> dict:
             else:
                 traits = preset.get("traits", ())
                 if all(trait in traits for trait in requested):
-                    error = await set_conversation_model(name)
+                    error = await engine.set_conversation_model(name)
                     if error:
                         refused.append(name)
                         continue
@@ -1058,6 +1083,9 @@ class VeniceApiProvider(Provider):
       , "aion-labs-aion-3-0-mini": 128_000
       , "qwen3-6-35b-a3b": 256_000
       , "qwen-3-8-27b": 262_144
+      , "gemini-3-8-flash": 1_000_000
+      , "llama-3.2-3b": 128_000
+      , "llama-3.3-70b": 128_000
     }
     # The curated models with the supportsVision flag of the live model list:
     # they accept image input through the chat contract. `eliza providers`

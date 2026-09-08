@@ -16,7 +16,7 @@ from .history import (
     CHARS_PER_TOKEN, COMPACTION_AT, CONTEXT_FILL, DEFAULT_CACHE_TTL, HISTORY_MAX_CHARS,
     HISTORY_MAX_TOKENS, History,
 )
-from .llm_chat import ChatEngine, ChatError, MAX_SESSIONS
+from .llm_chat import ChatEngine, ChatError, IncomingMessage, MAX_SESSIONS
 from .llm_compress import Compressor
 from .mcp_manager import MCPManager
 from .memory import Memory
@@ -737,14 +737,23 @@ class Eliza(commands.Cog):
             content = "(poke: the user sent an empty message)"
         guild_id = message.guild.id if message.guild else None
         is_owner = await self.bot.is_owner(message.author)
+        incoming = IncomingMessage(
+            channel_id=message.channel.id
+            , content=content
+            , guild_id=guild_id
+            , user_id=message.author.id
+            , bot_name=bot_name
+            , user_name=message.author.display_name
+            , is_owner=is_owner
+            , message_id=message.id
+            , attachments=attachments
+        )
         # A reply to a bot never pings: a mention-reactive bot would loop with the agent.
         mentions = discord.AllowedMentions.none() if message.author.bot else discord.AllowedMentions.all()
         # The bot owner is unlimited. Every other user counts against the per-scope limits.
         if not is_owner:
             refused = await self.scope_stats.check_and_count(
-                guild_id=guild_id
-                , channel_id=message.channel.id
-                , user_id=message.author.id
+                incoming.scope
                 , limits=await self._rate_limits()
             )
             if refused:
@@ -760,17 +769,7 @@ class Eliza(commands.Cog):
             try:
                 await self._stream_reply(
                     message.channel
-                    , self.engine.generate_reply(
-                        message.channel.id
-                        , content
-                        , guild_id=guild_id
-                        , user_id=message.author.id
-                        , bot_name=bot_name
-                        , user_name=message.author.display_name
-                        , is_owner=is_owner
-                        , message_id=message.id
-                        , attachments=attachments
-                    )
+                    , self.engine.generate_reply(incoming)
                     , mentions
                     , tag=str(message.id)
                 )
@@ -952,15 +951,15 @@ class Eliza(commands.Cog):
             try:
                 yielded, _ = await self._stream_reply(
                     channel
-                    , self.engine.generate_reply(
-                        channel.id
-                        , harness_text
+                    , self.engine.generate_reply(IncomingMessage(
+                        channel_id=channel.id
+                        , content=harness_text
                         , guild_id=guild.id if guild is not None else None
                         , user_id=user.id if user is not None else None
                         , bot_name=self.bot.user.name if self.bot.user else "Eliza"
                         , user_name=user.display_name if user is not None else None
                         , is_owner=user is not None and await self.bot.is_owner(user)
-                    )
+                    ))
                     , discord.AllowedMentions.all()
                     , tag=f"poll-{session_id}"
                 )

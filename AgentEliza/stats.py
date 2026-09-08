@@ -32,6 +32,25 @@ def month_key() -> str:
     """The UTC month key of the moment, for example 2026-09."""
     return time.strftime("%Y-%m", time.gmtime())
 
+
+class Scope:
+    """Where one interaction happened: a guild channel, or a direct
+    message. guild_id None names a direct message, where no guild window
+    applies. user_id None names an interaction without a user (a poll
+    event). The stats windows read their scope ids from here."""
+
+    def __init__(self, *, channel_id: int, guild_id: int | None = None, user_id: int | None = None):
+        if not isinstance(channel_id, int):
+            raise ValueError("The scope needs a channel id.")
+        if guild_id is not None and not isinstance(guild_id, int):
+            raise ValueError("The guild id must be an int or None.")
+        if user_id is not None and not isinstance(user_id, int):
+            raise ValueError("The user id must be an int or None.")
+        self.channel_id = channel_id
+        self.guild_id = guild_id
+        self.user_id = user_id
+
+
 class ScopeStats:
     """Per-scope counters of the AgentEliza cog, stored in Red Config.
 
@@ -62,7 +81,7 @@ class ScopeStats:
         """The Config group of one scope instance."""
         return getattr(self.config, self.SCOPES[scope])(scope_id)
 
-    async def record(self, *, guild_id, channel_id, user_id, usage: dict) -> None:
+    async def record(self, scope: Scope, usage: dict) -> None:
         """Add one interaction and its token usage to every scope with an id.
 
         usage holds the accumulated totals of one generate_reply call:
@@ -75,12 +94,12 @@ class ScopeStats:
         (images, inpaints, music — a generation counts only when it
         succeeds).
         """
-        ids = {"guild": guild_id, "channel": channel_id, "user": user_id}
+        ids = {"guild": scope.guild_id, "channel": scope.channel_id, "user": scope.user_id}
         cost = float(usage.get("cost") or 0)
-        for scope, scope_id in ids.items():
+        for name, scope_id in ids.items():
             if scope_id is None:
                 continue
-            group = self._group(scope, scope_id)
+            group = self._group(name, scope_id)
             async with group.stats() as stats:
                 stats["messages"] = stats.get("messages", 0) + 1
                 for key in (
@@ -98,7 +117,7 @@ class ScopeStats:
                             months.pop(old)
                     stats["cost_months"] = months
 
-    async def check_and_count(self, *, guild_id, channel_id, user_id, limits: dict) -> str | None:
+    async def check_and_count(self, scope: Scope, limits: dict) -> str | None:
         """Count one interaction against the per-scope limits.
 
         limits maps scope name to the allowed interactions per window, 0
@@ -107,31 +126,31 @@ class ScopeStats:
         The check runs before the count, so a refused interaction does
         not consume the allowance of the other scopes.
         """
-        ids = {"user": user_id, "channel": channel_id, "guild": guild_id}
+        ids = {"user": scope.user_id, "channel": scope.channel_id, "guild": scope.guild_id}
         now = int(time.time())
         limited = {
-            scope: scope_id
-            for scope, scope_id in ids.items()
-            if scope_id is not None and limits.get(scope)
+            name: scope_id
+            for name, scope_id in ids.items()
+            if scope_id is not None and limits.get(name)
         }
-        for scope, scope_id in limited.items():
-            group = self._group(scope, scope_id)
+        for name, scope_id in limited.items():
+            group = self._group(name, scope_id)
             async with group.rate() as rate:
                 if now - rate.get("start", 0) >= RATE_WINDOW_SECONDS:
                     rate["start"] = now
                     rate["count"] = 0
-        for scope, scope_id in limited.items():
-            group = self._group(scope, scope_id)
+        for name, scope_id in limited.items():
+            group = self._group(name, scope_id)
             rate = await group.rate()
-            if rate.get("count", 0) >= limits[scope]:
+            if rate.get("count", 0) >= limits[name]:
                 reset = rate.get("start", now) + RATE_WINDOW_SECONDS
-                label = "server" if scope == "guild" else scope
+                label = "server" if name == "guild" else name
                 return (
-                    f"The {label} interaction limit is reached ({limits[scope]} per hour). "
+                    f"The {label} interaction limit is reached ({limits[name]} per hour). "
                     f"Try again <t:{reset}:R>."
                 )
-        for scope, scope_id in limited.items():
-            group = self._group(scope, scope_id)
+        for name, scope_id in limited.items():
+            group = self._group(name, scope_id)
             async with group.rate() as rate:
                 rate["count"] = rate.get("count", 0) + 1
         return None
@@ -140,51 +159,51 @@ class ScopeStats:
         """The stats dict of one scope instance."""
         return await self._group(scope, scope_id).stats()
 
-    async def media_refusal(self, *, guild_id, channel_id, user_id) -> str | None:
+    async def media_refusal(self, scope: Scope) -> str | None:
         """The refusal text when one more media generation would pass an
         hourly window, else None. The user window (MEDIA_RATE_USER) counts
         everywhere; the channel window (MEDIA_RATE_CHANNEL) counts in a
         guild only. Images and inpaints share the windows; the count rises
         on a successful generation only, so the text starts with the
         uniform error prefix and never counts as one."""
-        ids = {"user": user_id}
-        if guild_id is not None:
-            ids["channel"] = channel_id
+        ids = {"user": scope.user_id}
+        if scope.guild_id is not None:
+            ids["channel"] = scope.channel_id
         limits = {"user": MEDIA_RATE_USER, "channel": MEDIA_RATE_CHANNEL}
         now = int(time.time())
         live = {
-            scope: scope_id
-            for scope, scope_id in ids.items()
-            if scope_id is not None and limits.get(scope)
+            name: scope_id
+            for name, scope_id in ids.items()
+            if scope_id is not None and limits.get(name)
         }
-        for scope, scope_id in live.items():
-            group = self._group(scope, scope_id)
+        for name, scope_id in live.items():
+            group = self._group(name, scope_id)
             async with group.media_rate() as rate:
                 if now - rate.get("start", 0) >= RATE_WINDOW_SECONDS:
                     rate["start"] = now
                     rate["count"] = 0
-        for scope, scope_id in live.items():
-            group = self._group(scope, scope_id)
+        for name, scope_id in live.items():
+            group = self._group(name, scope_id)
             rate = await group.media_rate()
-            if rate.get("count", 0) >= limits[scope]:
+            if rate.get("count", 0) >= limits[name]:
                 reset = rate.get("start", now) + RATE_WINDOW_SECONDS
                 return (
-                    f"Error: the {scope} generation limit is reached ({limits[scope]} per hour). "
+                    f"Error: the {name} generation limit is reached ({limits[name]} per hour). "
                     f"Try again <t:{reset}:R>."
                 )
         return None
 
-    async def count_media(self, *, guild_id, channel_id, user_id) -> None:
+    async def count_media(self, scope: Scope) -> None:
         """Count one successful media generation into the hourly windows:
         the user window everywhere, the channel window in a guild."""
-        ids = {"user": user_id}
-        if guild_id is not None:
-            ids["channel"] = channel_id
+        ids = {"user": scope.user_id}
+        if scope.guild_id is not None:
+            ids["channel"] = scope.channel_id
         now = int(time.time())
-        for scope, scope_id in ids.items():
+        for name, scope_id in ids.items():
             if scope_id is None:
                 continue
-            group = self._group(scope, scope_id)
+            group = self._group(name, scope_id)
             async with group.media_rate() as rate:
                 if now - rate.get("start", 0) >= RATE_WINDOW_SECONDS:
                     rate["start"] = now

@@ -12,8 +12,12 @@ from ..tools.base import DISCORD_FILE_HOSTS
 log = logging.getLogger("red.agenteliza.providers")
 
 
-async def analyze_image_impl(arguments: dict, call_api, fetch_url, *, model: str, validate=None) -> str:
-    """The shared analyze_image flow: one vision chat call with an image URL.
+async def analyze_image_impl(arguments: dict, call_api, fetch_url, *, model: str, validate=None, vision_chat: bool = False, show_image=None) -> str:
+    """The shared analyze_image flow. A conversation model with vision
+    takes the image itself: show_image hands its bytes to the engine,
+    which joins them as image parts of the next request — no second model
+    answers between. Any other conversation gets one vision chat call
+    with the image URL, through the provider's vision model.
 
     validate(body, content_type) returns an error text, or None to accept.
     """
@@ -22,16 +26,32 @@ async def analyze_image_impl(arguments: dict, call_api, fetch_url, *, model: str
         return "Error: the url must be the http(s) URL of an image."
     log.info("analyze_image called with url %r", url[:150])
     question = str(arguments.get("question") or "").strip() or "Describe this image."
-    image_part = {"type": "image_url", "image_url": {"url": url}}
-    if fetch_url is not None and urlparse(url).netloc.lower() in DISCORD_FILE_HOSTS:
+    # The bytes download when a flow needs them: a Discord host always
+    # (the token fetch feeds the vision call), any host when the
+    # conversation takes the image itself (the harness note rides a data
+    # URI, so the bytes must exist).
+    discord_host = urlparse(url).netloc.lower() in DISCORD_FILE_HOSTS
+    body = None
+    content_type = None
+    if fetch_url is not None and (discord_host or vision_chat):
         fetched = await fetch_url(url)
-        if fetched is None:
+        if fetched is not None:
+            body, content_type = fetched
+            if validate is not None:
+                error = validate(body, content_type)
+                if error:
+                    return error
+        elif discord_host:
             return "Error: the download of the Discord file failed."
-        body, content_type = fetched
-        if validate is not None:
-            error = validate(body, content_type)
-            if error:
-                return error
+    if vision_chat and show_image is not None and body is not None:
+        name = url.rsplit("/", 1)[-1].split("?")[0] or "image"
+        if await show_image(name, body, content_type):
+            return (
+                "The image joined this conversation: a harness note carries it "
+                "as an image part beside this result. Answer from the image itself."
+            )
+    image_part = {"type": "image_url", "image_url": {"url": url}}
+    if body is not None:
         image_part["image_url"] = {"url": f"data:{content_type};base64,{base64.b64encode(body).decode('ascii')}"}
     payload = {
         "model": model
@@ -60,14 +80,19 @@ async def analyze_image_impl(arguments: dict, call_api, fetch_url, *, model: str
 def analyze_image_tool(model: str, validate=None) -> dict:
     """The analyze_image native tool entry: the schema and the handler."""
 
-    async def handler(arguments, call_api, fetch_url=None, api_post=None, send_file=None, channel_nsfw=None, set_conversation_model=None):
-        return await analyze_image_impl(arguments, call_api, fetch_url, model=model, validate=validate)
+    async def handler(arguments, engine):
+        return await analyze_image_impl(
+            arguments, engine.call_api, engine.fetch_url
+            , model=model, validate=validate
+            , vision_chat=engine.vision_chat, show_image=engine.show_image
+        )
 
     return {
         "name": "analyze_image"
         , "description": (
             "Analyze an image at an http(s) URL: describe it, read its text, or answer "
-            "a question about it. The attachments of a message carry usable URLs."
+            "a question about it. The attachments of a message carry usable URLs. "
+            "A conversation model with vision sees the image itself."
         )
         , "parameters": {
             "type": "object"
@@ -153,19 +178,25 @@ class Provider:
         """Tool definitions the provider implements itself, live while it is active.
 
         Each entry: {"name", "description", "parameters", "handler"}. The
-        handler is an async callable (arguments, call_api, fetch_url,
-        api_post, send_file, channel_nsfw, set_conversation_model)
-        returning text. call_api posts one chat-completions payload to the
-        provider. fetch_url downloads one URL to (bytes, content_type), or
-        None on failure. api_post sends one POST to a REST path of the
-        provider, returns the JSON answer and the response headers
-        (case-insensitive) as a tuple, and raises ChatError on failure.
-        send_file posts one binary file to the current channel and returns
-        the result text. channel_nsfw reports whether the current channel
-        sits behind the Discord 18+ gate (a direct message of the bot
-        owner counts). set_conversation_model overrides the chat model of
-        the current conversation (None restores the configured model). A
-        native tool takes the place of a harness tool of the same name.
+        handler is an async callable (arguments, engine) returning text.
+        engine is the ToolContext of the reply (llm_chat): the engine
+        builds one per reply, and a new capability is a field on it.
+        call_api posts one chat-completions payload to the provider.
+        fetch_url downloads one URL to (bytes, content_type), or None on
+        failure. api_post sends one POST to a REST path of the provider,
+        returns the JSON answer and the response headers (case-insensitive)
+        as a tuple, and raises ChatError on failure. send_file posts one
+        binary file to the current channel and returns the result text.
+        channel_nsfw reports whether the current channel sits behind the
+        Discord 18+ gate (a direct message of the bot owner counts).
+        set_conversation_model overrides the chat model of the current
+        conversation (None restores the configured model). vision_chat
+        reports whether the conversation model accepts image parts in the
+        chat contract. show_image hands one image to the conversation. It
+        takes (name, bytes, content type). It answers True when the image
+        joined (a harness note carries it in the next round). It answers
+        False when the tool must answer another way. A native tool takes
+        the place of a harness tool of the same name.
         """
         return []
 

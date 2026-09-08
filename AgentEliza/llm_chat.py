@@ -14,6 +14,7 @@ import discord
 
 from .history import BACKFILL_MESSAGES, DEFAULT_CACHE_TTL, Session
 from .prompt import place_block, system_text
+from .stats import Scope
 from .tools import MESSAGE_TIME_FORMAT
 from .tools.base import DISCORD_FILE_HOSTS, attachments_text, poll_result_suffix, read_limited
 from .tools.files import post_file
@@ -77,6 +78,64 @@ class ChatError(Exception):
         self.raw = raw
 
 
+class IncomingMessage:
+    """One user message on its way into the engine: the ids of where it
+    happened, the speaker, and the message facts. The derivations the
+    engine needs live here: the session of the conversation, the stats
+    scope, the speaker tag of the turns, and the send-time stamp. A poll
+    event builds one without a user."""
+
+    def __init__(self, *, channel_id: int, content: str, guild_id: int | None = None, user_id: int | None = None, bot_name: str | None = None, user_name: str | None = None, is_owner: bool = False, message_id: int | None = None, attachments: list | None = None):
+        self.channel_id = channel_id
+        self.content = content
+        self.guild_id = guild_id
+        self.user_id = user_id
+        self.bot_name = bot_name
+        self.user_name = user_name
+        self.is_owner = is_owner
+        self.message_id = message_id
+        self.attachments = list(attachments or [])
+        self.scope = Scope(channel_id=channel_id, guild_id=guild_id, user_id=user_id)
+
+    @property
+    def session_id(self) -> int:
+        """The conversation session: the channel in a guild, the user in a direct message."""
+        return self.channel_id if self.guild_id is not None else self.user_id
+
+    @property
+    def speaker(self) -> str:
+        """The name the turns carry: the display name, else a stand-in."""
+        return self.user_name or "User"
+
+    @property
+    def tag(self) -> str:
+        """The speaker tag of the turns: the name and the mention of the user."""
+        return f"{self.speaker} <@{self.user_id}>" if self.user_id is not None else self.speaker
+
+    @property
+    def stamp(self) -> str:
+        """The send time of the message: the snowflake when the id names one, else the moment of the call."""
+        moment = discord.utils.snowflake_time(self.message_id) if self.message_id is not None else datetime.now(timezone.utc)
+        return f"{moment:{MESSAGE_TIME_FORMAT}}"
+
+
+class ToolContext:
+    """The engine surface one native provider tool runs on: the closures
+    of a reply and its facts. The engine builds one per reply; a tool
+    handler receives it beside the arguments, and a new capability is a
+    field here, not a new argument of every handler."""
+
+    def __init__(self, *, call_api, fetch_url, api_post, send_file, channel_nsfw, set_conversation_model, vision_chat, show_image):
+        self.call_api = call_api
+        self.fetch_url = fetch_url
+        self.api_post = api_post
+        self.send_file = send_file
+        self.channel_nsfw = channel_nsfw
+        self.set_conversation_model = set_conversation_model
+        self.vision_chat = vision_chat
+        self.show_image = show_image
+
+
 class ChatEngine:
     """One conversation turn: context build, chat request, tool rounds, turn record.
 
@@ -98,7 +157,7 @@ class ChatEngine:
         self.api = api
         self.polls = polls
 
-    async def generate_reply(self, channel_id: int, content: str, *, guild_id: int | None = None, user_id: int | None = None, bot_name: str | None = None, user_name: str | None = None, is_owner: bool = False, message_id: int | None = None, attachments: list | None = None) -> AsyncIterator[str]:
+    async def generate_reply(self, message: IncomingMessage) -> AsyncIterator[str]:
         """Send one user message to the chat API and yield the reply in segments.
 
         The conversation session is the channel, or the user in DMs: the
@@ -120,7 +179,7 @@ class ChatEngine:
         if blocked:
             yield blocked
             return
-        session_id = channel_id if guild_id is not None else user_id
+        session_id = message.session_id
         if session_id not in self.history.sessions:
             preset = await self.api.current_preset()
             cache_ttl = getattr(preset, "cache_ttl", None) or DEFAULT_CACHE_TTL
@@ -128,7 +187,7 @@ class ChatEngine:
             if active >= MAX_SESSIONS:
                 yield "The agent is already busy in other conversations. Try again later."
                 return
-        session = await self.history.get(session_id, "channel" if guild_id is not None else "user")
+        session = await self.history.get(session_id, "channel" if message.guild_id is not None else "user")
         while True:
             async with session.acquire():
                 if self.history.sessions.get(session_id) is not session:
@@ -136,11 +195,7 @@ class ChatEngine:
                     # lock (sweeper unload, close): retry on the live session.
                     session = await self.history.get(session_id, session.scope)
                     continue
-                async for segment in self._generate_locked(
-                    session, session_id, channel_id, content, api_key=api_key,
-                    guild_id=guild_id, user_id=user_id, bot_name=bot_name, user_name=user_name, is_owner=is_owner,
-                    message_id=message_id, attachments=attachments,
-                ):
+                async for segment in self._generate_locked(session, message, api_key=api_key):
                     yield segment
                 return
 
@@ -271,8 +326,16 @@ class ChatEngine:
             turns.pop(0)
         return turns
 
-    async def _generate_locked(self, session: Session, session_id: int, channel_id: int, content: str, *, api_key: str, guild_id, user_id, bot_name, user_name, is_owner, message_id, attachments=None) -> AsyncIterator[str]:
+    async def _generate_locked(self, session: Session, message: IncomingMessage, *, api_key: str) -> AsyncIterator[str]:
         """The reply work of generate_reply. The caller holds the session lock."""
+        session_id = message.session_id
+        channel_id = message.channel_id
+        guild_id = message.guild_id
+        user_id = message.user_id
+        content = message.content
+        bot_name = message.bot_name
+        is_owner = message.is_owner
+        attachments = message.attachments
         preset = await self.api.current_preset()
         cache_ttl = getattr(preset, "cache_ttl", None) or DEFAULT_CACHE_TTL
         usage = {
@@ -325,8 +388,8 @@ class ChatEngine:
                     for turn in await self._backfill_turns(channel, name, message_id):
                         session.append(turn["role"], turn["content"])
         session.touch()
-        speaker = user_name or "User"
-        tag = f"{speaker} <@{user_id}>" if user_id is not None else speaker
+        speaker = message.speaker
+        tag = message.tag
         additions = []
         if self.polls is not None:
             # The vote status of the session leads the turn: the agent
@@ -341,11 +404,9 @@ class ChatEngine:
                     "role": "user"
                     , "content": f"[memory {speaker}]\n{user_memory}\n[/memory]"
                 })
-        if message_id is not None:
-            # The message snowflake carries the send time of the message.
-            stamp = f"{discord.utils.snowflake_time(message_id):{MESSAGE_TIME_FORMAT}}"
-        else:
-            stamp = f"{datetime.now(timezone.utc):{MESSAGE_TIME_FORMAT}}"
+        # The stamp names the send time of the message: the snowflake or
+        # the moment of the call.
+        stamp = message.stamp
         tools, routes, replaced = await self.mcp.gather_tools(preset, api_key)
         native_routes = {}
         media_counts = {}
@@ -452,6 +513,21 @@ class ChatEngine:
                 posted_images.append((name, data))
             return sent
 
+        # The images a tool read into this conversation: analyze_image of a
+        # vision conversation hands its image over, and the model sees the
+        # image itself — no second model describes it between.
+        shown_images = []
+
+        async def show_image(name, data, mime):
+            """Hand one image to this conversation, for native provider
+            tools. True when the conversation model sees images and the
+            image joined (a harness note carries it in the next round);
+            False when the tool must answer another way."""
+            if not vision_chat:
+                return False
+            shown_images.append((name, data, mime))
+            return True
+
         async def set_conversation_model(model_id):
             """Override the chat model of this conversation, for native
             provider tools. None restores the configured model. Returns
@@ -488,6 +564,14 @@ class ChatEngine:
                         usage[key] += compact_usage.get(key) or 0
             session.model_override = model_id
             return None
+
+        # The surface the native provider tools of this reply run on.
+        tool_context = ToolContext(
+            call_api=call_api, fetch_url=fetch_url, api_post=api_post
+            , send_file=send_file, channel_nsfw=channel_nsfw
+            , set_conversation_model=set_conversation_model
+            , vision_chat=vision_chat, show_image=show_image
+        )
 
         # The user turn of this message. On a vision chat model the images
         # of the message join as image_url parts (a data URI, fetched with
@@ -623,17 +707,17 @@ class ChatEngine:
             if round_usage.get("prompt_tokens"):
                 # The real prompt size calibrates the compaction trigger.
                 session.last_prompt_tokens = round_usage["prompt_tokens"]
-            message = self.api.message_of(data)
-            if message is None:
+            answer = self.api.message_of(data)
+            if answer is None:
                 yield f"The API returned an unexpected answer: {str(data)[:500]}"
                 return
-            tool_calls = message.get("tool_calls") or []
+            tool_calls = answer.get("tool_calls") or []
             if not tool_calls:
                 # The session records what the model said.
                 await self._record_turn(
-                    session, additions, exchange, message, guild_id=guild_id, channel_id=channel_id, user_id=user_id, usage=usage
+                    session, additions, exchange, answer, scope=message.scope, usage=usage
                 )
-                segment = self._final_segment(message, emitted)
+                segment = self._final_segment(answer, emitted)
                 # One line per reply: a silent model would otherwise leave no
                 # trace at all, and a wrong model behind a preset name would
                 # stay invisible.
@@ -650,11 +734,11 @@ class ChatEngine:
             # Reasoning is the exception: Kimi accepts reasoning_content back,
             # the newer vLLM dialect uses reasoning. Echo the field the
             # provider sent, so the session keeps it until a compaction.
-            text = collapse_blank_lines(message.get("content") or "")
+            text = collapse_blank_lines(answer.get("content") or "")
             echo = {"role": "assistant", "content": text}
             for key in ("reasoning_content", "reasoning"):
-                if message.get(key):
-                    echo[key] = message[key]
+                if answer.get(key):
+                    echo[key] = answer[key]
             echo["tool_calls"] = tool_calls
             messages.append(echo)
             exchange.append(echo)
@@ -675,7 +759,7 @@ class ChatEngine:
                     # The bot owner bypasses the media windows, like the
                     # interaction limits. A generation still counts: the
                     # channel budget stays honest.
-                    await self.scope_stats.media_refusal(guild_id=guild_id, channel_id=channel_id, user_id=user_id)
+                    await self.scope_stats.media_refusal(message.scope)
                     if media and not is_owner else None
                 )
                 try:
@@ -687,7 +771,7 @@ class ChatEngine:
                         # Routes win: a provider tool can take a harness name.
                         result_text = await self.mcp.run_tool(name, arguments, routes)
                     elif name in native_routes:
-                        result_text = await native_routes[name](arguments, call_api, fetch_url, api_post, send_file, channel_nsfw, set_conversation_model)
+                        result_text = await native_routes[name](arguments, tool_context)
                     elif name in self._harness_tool_names:
                         result_text = await self.harness_tools.run(
                             name, arguments, guild_id=guild_id, channel_id=channel_id, user_id=user_id,
@@ -707,7 +791,7 @@ class ChatEngine:
                 usage["tool_calls"] += 1
                 if media and not result_text.startswith("Error:"):
                     usage[media] = usage.get(media, 0) + 1
-                    await self.scope_stats.count_media(guild_id=guild_id, channel_id=channel_id, user_id=user_id)
+                    await self.scope_stats.count_media(message.scope)
                 result = {
                     "role": "tool"
                     , "tool_call_id": call.get("id", "")
@@ -741,6 +825,29 @@ class ChatEngine:
                     exchange.append(note)
                 elif posted_images:
                     log.info("The posted images stay unseen: over the vision caps of one note.")
+            if shown_images:
+                # A tool read an image into this conversation (analyze_image
+                # of a vision conversation): the model sees the image itself
+                # in the next round, no other model describes it between.
+                # The note rides the session like any turn, until a
+                # compaction summarizes it.
+                parts = [{"type": "text", "text": "[harness] the image a tool read into this conversation:"}]
+                budget = VISION_IMAGE_BUDGET_BYTES
+                while shown_images and len(parts) - 1 < VISION_MAX_IMAGES:
+                    name, data, mime = shown_images.pop(0)
+                    if len(data) > budget:
+                        continue
+                    budget -= len(data)
+                    parts.append({
+                        "type": "image_url"
+                        , "image_url": {"url": f"data:{mime};base64,{base64.b64encode(data).decode('ascii')}"}
+                    })
+                if len(parts) > 1:
+                    note = {"role": "user", "content": parts}
+                    messages.append(note)
+                    exchange.append(note)
+                elif shown_images:
+                    log.info("The read images stay unseen: over the vision caps of one note.")
         # The rounds are spent: one last pass without tools, so the model can answer with what it found.
         payload["tool_choice"] = "none"
         try:
@@ -756,12 +863,12 @@ class ChatEngine:
         # The provider's own cost metric of the request, when it names one.
         if preset is not None:
             usage["cost"] += preset.cost_of(data)
-        message = self.api.message_of(data)
-        if message is not None:
+        answer = self.api.message_of(data)
+        if answer is not None:
             await self._record_turn(
-                session, additions, exchange, message, guild_id=guild_id, channel_id=channel_id, user_id=user_id, usage=usage
+                session, additions, exchange, answer, scope=message.scope, usage=usage
             )
-            segment = self._final_segment(message, emitted)
+            segment = self._final_segment(answer, emitted)
             # One line per reply: a silent model would otherwise leave no
             # trace at all, and a wrong model behind a preset name would
             # stay invisible.
@@ -773,9 +880,7 @@ class ChatEngine:
             if segment is not None:
                 yield segment
             return
-        await self.scope_stats.record(
-            guild_id=guild_id, channel_id=channel_id, user_id=user_id, usage=usage
-        )
+        await self.scope_stats.record(message.scope, usage=usage)
         yield "The agent made too many tool calls in a row. Try a simpler request."
 
     @staticmethod
@@ -799,7 +904,7 @@ class ChatEngine:
             return EMPTY_REPLY
         return None
 
-    async def _record_turn(self, session: Session, additions: list, exchange: list, message: dict, *, guild_id, channel_id, user_id, usage: dict) -> None:
+    async def _record_turn(self, session: Session, additions: list, exchange: list, answer: dict, *, scope: Scope, usage: dict) -> None:
         """Store a completed turn in the session and record its token usage.
 
         The exchange holds the tool rounds: the assistant calls and the tool
@@ -811,17 +916,17 @@ class ChatEngine:
             session.append(addition["role"], addition["content"])
         for part in exchange:
             session.append_message(part)
-        final_content = message.get("content") or ""
+        final_content = answer.get("content") or ""
         if isinstance(final_content, str):
             # A content array (a vision answer in parts) stays as the
             # provider sent it: the next request takes the parts back.
             final_content = collapse_blank_lines(final_content)
         final = {"role": "assistant", "content": final_content}
         for key in ("reasoning_content", "reasoning"):
-            if message.get(key):
-                final[key] = message[key]
+            if answer.get(key):
+                final[key] = answer[key]
         session.append_message(final)
-        if user_id is not None:
+        if scope.user_id is not None:
             # The turn landed in the context: the memory note does not repeat.
-            session.seen_users.add(user_id)
-        await self.scope_stats.record(guild_id=guild_id, channel_id=channel_id, user_id=user_id, usage=usage)
+            session.seen_users.add(scope.user_id)
+        await self.scope_stats.record(scope, usage=usage)
