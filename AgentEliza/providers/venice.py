@@ -934,10 +934,11 @@ def _background_remove_tool() -> dict:
     PNG with a transparent background out, posted to the conversation.
     The endpoint takes no model and no other dial (additionalProperties
     false): a foreign URL rides the body as image_url, a Discord download
-    as base64 in image. The binary answer posts as a file. The per-call
-    price is unpublished for API keys (the live model list carries no
-    backgroundRemove price), so no catalog entry and no cost ride this
-    tool."""
+    as base64 in image. The binary answer posts as a file. The call
+    bills $0.03 an image (the flat generation price of bria-bg-remover,
+    the entry the live image list carries behind the endpoint, released
+    Feb 25, 2026). The endpoint takes no model, so no catalog entry
+    rides the tool."""
 
     async def handler(arguments, engine):
         image = str(arguments.get("image") or "").strip()
