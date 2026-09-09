@@ -1198,6 +1198,18 @@ class VeniceApiProvider(Provider):
     cache_ttl = 300
     # The vision model of analyze_image on this provider.
     vision_model = "gemma-4-uncensored"
+    # The speech-to-text model of POST /audio/transcriptions, a beta
+    # endpoint: it reads one audio file and answers the text.
+    speech_model = "elevenlabs/scribe-v2"
+
+    def speech_request(self, payload: bytes, filename: str, content_type: str):
+        """The transcription POST: the audio file and the model as the
+        multipart form. The endpoint takes no other dial
+        (additionalProperties false)."""
+        form = aiohttp.FormData()
+        form.add_field("file", payload, filename=filename or "audio", content_type=content_type or "application/octet-stream")
+        form.add_field("model", self.speech_model)
+        return "/audio/transcriptions", form
 
     def native_tools(self) -> list:
         """The provider tools: the vision tool, the augment set, the image

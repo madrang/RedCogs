@@ -2,6 +2,8 @@
 
 import re
 
+import discord
+
 # Cap of one tool result, uniform across the harness tools and the MCP
 # results. 64K characters holds a full read_history page of 64 messages.
 TOOL_RESULT_MAX_CHARS = 64_000
@@ -11,6 +13,13 @@ MESSAGE_TIME_FORMAT = "%Y-%m-%dT%H:%MZ"
 # The Discord file hosts. Their downloads take the bot token in the
 # Authorization header. Send the token to these hosts only.
 DISCORD_FILE_HOSTS = {"cdn.discordapp.com", "media.discordapp.net"}
+# The audio the speech transcription reads: the Discord content types carry
+# the prefix, an unknown type falls back to the file name suffix (the
+# formats the transcription endpoint accepts).
+AUDIO_SUFFIXES = (".wav", ".wave", ".flac", ".m4a", ".aac", ".mp4", ".mp3", ".ogg", ".oga", ".webm")
+# The transcription endpoint answers 413 past this size. An audio file over
+# it stays a plain attachment.
+TRANSCRIBE_MAX_BYTES = 25 * 1024 * 1024
 
 
 def attachments_text(attachments) -> str:
@@ -19,6 +28,14 @@ def attachments_text(attachments) -> str:
         return ""
     items = ", ".join(f"{name} ({kind or 'unknown type'}) <{url}>" for name, kind, url in attachments)
     return f"\n[attachments: {items}]"
+
+
+def is_audio_attachment(attachment) -> bool:
+    """True when the attachment is an audio file the transcription reads."""
+    kind = (attachment.content_type or "").lower()
+    if kind.startswith("audio/"):
+        return True
+    return kind in ("", "application/octet-stream") and attachment.filename.lower().endswith(AUDIO_SUFFIXES)
 
 
 def poll_result_suffix(message) -> str:
@@ -37,6 +54,58 @@ def poll_result_suffix(message) -> str:
         )
         return f"\nPoll results for {fields['poll_question_text']!r}: {outcome}, total votes: {fields.get('total_votes', '?')}."
     return ""
+
+
+# The title that marks the speech-transcription embed: the listener answers
+# an audio message with a bot reply that carries it.
+SPEECH_EMBED_TITLE = "Speech transcription"
+# The embed description holds 4096 characters at most. Room stays for the
+# truncation note.
+SPEECH_EMBED_MAX_CHARS = 4000
+
+
+def speech_embed(speaker, audio_time, text: str, duration: float, model: str) -> discord.Embed:
+    """The speech-transcription embed the listener answers an audio message with.
+
+    Every part the history views read back rides the embed: the speaker
+    name and the user id (speech_embed_line below), and the text in the
+    description. The author field and the timestamp carry the speaker for
+    a human reader.
+    """
+    if len(text) > SPEECH_EMBED_MAX_CHARS:
+        text = text[:SPEECH_EMBED_MAX_CHARS] + f"\n[truncated: {len(text) - SPEECH_EMBED_MAX_CHARS} characters dropped]"
+    embed = discord.Embed(
+        title=SPEECH_EMBED_TITLE
+        , description=text or "(no speech detected)"
+        , timestamp=audio_time
+    )
+    embed.set_author(name=speaker.display_name, icon_url=speaker.display_avatar.url)
+    embed.add_field(name="User", value=str(speaker.id))
+    seconds = f"{duration:.0f} s of audio, " if duration > 0 else ""
+    embed.set_footer(text=f"{seconds}transcribed by {model}")
+    return embed
+
+
+def speech_embed_line(message) -> str | None:
+    """The attributed line of one speech-transcription embed, or None.
+
+    The embed is the only carrier of the speech in the history views: the
+    bot reply it rides drops the audio message it answers (a bot reply and
+    its target read as a harness notice), so the embed itself must hold
+    the speaker. The line keeps the shape of a user history line minus the
+    stamp: `name <@id>: text`. None when the message carries no such
+    embed, or the embed misses its parts."""
+    for embed in message.embeds:
+        if embed.title != SPEECH_EMBED_TITLE:
+            continue
+        author = embed.author
+        speaker = (getattr(author, "name", "") or "").strip() if author is not None else ""
+        user_id = next((field.value.strip() for field in embed.fields if field.name == "User"), "")
+        text = (embed.description or "").strip()
+        if speaker and user_id.isdigit() and text:
+            return f"{speaker} <@{user_id}>: {text}"
+        return None
+    return None
 
 
 async def read_limited(response, limit: int) -> bytes:

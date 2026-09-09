@@ -129,6 +129,9 @@ class Provider:
     # Model ids that accept image input through the chat contract. The
     # `eliza providers` command marks them.
     vision_models: set = set()
+    # The model id of the provider's speech-to-text endpoint, None when the
+    # provider offers no audio transcription.
+    speech_model: str | None = None
 
     def context_length(self, model_name: str) -> int | None:
         """The context size of a model in tokens, None when unknown."""
@@ -199,6 +202,13 @@ class Provider:
         the place of a harness tool of the same name.
         """
         return []
+
+    def speech_request(self, payload: bytes, filename: str, content_type: str):
+        """The (REST path, multipart form) of one audio transcription POST,
+        None when the provider offers no transcription. The listener posts
+        the form through provider_post and reads the `text` field of the
+        JSON answer."""
+        return None
 
     def mcp_servers(self, api_key: str) -> dict:
         """MCP server definitions of the provider, live only while the provider is active.

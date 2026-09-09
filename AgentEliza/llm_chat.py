@@ -16,7 +16,7 @@ from .history import BACKFILL_MESSAGES, DEFAULT_CACHE_TTL, Session
 from .prompt import place_block, system_text
 from .stats import Scope
 from .tools import MESSAGE_TIME_FORMAT
-from .tools.base import DISCORD_FILE_HOSTS, attachments_text, poll_result_suffix, read_limited
+from .tools.base import DISCORD_FILE_HOSTS, attachments_text, poll_result_suffix, read_limited, speech_embed_line
 from .tools.files import post_file
 
 log = logging.getLogger("red.agenteliza")
@@ -228,8 +228,10 @@ class ChatEngine:
         messages (pagified replies) merge into one assistant turn. A bot reply
         is a harness notice (API error, content filter timeout), never an
         agent answer: the notice and the message it answers stay out of the
-        context. Return an empty list on any failure: the backfill never
-        breaks a reply.
+        context. The speech-transcription embed is the one bot reply that
+        stays: it reads as the turn of the speaker it names, and the audio
+        message it answers still drops. Return an empty list on any failure:
+        the backfill never breaks a reply.
         """
         if self.bot.user is None:
             return []
@@ -259,17 +261,24 @@ class ChatEngine:
                 if message.author.id == bot_id and message.type == discord.MessageType.reply:
                     # A bot reply is a harness notice, never an agent answer: the
                     # agent posts plainly. The notice and the message it answers
-                    # stay out of the context.
+                    # stay out of the context. A speech-transcription embed is
+                    # the one reply that stays: it carries the speech of the
+                    # audio message it answers, which drops like any answered
+                    # message.
                     if message.reference is not None and message.reference.message_id is not None:
                         skipped.add(message.reference.message_id)
-                    continue
+                    if speech_embed_line(message) is None:
+                        continue
                 if message.id in skipped:
                     continue
                 stripped = message.content.strip()
                 if message.author.id == bot_id:
-                    # A poll result notification has empty content and no
-                    # attachments: its outcome rides in the embed, read below.
-                    if not stripped and not message.attachments and message.type != discord.MessageType.poll_result:
+                    # A poll result notification or a speech-transcription
+                    # embed has empty content and no attachments: its
+                    # substance rides in the embed, read below.
+                    if (not stripped and not message.attachments
+                            and message.type != discord.MessageType.poll_result
+                            and speech_embed_line(message) is None):
                         continue
                     bot_messages.add(message.id)
                 else:
@@ -299,7 +308,14 @@ class ChatEngine:
         for message in reversed(qualifying):
             content = message.content.strip()
             attachment_files = [(a.filename, a.content_type, a.url) for a in message.attachments]
+            stamp = f"{message.created_at:{MESSAGE_TIME_FORMAT}}"
             if message.author.id == bot_id:
+                speech = speech_embed_line(message)
+                if speech is not None:
+                    # The transcription embed rides a bot reply, but it is
+                    # the turn of the speaker it names, not an agent answer.
+                    turns.append({"role": "user", "content": f"{stamp} {speech}"})
+                    continue
                 if message.type == discord.MessageType.poll_result:
                     # The poll result notification carries the outcome in its
                     # embed: the agent learns the results of a completed poll.
@@ -313,7 +329,6 @@ class ChatEngine:
                 else:
                     turns.append({"role": "assistant", "content": content})
                 continue
-            stamp = f"{message.created_at:{MESSAGE_TIME_FORMAT}}"
             if (not content or content in (f"<@{bot_id}>", f"<@!{bot_id}>")) and not attachment_files:
                 # The live path maps an empty message to a poke: the
                 # backfill shows the same, so the agent sees the poke.

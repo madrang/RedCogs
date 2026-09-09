@@ -26,6 +26,7 @@ from .providers import DEFAULT_PROVIDER, PROVIDERS, provider_for, provider_named
 from .providers.venice import VENICE_CREDIT_ALLOWANCE, VENICE_CREDIT_BANK_MONTHS, VENICE_CREDIT_CACHE_SECONDS
 from .stats import ScopeStats, month_key
 from .tools import HarnessOptions, HarnessTools, MESSAGE_TIME_FORMAT
+from .tools.base import TRANSCRIBE_MAX_BYTES, is_audio_attachment, speech_embed
 from .tools.files import channel_post_count
 from .workspace import Workspace
 
@@ -664,6 +665,78 @@ class Eliza(commands.Cog):
                 await asyncio.sleep(delay)
                 delay *= 2
 
+    async def _speech_transcription(self, message: discord.Message, incoming: IncomingMessage) -> None:
+        """Turn the audio of a textless message into speech for the reply.
+
+        The transcription endpoint of the active provider reads every audio
+        attachment under the size cap. The answer posts as an embed reply:
+        a bot reply keeps the message it answers out of the history views,
+        so the audio leaves no empty poke, and the embed itself carries the
+        speech back with its speaker (speech_embed_line of tools.base).
+        The text then rides the reply in place of the audio. A message with
+        text of its own keeps the audio as a plain attachment, and so does
+        every audio the provider cannot read (no endpoint, over the size
+        cap). A failed call posts the failure as a notice reply and leaves
+        the message as it was.
+        """
+        raw = message.content
+        if self.bot.user is not None:
+            for form in (f"<@{self.bot.user.id}>", f"<@!{self.bot.user.id}>"):
+                raw = raw.replace(form, " ")
+        if raw.strip():
+            # Text of its own: the audio stays a plain attachment.
+            return
+        provider = provider_for(await self._base_url())
+        if provider is None or provider.speech_model is None:
+            return
+        audios = [
+            a for a in message.attachments
+            if is_audio_attachment(a) and a.size <= TRANSCRIBE_MAX_BYTES
+        ]
+        if not audios:
+            return
+        api_key = await self.config.api_key()
+        texts = []
+        duration = 0.0
+        try:
+            for attachment in audios:
+                request = provider.speech_request(
+                    await attachment.read(), attachment.filename, attachment.content_type
+                )
+                if request is None:
+                    continue
+                path, form = request
+                data, _headers = await self.provider_post(api_key, path, data=form, timeout=300)
+                texts.append(str(data.get("text") or "").strip())
+                if isinstance(data.get("duration"), (int, float)):
+                    duration += data["duration"]
+        except (ChatError, aiohttp.ClientError, asyncio.TimeoutError, discord.DiscordServerError, discord.HTTPException) as e:
+            log.warning("The audio transcription failed: %s", e)
+            await self._discord_call(
+                lambda: message.reply(
+                    f"⚠️ The audio transcription failed: {e}",
+                    mention_author=False, allowed_mentions=discord.AllowedMentions.none(),
+                )
+                , "The transcription failure notice"
+            )
+            return
+        speech = "\n".join(texts).strip() or "(no speech detected)"
+        await self._discord_call(
+            lambda: message.reply(
+                embed=speech_embed(message.author, message.created_at, speech, duration, provider.speech_model)
+                , mention_author=False, allowed_mentions=discord.AllowedMentions.none(),
+            )
+            , "The speech transcription"
+        )
+        # The speech replaces the audio: the model reads the text, and the
+        # transcribed files leave the attachment list.
+        incoming.content = speech
+        transcribed = {a.id for a in audios}
+        incoming.attachments = [
+            (a.filename, a.content_type, a.url)
+            for a in message.attachments if a.id not in transcribed
+        ]
+
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message) -> None:
         if self.bot.user is not None and message.author.id == self.bot.user.id:
@@ -766,6 +839,10 @@ class Eliza(commands.Cog):
             # on it must not skip the reply. Answer without the indicator then.
             with contextlib.suppress(aiohttp.ClientError, asyncio.TimeoutError, discord.HTTPException):
                 await stack.enter_async_context(message.channel.typing())
+            # The speech of a textless audio message joins before the reply
+            # builds, under the typing indicator: the model answers the
+            # text, not the file it cannot hear.
+            await self._speech_transcription(message, incoming)
             try:
                 await self._stream_reply(
                     message.channel

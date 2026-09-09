@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 
 import discord
 
-from .base import MESSAGE_TIME_FORMAT, _cap, attachments_text, poll_result_suffix
+from .base import MESSAGE_TIME_FORMAT, _cap, attachments_text, poll_result_suffix, speech_embed_line
 
 # Caps of the read_history tool: the raw messages scanned, and the
 # qualifying messages returned. Discord has no search endpoint for bots:
@@ -203,9 +203,13 @@ class HistoryTools:
                 if message.author.id == bot_id and message.type == discord.MessageType.reply:
                     # A bot reply is a harness notice, never an agent answer.
                     # It and the message it answers stay out of the result.
+                    # A speech-transcription embed is the one reply that
+                    # stays: it carries the speech of the audio message it
+                    # answers, which drops like any answered message.
                     if message.reference is not None and message.reference.message_id is not None:
                         skipped.add(message.reference.message_id)
-                    continue
+                    if speech_embed_line(message) is None:
+                        continue
                 raw.append(message)
         except (discord.Forbidden, discord.HTTPException) as e:
             return f"Error: the history read failed: {e}"
@@ -218,7 +222,10 @@ class HistoryTools:
                 continue
             if not self._involves_bot(message, bot_id, bot_message_ids):
                 continue
-            content = _message_text(message)
+            # A transcription embed reads as the speech of the speaker it
+            # names; every other message reads as its own text.
+            speech = speech_embed_line(message)
+            content = speech if speech is not None else _message_text(message)
             if not content:
                 continue
             qualifying += 1
@@ -254,5 +261,11 @@ class HistoryTools:
         lines = ["(" + ". ".join(parts) + ")"]
         for message in messages:
             # The message text keeps the shape it was posted with, newlines included.
+            speech = speech_embed_line(message)
+            if speech is not None:
+                # The transcription embed reads as the line of the speaker it
+                # names, not of the bot that posted it.
+                lines.append(f"{message.created_at:{MESSAGE_TIME_FORMAT}} {speech}")
+                continue
             lines.append(f"{message.created_at:{MESSAGE_TIME_FORMAT}} {message.author.display_name} <@{message.author.id}>: {_message_text(message)}")
         return _cap("\n".join(lines))
