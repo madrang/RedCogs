@@ -1237,6 +1237,21 @@ class Eliza(commands.Cog):
         await asyncio.to_thread(self.workspace.drop, ctx.author.id)
         await ctx.send("Your user memory and summary are cleared, and your direct-message session was dropped.")
 
+    @eliza_group.command(name="getrules")
+    async def eliza_getrules(self, ctx: commands.Context) -> None:
+        """Print the rules text included in the system prompt of this context: the server rules in a server, the direct-message rules in a direct message.
+
+        Open to every user: the rules join the system prompt of every answer.
+        """
+        if ctx.guild is None:
+            header = "Direct-message rules:"
+            text = await self.config.dm_rules()
+        else:
+            header = "Server rules:"
+            text = await self.config.guild(ctx.guild).rules()
+        for page in paginate(f"{header}\n{text}"):
+            await ctx.send(page.content, allowed_mentions=discord.AllowedMentions.none())
+
     @eliza_group.command(name="setrules")
     @commands.admin()
     async def eliza_setrules(self, ctx: commands.Context, *, text: str) -> None:
