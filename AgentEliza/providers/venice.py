@@ -24,19 +24,15 @@ except ImportError:
 
 # The limit types of the rate-limits endpoint, spelled out for the usage rows.
 VENICE_LIMIT_NAMES = {"RPM": "requests/min", "RPD": "requests/day", "TPM": "tokens/min"}
-# The bundled credit plan: the monthly allowance, and the bank ceiling —
-# Venice keeps at most three months of allowance (300%), the rest is
-# lost. No keyed endpoint reports the balance, so the value is derived
-# from the usage analytics: the byDate USD sums are the value of every
-# consumption regardless of the paying pool (validated against an
-# account session, 2026-09-06), and the balance is the bank-capped
-# accrual minus the spend since the cycle anchor, at 100 credits per
-# dollar. The analytics answer caches 10 minutes server-side, so the
-# caller cache matches it. The seed — the cycle start of the pool and
-# the balance standing there — is per-install data: it lives in Config
-# (`eliza setcredit`), never in this file. The analytics serves explicit
-# date ranges of any age (a June 2026 window verified live, 2026-09-06),
-# so the walk reads its whole history from the seed.
+# The bundled credit plan:
+# the monthly allowance, and the bank ceiling — Venice keeps at most three months of allowance (300%), the rest is lost.
+# No keyed endpoint reports the balance, so the value is derived from the usage analytics:
+# the byDate USD sums are the value of every consumption regardless of the paying pool,
+# and the balance is the bank-capped accrual minus the spend since the cycle anchor, at 100 credits per dollar.
+# The analytics answer caches 10 minutes server-side, so the caller cache matches it.
+# The seed — the cycle start of the pool and the balance standing there — is per-install data:
+# it lives in Config (`eliza setcredit`), never in this file.
+# The analytics serves explicit date ranges of any age, so the walk reads its whole history from the seed.
 VENICE_CREDIT_ALLOWANCE = 22500
 VENICE_CREDIT_BANK_MONTHS = 3
 VENICE_CREDIT_CACHE_SECONDS = 600
@@ -45,20 +41,15 @@ VENICE_QUERY_MAX_CHARS = 400
 VENICE_SEARCH_MAX_LIMIT = 20
 # Image generation: the endpoint-wide prompt cap.
 VENICE_PROMPT_MAX_CHARS = 7500
-# The curated image models, ordered by release date, the most recent
-# first: the first entry is the default model, like the first entry of
-# PROVIDERS is the default provider. The keys are the preset names — the
-# only model handle the agent sees, like the chat presets; a raw model id
-# is not a name and the tool refuses it. Each entry holds the model id
-# behind its name, its capability traits (plain names), and its real cost
-# in USD per image: the price of the request the tool sends — the 2K
-# preset on the resolution-tier models (gpt-image-2 at 2K medium), the
-# flat generation price on the rest, the default 1K tier when a model
-# prices by tier and the tool sends no resolution. The comment on each
-# entry names the release date (the created field of the live model list,
-# rendered in the operator's timezone UTC-4). Read from the live model
-# list (GET /models?type=image needs no key), 2026-09-04: image models
-# price per image, not per million tokens.
+# The curated image models.
+# Order: release date, the most recent first. The first entry is the default model, like the first entry of PROVIDERS is the default provider.
+# Keys: the preset names, the only model handle the agent sees, like the chat presets.
+# A raw model id is not a name and the tool refuses it.
+# Cost: the price in USD of the request the tool sends — the 2K preset on the resolution-tier models (gpt-image-2-5-sunburst at 2K medium),
+# the flat generation price on the rest, the default 1K tier when a model prices by tier and the tool sends no resolution.
+# Source: the live model list (GET /models?type=image needs no key).
+# Image models price per image, not per million tokens.
+# The comment on each entry names the release date (the created field of the live list).
 VENICE_IMAGE_MODELS = {
     "Muse": {"model": "muse-image", "traits": [], "cost": 0.02}  # released Sep 2, 2026
   , "Grok": {"model": "grok-imagine-image-2-0", "traits": ["copyrighted_material"], "cost": 0.10}  # released Aug 10, 2026
@@ -67,7 +58,7 @@ VENICE_IMAGE_MODELS = {
   , "Luma": {"model": "luma-uni-1-max", "traits": [], "cost": 0.12}  # released Jun 16, 2026
   , "Ideogram": {"model": "ideogram-v4", "traits": [], "cost": 0.06}  # released Jun 2, 2026
   , "Krea": {"model": "krea-v2-large", "traits": [], "cost": 0.07}  # released May 21, 2026
-  , "GPT Image": {"model": "gpt-image-2", "traits": [], "cost": 0.13}  # released Apr 20, 2026
+  , "GPT Image": {"model": "gpt-image-2-5-sunburst", "traits": [], "cost": 0.05}  # released Sep 7, 2026
   , "Wan": {"model": "wan-2-7-pro-text-to-image", "traits": [], "cost": 0.09375}  # released Mar 31, 2026
   , "Lustify": {"model": "lustify-v8", "traits": ["uncensored"], "cost": 0.01}  # released Mar 29, 2026
   , "Hunyuan": {"model": "hunyuan-image-v3", "traits": [], "cost": 0.09}  # released Feb 28, 2026
@@ -80,11 +71,9 @@ VENICE_IMAGE_MODELS = {
   , "Venice SD": {"model": "venice-sd35", "traits": [], "cost": 0.01}  # released Mar 27, 2025
   , "WAI Illustrious": {"model": "wai-Illustrious", "traits": ["uncensored"], "cost": 0.01}  # released Jan 11, 2025
 }
-# The promptCharacterLimit of each curated model (model_spec.constraints
-# of the live list), the generate catalog first, the edit catalog after.
-# An entry may sit above the endpoint-wide VENICE_PROMPT_MAX_CHARS: the
-# model accepts the longer prompt, so its entry lifts the cap. An id
-# missing here keeps the endpoint-wide fallback.
+# The promptCharacterLimit of each curated model (model_spec.constraints of the live list), the generate catalog first, the edit catalog after.
+# An entry may sit above the endpoint-wide VENICE_PROMPT_MAX_CHARS: the model accepts the longer prompt, so its entry lifts the cap.
+# An id missing here keeps the endpoint-wide fallback.
 VENICE_IMAGE_PROMPT_LIMITS = {
     "muse-image": 10000
   , "grok-imagine-image-2-0": 7500
@@ -93,7 +82,7 @@ VENICE_IMAGE_PROMPT_LIMITS = {
   , "luma-uni-1-max": 6000
   , "ideogram-v4": 10000
   , "krea-v2-large": 5000
-  , "gpt-image-2": 10000
+  , "gpt-image-2-5-sunburst": 10000
   , "wan-2-7-pro-text-to-image": 3000
   , "lustify-v8": 1500
   , "hunyuan-image-v3": 3000
@@ -110,20 +99,17 @@ VENICE_IMAGE_PROMPT_LIMITS = {
   , "qwen-image-3-pro-edit": 10000
   , "luma-uni-1-edit": 6000
   , "wan-2-7-pro-edit": 5000
-  , "gpt-image-2-edit": 10000
+  , "gpt-image-2-5-sunburst-edit": 10000
   , "firered-image-edit": 1500
   , "nano-banana-2-edit": 32768
   , "flux-2-max-edit": 3000
   , "seedream-v4-edit": 10000
 }
-# The sizing dialect of each curated model, an unknown id takes the ratio
-# dialect: pixel models size through width and height (model_spec.constraints
-# carries a widthHeightDivisor and no aspectRatios), the resolution-tier
-# models carry a fixed resolution (and gpt-image-2 a quality) preset
-# (constraints carries a resolutions array), the rest take the aspect ratio
-# as-is. Read from the live model list, 2026-09-04. The tool description
-# reports the dialect beside the traits of each model, so the agent knows
-# which parameters apply.
+# The sizing dialect of each curated model. An unknown id takes the ratio dialect.
+# pixel models size through width and height (model_spec.constraints carries a widthHeightDivisor and no aspectRatios).
+# resolution-tier models carry a fixed resolution (and gpt-image-2-5-sunburst a quality) preset (constraints carries a resolutions array).
+# The rest take the aspect ratio as-is.
+# The tool description reports the dialect beside the traits of each model, so the agent knows which parameters apply.
 VENICE_IMAGE_DIALECTS = {
     "muse-image": "ratio"
   , "grok-imagine-image-2-0": "resolution"
@@ -132,7 +118,7 @@ VENICE_IMAGE_DIALECTS = {
   , "luma-uni-1-max": "ratio"
   , "ideogram-v4": "ratio"
   , "krea-v2-large": "ratio"
-  , "gpt-image-2": "resolution"
+  , "gpt-image-2-5-sunburst": "resolution"
   , "wan-2-7-pro-text-to-image": "ratio"
   , "lustify-v8": "pixel"
   , "hunyuan-image-v3": "ratio"
@@ -145,19 +131,14 @@ VENICE_IMAGE_DIALECTS = {
   , "venice-sd35": "pixel"
   , "wai-Illustrious": "pixel"
 }
-# The presets of the resolution-tier models. 2K and medium for now, adjust
-# after some use.
+# The presets of the resolution-tier models. 2K and medium for now, adjust after some use.
 VENICE_IMAGE_RESOLUTION = "2K"
 VENICE_IMAGE_QUALITY = "medium"
-# The total timeout of one image render attempt: a 2K edit render runs
-# past the 120 s augment default of provider_post. The value matches
-# the inference cap of chat_request — a server-side render waits like a
-# long generation.
+# The total timeout of one image render attempt: a 2K edit render runs past the 120 s augment default of provider_post.
+# The value matches the inference cap of chat_request — a server-side render waits like a long generation.
 VENICE_RENDER_TIMEOUT = 900
-# aspect_ratio to pixels for the pixel-dialect models: sides at most 1280,
-# multiples of 16 — every pixel model's widthHeightDivisor divides it (16 on
-# venice-sd35 and wai-Illustrious, 8 on z-image-turbo, lustify-v8, chroma),
-# so one table serves them all. About one megapixel.
+# aspect_ratio to pixels for the pixel-dialect models: sides at most 1280, multiples of 16 — every pixel model's widthHeightDivisor divides it
+# (16 on venice-sd35 and wai-Illustrious, 8 on z-image-turbo, lustify-v8, chroma), so one table serves them all. About one megapixel.
 VENICE_PIXEL_RATIOS = {
     "1:1": (1024, 1024)
   , "4:3": (1024, 768)
@@ -171,127 +152,73 @@ VENICE_PIXEL_RATIOS = {
 }
 # The seed range of the endpoint.
 VENICE_SEED_MAX = 999_999_999
-# The curated edit models of /image/edit, ordered by release date like
-# the generate catalog (the most recent first, the first entry is the
-# default model). The keys are the preset names, the only handle the
-# agent sees (the generate convention); each entry holds the model id
-# behind its name. The source is the live list under the inpaint type
-# (GET /models?type=inpaint): the edit models are inpaint models, their
-# price is the inpaint price at the 2K resolution tier, else the flat
-# price. A quality table never sets an edit cost: no model rides the
-# quality preset (the live trials of 2026-09-05 answered 400 Invalid
-# request parameters for both quality-table models carrying the field,
-# gpt-image-2-edit and grok-imagine-image-2-0-edit, while the same
-# requests without it succeeded on nano-banana-2-edit and
-# qwen-image-3-pro-edit) — gpt-image-2-edit renders 1K at its default
-# quality high ($0.34; the model rides VENICE_EDIT_MODEL_RESOLUTIONS,
-# its 2K high bill $0.52 priced it out of the 2K preset),
-# grok-imagine-image-2-0-edit defaults to medium
-# so its 2K price is $0.10 either way.
-# Each entry holds its capability traits (plain names) and its real cost
-# in USD per edit; the comment names the release date (the created field,
-# rendered UTC-4).
+# The curated edit models of /image/edit.
+# Order and keys mirror the generate catalog: release date, the most recent first, the first entry the default model, preset-name keys the agent sees.
+# Source: the live list under the inpaint type (GET /models?type=inpaint, which needs no key). The edit models are inpaint models.
+# Cost: the inpaint price at the 2K resolution tier, else the flat price.
+# A quality table never sets an edit cost — the endpoint refuses the quality body field, so every model renders at its default quality.
+# gpt-image-2-5-sunburst-edit defaults to high and bills 2K at $0.15.
+# grok-imagine-image-2-0-edit defaults to medium, so its 2K price is $0.10 either way.
+# Each entry holds the model id behind its name, its capability traits (plain names), and its real cost in USD per edit.
+# The comment on each entry names the release date (the created field of the live list).
 VENICE_EDIT_MODELS = {
     "Muse": {"model": "muse-image-edit", "traits": [], "cost": 0.02}  # released Sep 2, 2026
   , "Grok": {"model": "grok-imagine-image-2-0-edit", "traits": [], "cost": 0.10}  # released Aug 10, 2026
   , "Qwen": {"model": "qwen-image-3-pro-edit", "traits": [], "cost": 0.09}  # released Jul 15, 2026
   , "Luma": {"model": "luma-uni-1-edit", "traits": [], "cost": 0.06}  # released Jun 16, 2026
   , "Wan": {"model": "wan-2-7-pro-edit", "traits": [], "cost": 0.094}  # released Apr 22, 2026
-  , "GPT Image": {"model": "gpt-image-2-edit", "traits": [], "cost": 0.34}  # released Apr 20, 2026
+  , "GPT Image": {"model": "gpt-image-2-5-sunburst-edit", "traits": [], "cost": 0.15}  # released Sep 7, 2026
   , "FireRed": {"model": "firered-image-edit", "traits": [], "cost": 0.04}  # released Mar 24, 2026
   , "Nano Banana": {"model": "nano-banana-2-edit", "traits": [], "cost": 0.14}  # released Feb 25, 2026
   , "Flux": {"model": "flux-2-max-edit", "traits": [], "cost": 0.12}  # released Jan 4, 2026
   , "Seedream": {"model": "seedream-v4-edit", "traits": ["uncensored"], "cost": 0.05}  # released Jan 3, 2026
 }
-# The edit models that price and render by resolution tier: the edit tool
-# sends the same 2K constant as generate, so the catalog cost matches the
-# bill. A model outside the quality set renders at its default quality.
-# The set holds model ids: the handler resolves a preset name to its
-# entry before it reads the set.
+# The edit models that price and render by resolution tier: the edit tool sends the same 2K constant as generate, so the catalog cost matches the bill.
+# A model outside the quality set renders at its default quality.
+# The set holds model ids: the handler resolves a preset name to its entry before it reads the set.
 VENICE_EDIT_TIER_MODELS = {
-    "gpt-image-2-edit"
+    "gpt-image-2-5-sunburst-edit"
   , "nano-banana-2-edit"
   , "grok-imagine-image-2-0-edit"
   , "qwen-image-3-pro-edit"
 }
-# The edit models that render below the 2K preset: gpt-image-2-edit
-# takes no quality parameter (the body field answers 400 unrecognized
-# key, and the chat model feature suffix does not reach the image
-# endpoints — a suffixed model id answers 400 Invalid model id, both
-# live 2026-09-08), so 2K bills its default quality high $0.52. It
-# renders 1K high $0.34 instead. An id missing here keeps
-# VENICE_IMAGE_RESOLUTION.
-VENICE_EDIT_MODEL_RESOLUTIONS = {"gpt-image-2-edit": "1K"}
-# The edit models that take the quality preset: the tool sends them the
-# medium constant of generate, so a quality-table model skips its high
-# default and its catalog cost matches the bill. The set is empty — no
-# model works with the parameter today (both quality-table models of the
-# live list answered 400 for it, live 2026-09-05; gpt-image-2-edit
-# revalidated 2026-09-08, the same 400 unrecognized key under a spec
-# that still carries its quality table). A model that works with it
-# joins here.
-# TODO: revalidate later — the docs still carry the parameter, their
-# request example uses it, and the live spec carries the quality table
-# (2K medium $0.14 on gpt-image-2-edit).
+# The edit models that render below the 2K preset: an id here renders at its mapped resolution instead.
+# No model rides the map today. The quality routes stay closed on the edit endpoint: the body field is an unrecognized key, and a model feature suffix answers an invalid model id.
+# An id missing here keeps VENICE_IMAGE_RESOLUTION.
+VENICE_EDIT_MODEL_RESOLUTIONS = {}
+# The edit models that take the quality preset: the tool sends them the medium constant of generate, so the model skips its high default and the catalog cost matches the bill.
+# No model accepts the parameter today, so the set is empty.
+# TODO: revalidate later — the docs and the live specs still carry the parameter and its quality tables (2K medium $0.06 on gpt-image-2-5-sunburst-edit).
 VENICE_EDIT_QUALITY_MODELS: set[str] = set()
 # The edit answer formats of the endpoint, mapped to file extensions.
 VENICE_EDIT_FORMATS = {"image/png": "png", "image/jpeg": "jpg", "image/webp": "webp"}
-# The agent-facing label of each trait flag. The flags ride the catalog
-# entries (VENICE_IMAGE_MODELS, VENICE_EDIT_MODELS). The
-# copyrighted_material trait: the model refuses a prompt that names
-# copyrighted material (verified live 2026-09-03 on flux-2-pro and
-# grok-imagine-image — the answer is a uniform blank image, no error; the
-# successors grok-imagine-image-2-0 and seedream-v5-pro carry the flag on
-# the operator's word, 2026-09-05, the same word that stands behind the
-# Qwen uncensored trait; the full table lives in the vault note
-# Venice.AI/HTTP API.md). The uncensored trait: the live model list
-# reports the model as applying minimal content-based filtering
-# (model_spec.uncensored true).
+# The agent-facing label of each trait flag. The flags ride the catalog entries (VENICE_IMAGE_MODELS, VENICE_EDIT_MODELS).
+# copyrighted_material: the model refuses a prompt that names copyrighted material. The answer is a uniform blank image, no error.
+# uncensored: the live model list reports the model as applying minimal content-based filtering (model_spec.uncensored true).
+# The full trait table lives in the vault note Venice.AI/HTTP API.md.
 VENICE_IMAGE_TRAIT_LABELS = {
     "copyrighted_material": "refuses copyrighted material"
   , "uncensored": "uncensored"
 }
-# The refusal render of the endpoint: a uniform blank image (exactly 1926
-# bytes live as webp, while the smallest real render of the 2026-09-03
-# sweep weighed 193 KB). The pixel check decides blankness — no size
-# ceiling: a 7.5 KB uniform blank read live on 2026-09-05 proved the
-# compressed size spans too wide.
-# A per-channel ceiling for the all-dark read of the pixel check: a
-# refused render is uniform black, dark noise sits under this.
+# A refused render is a uniform blank image, so the pixel check decides blankness — the compressed size spans too wide for a size ceiling.
+# A refused render reads uniform black: this per-channel ceiling separates it from dark noise.
 VENICE_IMAGE_DARK_MAX = 8
-# The capabilities the agent can ask of the environment tool. One settled
-# vocabulary: the same words in the schema enum, the catalog traits, and
-# the tool answers, in the language a user types — no spec terms. The
-# coding trait mirrors the optimizedForCode flag of the live model list.
-# The roleplay and storytelling traits ride the Aion pair, and the short
-# answers and long answers traits mark the size pairs — the lite and mini
-# presets answer briefly, the regular and pro presets at length — on the
-# operator's word, 2026-09-06. A blind A/B run of fresh subjects
-# (2026-09-06) picked the words: the literal nsfw token went unmapped
-# under the earlier adult word, and nothing went unmapped under this set.
+# The capabilities the agent can ask of the environment tool. One settled vocabulary: the same words in the schema enum, the catalog traits, and the tool answers, in the language a user types — no spec terms.
+# The coding trait mirrors the optimizedForCode flag of the live model list. The roleplay and storytelling traits ride the Aion pair.
+# The short answers and long answers traits mark the size pairs: the lite and mini presets answer briefly, the regular and pro presets at length.
 VENICE_CHAT_CAPABILITIES = (
     "vision", "nsfw", "long context", "coding"
   , "roleplay", "storytelling", "short answers", "long answers"
 )
-# Chat presets: a short display name for the agent and the user, the model
-# id behind it, an optional NSFW variant id for conversations behind the
-# 18+ gate, the capability names the preset provides, and the cost scale
-# of the preset. The variant carries the same capabilities as the normal
-# id: a model whose capabilities differ joins the catalog under its own
-# preset. The cost is
-# the operating cost of the model — 10x the input price plus 1x the output
-# and cache-read prices, each per 1M tokens (the operating_usd_per_m column
-# of scripts/list_models.py) — over the priciest catalog model (Kimi at the
-# ceiling, read 2026-09-08), anchored at DeepSeek Lite = 0: a preset
-# cheaper than the default carries a negative cost. The catalog order is
-# preference order: the first preset that satisfies a request wins. The
-# short names are the only model handle the agent ever sees. An entry may
-# carry disabled True: the environment tool and the overload fallback skip
-# it, so the agent cannot reach it, while the user commands (setmodel, the
-# providers menu) keep it.
+# Chat presets: a short display name for the agent and the user, the model id behind it, an optional NSFW variant id for conversations behind the 18+ gate, the capability names the preset provides, and the cost of the preset.
+# The variant carries the same capabilities as the normal id: a model whose capabilities differ joins the catalog under its own preset.
+# Cost: the operating price of the model on a 0..1 scale. The operating price is 10x the input price plus 1x the output and cache-read prices, each per 1M tokens (the operating_usd_per_m column of scripts/list_models.py).
+# The scale anchors DeepSeek Lite at 0 and the priciest catalog model at 1. A negative cost marks a preset cheaper than the default.
+# The catalog order is preference order: the first preset that satisfies a request wins. The short names are the only model handle the agent ever sees.
+# An entry may carry disabled True: the environment tool and the overload fallback skip it, so the agent cannot reach it, while the user commands (setmodel, the providers menu) keep it.
 VENICE_CHAT_PRESETS = {
     "DeepSeek Lite": {
-        # No coding trait by the operator's word, 2026-09-06: a coding request upgrades to DeepSeek Pro, the next preset that carries it.
+        # No coding trait (the operator's call): a coding request upgrades to DeepSeek Pro, the next preset that carries it.
         "normal": "deepseek-v4-flash-0731"
       , "traits": ["long context", "short answers"]
       , "cost": 0.0
@@ -370,19 +297,19 @@ VENICE_CHAT_PRESETS = {
       , "cost": 1.0
     }
 
+    # Alibaba
   , "Qwen Lite": {
-        # No coding trait by the operator's word, 2026-09-06: a coding request upgrades to Qwen, the next preset that carries it.
-        "normal": "qwen3-6-35b-a3b"
+        # No coding trait (the operator's call): a coding request upgrades to Qwen, the next preset that carries it.
+        "normal": "qwen-3-8-27b" # 262K Ctx
       , "traits": ["vision", "nsfw", "short answers"]
-      , "cost": 0.0
-    }
-  , "Qwen": {
-        "normal": "qwen-3-8-27b"
-      , "traits": ["vision", "coding", "nsfw", "long answers"]
       , "cost": 0.10
     }
+  , "Qwen": {
+        "normal": "qwen-3-8-2-4t-a95b" # 262K Ctx
+      , "traits": ["coding", "nsfw", "long answers"]
+      , "cost": 0.56
+    }
 
-  # The Aion pair carries roleplay and storytelling on the operator's word, 2026-09-06.
   , "Aion Mini": {
         # Model based on DeepSeek
         "normal": "aion-labs-aion-3-0-mini"
@@ -726,9 +653,9 @@ def _image_tool() -> dict:
             body["aspect_ratio"] = aspect_ratio
         if dialect == "resolution":
             body["resolution"] = VENICE_IMAGE_RESOLUTION
-            if model == "gpt-image-2":
-                # gpt-image-2 is the only curated model with a quality field,
-                # and its default high bills high.
+            if model == "gpt-image-2-5-sunburst":
+                # gpt-image-2-5-sunburst is the only curated model with a
+                # quality field, and its default high bills high.
                 body["quality"] = VENICE_IMAGE_QUALITY
         cfg_scale = arguments.get("cfg_scale")
         try:
@@ -866,7 +793,7 @@ def _edit_tool() -> dict:
             # drops a model below it), the quality models at medium —
             # the same convention as generate, so the catalog cost
             # matches the bill. A model out of the quality set renders
-            # at its default quality (gpt-image-2-edit, high).
+            # at its default quality (gpt-image-2-5-sunburst-edit, high).
             body["resolution"] = VENICE_EDIT_MODEL_RESOLUTIONS.get(model, VENICE_IMAGE_RESOLUTION)
             if model in VENICE_EDIT_QUALITY_MODELS:
                 body["quality"] = VENICE_IMAGE_QUALITY
@@ -1148,7 +1075,7 @@ class VeniceApiProvider(Provider):
       , "google-gemma-4-31b-it"
       , "gemma-4-uncensored"
       , "aion-labs-aion-3-0-mini"
-      , "qwen3-6-35b-a3b"
+      , "qwen-3-8-2-4t-a95b"
       , "qwen-3-8-27b"
     ]
     context_lengths = {
@@ -1166,20 +1093,18 @@ class VeniceApiProvider(Provider):
       , "google-gemma-4-31b-it": 256_000
       , "gemma-4-uncensored": 256_000
       , "aion-labs-aion-3-0-mini": 128_000
-      , "qwen3-6-35b-a3b": 256_000
+      , "qwen-3-8-2-4t-a95b": 262_144
       , "qwen-3-8-27b": 262_144
       , "gemini-3-8-flash": 1_000_000
       , "llama-3.2-3b": 128_000
       , "llama-3.3-70b": 128_000
     }
-    # The curated models with the supportsVision flag of the live model list:
-    # they accept image input through the chat contract. `eliza providers`
-    # marks them, and the later direct image path rides on this set.
+    # The curated models with the supportsVision flag of the live model list: they accept image input through the chat contract.
+    # `eliza providers` marks them, and the later direct image path rides on this set.
     vision_models = {
         "gemma-4-uncensored"
       , "z-ai-glm-5-3-flash"
 
-      , "qwen3-6-35b-a3b"
       , "qwen-3-8-27b"
       , "qwen-3-8-max"
 

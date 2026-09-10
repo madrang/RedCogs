@@ -4,8 +4,8 @@ The price summary follows the model type. A text model reports the
 operating cost of a 1M-token workload: 10x the input price, plus 1x the
 output price and 1x the cache-read price (each per 1M tokens). An image
 model reports the per-image cost of the request the AgentEliza image tool
-sends: the 2K preset on the resolution-tier models (gpt-image-2 at 2K
-medium), the flat generation price elsewhere, the default 1K tier when a
+sends: the 2K preset on the resolution-tier models (gpt-image-2-5-sunburst
+bills 2K medium), the flat generation price elsewhere, the default 1K tier when a
 model prices by tier and the tool sends no resolution. An inpaint model
 (an image edit model) reports its per-edit price at the same 2K preset:
 the quality table wins when the model has one (2K medium), else the 2K
@@ -83,8 +83,8 @@ def text_prices(pricing: dict) -> dict:
 def image_prices(spec: dict) -> dict:
     """The per-image cost of an image model under the AgentEliza request
     preset: the constraints carry the sizing dialect — a resolutions array
-    means the tool sends the 2K preset (gpt-image-2 bills 2K medium), the
-    rest pay the flat generation price or the default 1K tier."""
+    means the tool sends the 2K preset (gpt-image-2-5-sunburst bills 2K
+    medium), the rest pay the flat generation price or the default 1K tier."""
     pricing = spec.get("pricing") or {}
     constraints = spec.get("constraints") or {}
     resolutions = pricing.get("resolutions") or {}

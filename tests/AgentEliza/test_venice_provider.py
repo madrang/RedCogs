@@ -123,8 +123,8 @@ async def test_bundled_credits_answers_none_on_failures() -> None:
 
 def test_preset_fallback_steps_onto_a_smaller_window() -> None:
     # The ladder ranks cost alone: the move from GLM 1M (a 1M window) steps
-    # up to Aion (128K), and the switch condenses the session at the move.
-    assert VeniceApiProvider().preset_fallback("z-ai-glm-5-3") == "Aion"
+    # up to Qwen (262K), and the switch condenses the session at the move.
+    assert VeniceApiProvider().preset_fallback("z-ai-glm-5-3") == "Qwen"
     # The ceiling cycles to the cheapest enabled preset.
     assert VeniceApiProvider().preset_fallback("kimi-k3") == "DeepSeek Lite"
 
@@ -152,7 +152,7 @@ async def test_the_environment_tool_returns_the_failed_restore() -> None:
     assert answer == "Error: the condense before the move failed."
 
 
-async def test_the_edit_tool_drops_gpt_image_to_1k() -> None:
+async def test_the_edit_tool_sends_the_2k_preset_and_no_quality() -> None:
     posts: list = []
 
     async def api_post(path, *, json_body=None, data=None, binary=False, timeout=120):
@@ -166,12 +166,11 @@ async def test_the_edit_tool_drops_gpt_image_to_1k() -> None:
     tools = {tool["name"]: tool for tool in VeniceApiProvider().native_tools()}
     ask = {"image": "https://example.com/pic.png", "prompt": "add a red dot"}
     await tools["edit_image"]["handler"]({**ask, "model": "GPT Image"}, engine)
-    # The quality field is unreachable on this model, so its 2K bill is
-    # the default high: it renders 1K instead.
-    assert posts[0]["resolution"] == "1K"
+    # No model rides the resolution override: every tier model renders at
+    # the 2K preset, and the quality field reaches no edit model.
+    assert posts[0]["resolution"] == "2K"
     assert "quality" not in posts[0]
     await tools["edit_image"]["handler"]({**ask, "model": "Nano Banana"}, engine)
-    # Every other tier model keeps the 2K preset.
     assert posts[1]["resolution"] == "2K"
 
 
