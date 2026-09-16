@@ -31,7 +31,7 @@ from .catalog import (
   , VENICE_CHAT_CAPABILITIES
   , VENICE_CHAT_PRESETS
 )
-from .credits import _next_month, next_refill, song_credit_gate
+from .credits import next_refill, song_credit_gate
 from .moderation import _blank_check, _header_flag, _moderation_status, _refusal_error
 from .tools import (
     _search_tool

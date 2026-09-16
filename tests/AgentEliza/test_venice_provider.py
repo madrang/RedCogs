@@ -1,7 +1,6 @@
 """The Venice provider over HTTP: the usage endpoint, the credit fetch, the song tool, the audio flow."""
 
 import base64
-from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -41,8 +40,6 @@ def test_parse_usage_builds_the_balance_row() -> None:
     assert "150 requests/min" in text
     assert "60 requests/min" not in text
     assert "3,000,000 tokens/min" in text
-    # The epoch reset rides the row as its unix time, the surfaces render it.
-    assert row["reset"] == datetime(2026, 9, 7, tzinfo=timezone.utc).timestamp()
 
 
 def test_parse_usage_flags_a_refused_key() -> None:

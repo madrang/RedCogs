@@ -8,8 +8,8 @@
 VENICE_LIMIT_NAMES = {"RPM": "requests/min", "RPD": "requests/day", "TPM": "tokens/min"}
 # The bundled credit plan: the monthly allowance — Venice keeps at most three months of allowance banked (300%), the rest is lost.
 # The rate-limits endpoint reports the live balance in data.balances.BUNDLED_CREDITS (USD, 100 credits a dollar).
-# The cycle anchor — the epoch of the cycle start — paces the guild song gate:
-# it lives in Config (`eliza setcredit`), never in this file.
+# The cycle day — the day of the month the cycle restarts — paces the guild song gate:
+# it lives in Config (`eliza setcycleday`), never in this file.
 VENICE_CREDIT_ALLOWANCE = 22500
 # The augment endpoints are experimental and billed per request ($0.01 each).
 VENICE_QUERY_MAX_CHARS = 400

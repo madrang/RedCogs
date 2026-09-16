@@ -24,7 +24,7 @@ from .music import SongManager
 from .pages import paginate
 from .polls import PollManager
 from .providers import DEFAULT_PROVIDER, PROVIDERS, provider_for, provider_named
-from .providers.venice import song_credit_gate
+from .providers.venice import next_refill, song_credit_gate
 from .providers.venice.audio import queue_song, retrieve_song
 from .stats import ScopeStats, month_key
 from .tools import HarnessOptions, HarnessTools, MESSAGE_TIME_FORMAT
@@ -97,10 +97,10 @@ class Eliza(commands.Cog):
             , limit_user=20
             , limit_channel=100
             , limit_server=500
-            # The bundled credit cycle anchor of the Venice key: the epoch of
-            # the cycle start. 0 = unset, the guild song gate stays off.
-            # Set with `eliza setcredit`.
-            , credit_cycle_start=0
+            # The day of the month the Venice bundled credit cycle restarts
+            # (1-31, the shorter months clamp to their end). 0 = unset, the
+            # guild song gate stays off. Set with `eliza setcycleday`.
+            , credit_cycle_day=0
             , dm_rules=DEFAULT_DM_RULES
             , polls={}
             , music={}
@@ -316,10 +316,10 @@ class Eliza(commands.Cog):
         balance = await self.bundled_credits()
         if balance is None:
             return False
-        cycle_start = await self.config.credit_cycle_start()
-        if not cycle_start:
+        cycle_day = await self.config.credit_cycle_day()
+        if not cycle_day:
             return False
-        return song_credit_gate(cycle_start, balance)
+        return song_credit_gate(cycle_day, balance)
 
     async def _usage_rows(self):
         """The provider usage rows, cached. None when the check fails: never block on a failure."""
@@ -623,11 +623,7 @@ class Eliza(commands.Cog):
         else:
             for row in rows:
                 if row.get("text"):
-                    line = f"- {row['name']}: {row['text']}"
-                    reset = row.get("reset")
-                    if isinstance(reset, (int, float)):
-                        line += f", epoch resets {datetime.fromtimestamp(reset, timezone.utc):{MESSAGE_TIME_FORMAT}}"
-                    lines.append(line)
+                    lines.append(f"- {row['name']}: {row['text']}")
                     continue
                 parts = []
                 if row.get("used") is not None and row.get("limit"):
@@ -642,7 +638,11 @@ class Eliza(commands.Cog):
                         parts.append(f"resets {reset}")
                 if threshold and row.get("percent") is not None and row["percent"] >= threshold:
                     parts.append("over the throttle")
-                lines.append(f"- {row['name']}: " + ", ".join(parts) if parts else f"- {row['name']}")
+                    lines.append(f"- {row['name']}: " + ", ".join(parts) if parts else f"- {row['name']}")
+            cycle_day = await self.config.credit_cycle_day()
+            if hasattr(preset, "bundled_credits") and cycle_day:
+                # The fixed cycle day names the next refill of the bundled allowance.
+                lines.append(f"- The bundled allowance resets {next_refill(cycle_day):{MESSAGE_TIME_FORMAT}}.")
         limits = await self._rate_limits()
         lines += [
             ""
@@ -1257,12 +1257,7 @@ class Eliza(commands.Cog):
         lines = []
         for row in rows:
             if row.get("text"):
-                line = f"**{row['name']}** — {row['text']}"
-                reset = row.get("reset")
-                if isinstance(reset, (int, float)):
-                    # The absolute tag renders in the local time of the reader, the relative tag names the span.
-                    line += f", epoch resets <t:{int(reset)}:F> (<t:{int(reset)}:R>)"
-                lines.append(line)
+                lines.append(f"**{row['name']}** — {row['text']}")
                 continue
             parts = []
             if row.get("used") is not None and row.get("limit"):
@@ -1273,6 +1268,11 @@ class Eliza(commands.Cog):
                 reset = row["reset"]
                 parts.append(f"resets <t:{reset}:R>" if isinstance(reset, int) else f"resets {reset}")
             lines.append(f"**{row['name']}** — " + ", ".join(parts) if parts else f"**{row['name']}**")
+        cycle_day = await self.config.credit_cycle_day()
+        if hasattr(provider_for(await self._base_url()), "bundled_credits") and cycle_day:
+            # The fixed cycle day names the next refill of the bundled allowance.
+            refill = int(next_refill(cycle_day).timestamp())
+            lines.append(f"The bundled allowance resets <t:{refill}:F> (<t:{refill}:R>).")
         embed = discord.Embed(
             title="Provider usage",
             description="\n".join(lines),
@@ -1293,38 +1293,26 @@ class Eliza(commands.Cog):
         else:
             await ctx.send(f"The cog stops answering when a provider limit reaches {percent}%.")
 
-    @eliza_group.command(name="setcredit")
+    @eliza_group.command(name="setcycleday")
     @commands.admin()
-    async def eliza_setcredit(self, ctx: commands.Context, when: str) -> None:
-        """Set the bundled credit cycle anchor of the Venice key: the cycle start
-        (a Unix epoch or an ISO 8601 timestamp, UTC — for example 2026-09-03T13:13:35Z).
-        The anchor paces the guild song gate against the live balance of the
-        rate-limits endpoint. `setcredit clear` removes it."""
-        if when.lower() == "clear":
-            await self.config.credit_cycle_start.set(0)
-            await ctx.send("The credit cycle anchor is removed. The guild song gate stays off.")
+    async def eliza_setcycleday(self, ctx: commands.Context, value: str) -> None:
+        """Set the day of the month the Venice bundled credit cycle restarts: a number from 1 to 31.
+           The shorter months clamp the day to their end. The guild song gate paces the live balance of the rate-limits endpoint against the cycle,
+           and `eliza usage` names the next refill. `setcycleday clear` removes it.
+        """
+        if value.lower() == "clear":
+            await self.config.credit_cycle_day.set(0)
+            await ctx.send("The credit cycle day is removed. The guild song gate stays off.")
             return
-        epoch = None
-        if re.fullmatch(r"\d{9,12}", when):
-            epoch = float(when)
-        else:
-            try:
-                parsed = datetime.fromisoformat(when.replace("Z", "+00:00"))
-                if parsed.tzinfo is None:
-                    parsed = parsed.replace(tzinfo=timezone.utc)
-                epoch = parsed.timestamp()
-            except ValueError:
-                epoch = None
-        if epoch is None:
-            await ctx.send(
-                "Give the cycle start as a Unix epoch or an ISO 8601 timestamp (UTC). "
-                "Example: `setcredit 2026-09-03T13:13:35Z`."
-            )
+        if not value.strip().isdigit() or not 1 <= int(value) <= 31:
+            await ctx.send("Give the day of the month as a number from 1 to 31. Example: `setcycleday 3`.")
             return
-        await self.config.credit_cycle_start.set(epoch)
+        cycle_day = int(value)
+        await self.config.credit_cycle_day.set(cycle_day)
+        refill = int(next_refill(cycle_day).timestamp())
         await ctx.send(
-            f"The credit cycle anchor is set to <t:{int(epoch)}:F>. "
-            "The guild song gate paces from it against the live balance."
+            f"The bundled credit cycle restarts on day {cycle_day} of each month. "
+            f"The next reset lands <t:{refill}:F> (<t:{refill}:R>)."
         )
 
     @eliza_group.command(name="forgetme")

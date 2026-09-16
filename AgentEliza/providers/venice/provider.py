@@ -4,7 +4,6 @@
 #  , and the bundled credit fetch.
 
 import asyncio
-from datetime import datetime
 
 import aiohttp
 
@@ -274,21 +273,12 @@ class VeniceApiProvider(Provider):
                 for limit_type, amount in sorted(amounts.items())
             )
             text += f"; {limits}"
-        # nextEpochBegins names the epoch reset of the rate-limit windows: the row reset
-        # carries its unix time, the surfaces render it beside the balance.
-        reset = None
-        epoch = payload.get("nextEpochBegins")
-        if isinstance(epoch, str):
-            try:
-                reset = datetime.fromisoformat(epoch.replace("Z", "+00:00")).timestamp()
-            except ValueError:
-                reset = None
         return [{
             "name": "Balance"
             , "used": None
             , "limit": None
             , "percent": None
-            , "reset": reset
+            , "reset": None
             , "text": text
             , "exhausted": exhausted
         }]
