@@ -125,7 +125,7 @@ class ToolContext:
     handler receives it beside the arguments, and a new capability is a
     field here, not a new argument of every handler."""
 
-    def __init__(self, *, call_api, fetch_url, api_post, send_file, channel_nsfw, set_conversation_model, vision_chat, show_image):
+    def __init__(self, *, call_api, fetch_url, api_post, send_file, channel_nsfw, set_conversation_model, vision_chat, show_image, request_song=None):
         self.call_api = call_api
         self.fetch_url = fetch_url
         self.api_post = api_post
@@ -134,6 +134,7 @@ class ToolContext:
         self.set_conversation_model = set_conversation_model
         self.vision_chat = vision_chat
         self.show_image = show_image
+        self.request_song = request_song
 
 
 class ChatEngine:
@@ -430,7 +431,21 @@ class ChatEngine:
             # the MCP tools: a provider tool takes the harness name it reuses.
             # A tool that declares "media" names the usage counter a
             # successful call increments (images, inpaints, music).
+            # The availability flags of an entry: dm_owner_only joins a
+            # direct message only when the bot owner speaks (a guild is not
+            # affected), guild_credit_gate hides the entry in a guild while
+            # the cog reports the bundled credits under the paced floor of
+            # the cycle rest.
+            guild_gate = False
+            if guild_id is not None and hasattr(self.api, "guild_media_gate"):
+                guild_gate = await self.api.guild_media_gate()
             for entry in preset.native_tools():
+                if guild_id is None and entry.get("dm_owner_only") and not is_owner:
+                    # A direct message of anyone but the owner never sees the tool.
+                    continue
+                if entry.get("guild_credit_gate") and guild_gate:
+                    # The credit balance sits under the floor: the tool leaves the guild list.
+                    continue
                 native_routes[entry["name"]] = entry["handler"]
                 if entry.get("media"):
                     media_counts[entry["name"]] = entry["media"]
@@ -580,12 +595,24 @@ class ChatEngine:
             session.model_override = model_id
             return None
 
+        api_request_song = getattr(self.api, "request_song", None)
+
+        async def request_song(request):
+            """Hand one song request to the approval flow of the cog, for
+            native provider tools. The closure answers at once: the vote and
+            the generation outcome reach the model as later harness turns."""
+            if api_request_song is None:
+                return "Error: the song approval is not available here."
+            request = dict(request, requester_id=user_id, requester_name=speaker)
+            return await api_request_song(session_id, channel_id, request)
+
         # The surface the native provider tools of this reply run on.
         tool_context = ToolContext(
             call_api=call_api, fetch_url=fetch_url, api_post=api_post
             , send_file=send_file, channel_nsfw=channel_nsfw
             , set_conversation_model=set_conversation_model
             , vision_chat=vision_chat, show_image=show_image
+            , request_song=request_song
         )
 
         # The user turn of this message. On a vision chat model the images

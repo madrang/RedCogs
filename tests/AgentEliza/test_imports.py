@@ -9,4 +9,4 @@ def test_engine_imports() -> None:
 
 
 def test_venice_provider_imports() -> None:
-    assert callable(venice.walk_credits)
+    assert callable(venice.next_refill)

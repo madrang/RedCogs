@@ -1,11 +1,14 @@
-"""The Venice provider over HTTP: the usage endpoint and the credit fetch."""
+"""The Venice provider over HTTP: the usage endpoint, the credit fetch, the song tool, the audio flow."""
 
 import base64
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
+import pytest
 from aiohttp import ClientConnectionError
 
+import AgentEliza.providers.venice.audio as audio_flow
+from AgentEliza.llm_chat import ChatError
 from AgentEliza.providers.venice import VeniceApiProvider, _environment_tool
 from tests.AgentEliza.fakes import FakeResponse, FakeSession
 
@@ -13,7 +16,7 @@ USAGE_ANSWER = {
     "data": {
         "accessPermitted": True
         , "apiTier": {"id": "paid", "isCharged": True}
-        , "balances": {"USD": 1.5, "DIEM": 2}
+        , "balances": {"USD": 1.5, "DIEM": 2, "BUNDLED_CREDITS": 1.5}
         , "rateLimits": [
             {"apiModelId": "a", "rateLimits": [{"amount": 150, "type": "RPM"}, {"amount": 3000000, "type": "TPM"}]}
           , {"apiModelId": "b", "rateLimits": [{"amount": 60, "type": "RPM"}]}
@@ -32,11 +35,14 @@ def test_parse_usage_builds_the_balance_row() -> None:
     assert "tier paid" in text
     assert "$1.5 USD available" in text
     assert "2 Diem available" in text
+    # The endpoint names USD: the credits ride at 100 a dollar.
+    assert "bundled credits 150 of 22,500" in text
     # The highest amount of each type stands for the whole key.
     assert "150 requests/min" in text
     assert "60 requests/min" not in text
     assert "3,000,000 tokens/min" in text
-    assert "epoch resets 2026-09-07T00:00:00.000Z" in text
+    # The epoch reset rides the row as its unix time, the surfaces render it.
+    assert row["reset"] == datetime(2026, 9, 7, tzinfo=timezone.utc).timestamp()
 
 
 def test_parse_usage_flags_a_refused_key() -> None:
@@ -95,30 +101,29 @@ async def test_fetch_usage_degrades_on_a_malformed_body() -> None:
     assert error == "The usage endpoint returned an error (HTTP 200)."
 
 
-async def test_bundled_credits_walks_the_analytics_answer() -> None:
-    seed = datetime.now(timezone.utc) - timedelta(days=5)
-    data = {"byDate": [{"date": seed.date().isoformat(), "USD": 5}]}
-    session = FakeSession(FakeResponse(200, data))
-    balance = await VeniceApiProvider().bundled_credits(session, "test-key", seed.timestamp(), 22500)
-    assert balance == 22000.0
+async def test_bundled_credits_reads_the_rate_limits_balance() -> None:
+    session = FakeSession(FakeResponse(200, USAGE_ANSWER))
+    balance = await VeniceApiProvider().bundled_credits(session, "test-key")
+    assert balance == 150.0
     url, kwargs = session.calls[0]
-    assert url == "https://api.venice.ai/api/v1/billing/usage-analytics"
-    assert kwargs["params"]["startDate"] == seed.date().isoformat()
-    assert kwargs["params"]["endDate"]
+    assert url == "https://api.venice.ai/api/v1/api_keys/rate_limits"
+    assert kwargs["headers"]["Authorization"] == "Bearer test-key"
+
+
+async def test_bundled_credits_keeps_a_zero_balance() -> None:
+    data = {"data": {"balances": {"BUNDLED_CREDITS": 0}}}
+    session = FakeSession(FakeResponse(200, data))
+    assert await VeniceApiProvider().bundled_credits(session, "test-key") == 0.0
 
 
 async def test_bundled_credits_answers_none_on_failures() -> None:
     provider = VeniceApiProvider()
-    seed = datetime.now(timezone.utc) - timedelta(days=5)
-    assert await provider.bundled_credits(
-        FakeSession(FakeResponse(500, {})), "test-key", seed.timestamp(), 22500
-    ) is None
-    assert await provider.bundled_credits(
-        FakeSession(FakeResponse(200, ValueError("not json"))), "test-key", seed.timestamp(), 22500
-    ) is None
-    assert await provider.bundled_credits(
-        FakeSession(ClientConnectionError("boom")), "test-key", seed.timestamp(), 22500
-    ) is None
+    assert await provider.bundled_credits(FakeSession(FakeResponse(500, {})), "test-key") is None
+    assert await provider.bundled_credits(FakeSession(FakeResponse(200, ValueError("not json"))), "test-key") is None
+    assert await provider.bundled_credits(FakeSession(ClientConnectionError("boom")), "test-key") is None
+    # An answer that names no bundled balance reads as unknown.
+    data = {"data": {"balances": {"USD": 1.5}}}
+    assert await provider.bundled_credits(FakeSession(FakeResponse(200, data)), "test-key") is None
 
 
 def test_preset_fallback_steps_onto_a_smaller_window() -> None:
@@ -201,3 +206,118 @@ async def test_the_background_remove_tool_passes_the_url_or_the_bytes() -> None:
     assert fetches == ["https://cdn.discordapp.com/attachments/1/2/pic.png"]
     assert posts[1][0] == "/image/background-remove"
     assert posts[1][1]["image"] == base64.b64encode(b"img").decode("ascii")
+
+
+def test_the_music_tool_carries_the_availability_flags() -> None:
+    tools = {tool["name"]: tool for tool in VeniceApiProvider().native_tools()}
+    entry = tools["generate_song"]
+    assert entry["media"] == "music"
+    assert entry["dm_owner_only"] is True
+    assert entry["guild_credit_gate"] is True
+
+
+async def test_the_music_tool_prices_and_hands_off_the_request() -> None:
+    quotes: list = []
+    hands: list = []
+
+    async def api_post(path, *, json_body=None, data=None, binary=False, timeout=120):
+        quotes.append((path, json_body))
+        return {"quote": 0.26}, {}
+
+    async def request_song(request):
+        hands.append(request)
+        return "The song request 'Sonilo' has been posted for approval."
+
+    engine = SimpleNamespace(api_post=api_post, request_song=request_song)
+    tools = {tool["name"]: tool for tool in VeniceApiProvider().native_tools()}
+    entry = tools["generate_song"]
+    # The blank model takes the default preset (Sonilo) with its 90 s duration default.
+    answer = await entry["handler"]({"prompt": "a happy tune"}, engine)
+    assert answer.startswith("The song request 'Sonilo'")
+    assert quotes[0] == ("/audio/quote", {"model": "sonilo-v1-1-music", "prompt": "a happy tune", "duration_seconds": 90})
+    assert hands[0]["preset"] == "Sonilo"
+    assert hands[0]["cost"] == 0.26
+    assert hands[0]["body"] == quotes[0][1]
+    # The dials ride the body only where the model takes them.
+    await entry["handler"]({"prompt": "a sad song", "model": "MiniMax", "lyrics": "oh no", "instrumental": True}, engine)
+    assert quotes[1][1] == {
+        "model": "minimax-music-v26", "prompt": "a sad song", "lyrics_prompt": "oh no", "force_instrumental": True
+    }
+
+
+async def test_the_music_tool_refuses_the_dials_a_model_lacks() -> None:
+    async def api_post(path, **kwargs):
+        return {"quote": 0.1}, {}
+
+    engine = SimpleNamespace(api_post=api_post, request_song=None)
+    tools = {tool["name"]: tool for tool in VeniceApiProvider().native_tools()}
+    entry = tools["generate_song"]
+    assert (await entry["handler"]({"prompt": "x", "model": "Lyria", "lyrics": "la"}, engine)).startswith("Error: the model Lyria takes no lyrics.")
+    assert (await entry["handler"]({"prompt": "x", "model": "Seed Audio", "duration_seconds": 60}, engine)).startswith("Error: the model Seed Audio takes no duration dial.")
+    assert (await entry["handler"]({"prompt": "x", "model": "ACE-Step", "instrumental": True}, engine)).startswith("Error: the model ACE-Step takes no force_instrumental dial.")
+    assert (await entry["handler"]({"prompt": "x", "model": "nope"}, engine)).startswith("Error: unknown song model nope.")
+    assert (await entry["handler"]({"prompt": "x" * 5001, "model": "Lyria"}, engine)).startswith("Error: the prompt is over the 5000-character limit")
+    assert (await entry["handler"]({"prompt": "x", "model": "Sonilo", "duration_seconds": 900}, engine)).startswith("Error: the duration_seconds of Sonilo")
+
+
+async def test_the_music_tool_names_a_missing_approval_flow() -> None:
+    async def api_post(path, **kwargs):
+        return {"quote": 0.1}, {}
+
+    engine = SimpleNamespace(api_post=api_post, request_song=None)
+    tools = {tool["name"]: tool for tool in VeniceApiProvider().native_tools()}
+    answer = await tools["generate_song"]["handler"]({"prompt": "x"}, engine)
+    assert answer == "Error: the song approval is not available here."
+
+
+async def test_the_music_tool_names_a_failed_quote() -> None:
+    async def api_post(path, **kwargs):
+        raise ChatError("http", "The provider endpoint /audio/quote returned an error (HTTP 500): boom")
+
+    engine = SimpleNamespace(api_post=api_post, request_song=None)
+    tools = {tool["name"]: tool for tool in VeniceApiProvider().native_tools()}
+    answer = await tools["generate_song"]["handler"]({"prompt": "x"}, engine)
+    assert answer.startswith("Error: the song quote failed:")
+
+
+async def test_the_audio_flow_queues_polls_and_completes(monkeypatch) -> None:
+    monkeypatch.setattr(audio_flow, "MUSIC_POLL_FIRST_SECONDS", 0)
+    calls: list = []
+
+    async def api_post(path, *, json_body=None, data=None, binary=False, timeout=120):
+        calls.append((path, json_body))
+        if path == "/audio/queue":
+            return {"model": "sonilo-v1-1-music", "queue_id": "q1", "status": "QUEUED"}, {}
+        if path == "/audio/complete":
+            return {"ok": True}, {}
+        if len(calls) == 2:
+            # The first retrieve answers still processing.
+            return {"status": "PROCESSING", "average_execution_time": 100}, {}
+        return b"audiodata", {"content-type": "audio/mpeg"}
+
+    name, data = await audio_flow.run_song(api_post, {"model": "sonilo-v1-1-music", "prompt": "x"})
+    assert data == b"audiodata"
+    assert name.startswith("sonilo-v1-1-music-") and name.endswith(".mp3")
+    assert [path for path, _ in calls] == ["/audio/queue", "/audio/retrieve", "/audio/retrieve", "/audio/complete"]
+    assert calls[1][1] == {"model": "sonilo-v1-1-music", "queue_id": "q1"}
+
+
+async def test_the_audio_flow_fails_without_a_queue_id() -> None:
+    async def api_post(path, **kwargs):
+        return {"model": "m"}, {}
+
+    with pytest.raises(ChatError):
+        await audio_flow.queue_song(api_post, {"model": "m", "prompt": "x"})
+
+
+async def test_the_retrieve_polls_stop_at_the_time_budget(monkeypatch) -> None:
+    monkeypatch.setattr(audio_flow, "MUSIC_POLL_FIRST_SECONDS", 0)
+    monkeypatch.setattr(audio_flow, "MUSIC_POLL_MAX_SECONDS", 0.05)
+    monkeypatch.setattr(audio_flow, "VENICE_MUSIC_TIMEOUT", 0.05)
+
+    async def api_post(path, **kwargs):
+        return {"status": "PROCESSING", "average_execution_time": 100000}, {}
+
+    with pytest.raises(ChatError) as caught:
+        await audio_flow.retrieve_song(api_post, "m", "q1")
+    assert "time budget" in str(caught.value)

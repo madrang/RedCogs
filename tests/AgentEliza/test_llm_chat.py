@@ -1,8 +1,10 @@
-"""The engine pure functions."""
+"""The engine pure functions and the native tool availability filter."""
 
 import pytest
 
-from AgentEliza.llm_chat import collapse_blank_lines
+from AgentEliza.history import History
+from AgentEliza.llm_chat import ChatEngine, IncomingMessage, collapse_blank_lines
+from tests.AgentEliza.fakes import FakeApi, FakeBot, FakeCompactor, FakeConfig, FakeHarnessTools, FakeMCP, FakeMemory, FakePreset, FakeScopeStats
 
 
 @pytest.mark.parametrize(
@@ -26,3 +28,56 @@ from AgentEliza.llm_chat import collapse_blank_lines
 )
 def test_collapse_blank_lines(raw: str, expected: str) -> None:
     assert collapse_blank_lines(raw) == expected
+
+
+class GatedApi(FakeApi):
+    """The cog stand-in with the guild credit gate of the song tool."""
+
+    def __init__(self, *args, gate=False, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.gate = gate
+
+    async def guild_media_gate(self):
+        return self.gate
+
+
+async def _tool_names(api, *, guild_id=None, is_owner=False) -> set:
+    memory = FakeMemory()
+    engine = ChatEngine(
+        FakeBot(), FakeConfig({"api_key": "test-key"}), History(memory), memory
+        , FakeMCP(), FakeHarnessTools(), FakeScopeStats(), FakeCompactor(), api
+    )
+    segments = [
+        segment async for segment in engine.generate_reply(IncomingMessage(
+            channel_id=100, content="hi", guild_id=guild_id, user_id=7, is_owner=is_owner
+        ))
+    ]
+    assert segments == ["Hi."]
+    return {tool["function"]["name"] for tool in api.requests[0].get("tools") or []}
+
+
+async def test_the_song_tool_joins_only_the_direct_message_of_the_owner() -> None:
+    native = [{
+        "name": "generate_song"
+        , "description": "Generate one song."
+        , "parameters": {"type": "object", "properties": {}}
+        , "media": "music"
+        , "dm_owner_only": True
+        , "guild_credit_gate": True
+        , "handler": None
+    }]
+    close = {"choices": [{"message": {"content": "Hi."}}]}
+    # Another direct message user never sees the tool.
+    api = FakeApi([close], preset=FakePreset(native=native))
+    assert "generate_song" not in await _tool_names(api, guild_id=None, is_owner=False)
+    # The owner sees it in a direct message.
+    api = FakeApi([close], preset=FakePreset(native=native))
+    assert "generate_song" in await _tool_names(api, guild_id=None, is_owner=True)
+    # A guild sees it while the cog carries no gate (the plain stand-in) or the gate reads open.
+    api = FakeApi([close], preset=FakePreset(native=native))
+    assert "generate_song" in await _tool_names(api, guild_id=5, is_owner=False)
+    api = GatedApi([close], gate=False, preset=FakePreset(native=native))
+    assert "generate_song" in await _tool_names(api, guild_id=5, is_owner=False)
+    # The credit gate closes the guild list.
+    api = GatedApi([close], gate=True, preset=FakePreset(native=native))
+    assert "generate_song" not in await _tool_names(api, guild_id=5, is_owner=False)

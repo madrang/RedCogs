@@ -46,8 +46,8 @@ MCP_HTTP_TIMEOUT = 30
 MCP_SSE_READ_TIMEOUT = 300
 # Cap of the tool arguments in the log line.
 MCP_LOG_ARGS_MAX_CHARS = 500
-# Page cap of one resources/list sweep. A server that paginates past the cap
-# ends the list with a note instead of an endless cursor chase.
+# Page cap of one resources/list sweep.
+# A server that paginates past the cap ends the list with a note instead of an endless cursor chase.
 MCP_RESOURCE_PAGES_MAX = 10
 # The built-in resource set of the harness: the files of the cog `resources/`
 # folder, served through the resource tools as a virtual server. A file in

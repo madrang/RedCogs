@@ -20,10 +20,12 @@ from .llm_chat import ChatEngine, ChatError, IncomingMessage, MAX_SESSIONS
 from .llm_compress import Compressor
 from .mcp_manager import MCPManager
 from .memory import Memory
+from .music import SongManager
 from .pages import paginate
 from .polls import PollManager
 from .providers import DEFAULT_PROVIDER, PROVIDERS, provider_for, provider_named
-from .providers.venice import VENICE_CREDIT_ALLOWANCE, VENICE_CREDIT_BANK_MONTHS, VENICE_CREDIT_CACHE_SECONDS
+from .providers.venice import song_credit_gate
+from .providers.venice.audio import queue_song, retrieve_song
 from .stats import ScopeStats, month_key
 from .tools import HarnessOptions, HarnessTools, MESSAGE_TIME_FORMAT
 from .tools.base import TRANSCRIBE_MAX_BYTES, is_audio_attachment, speech_embed
@@ -95,13 +97,13 @@ class Eliza(commands.Cog):
             , limit_user=20
             , limit_channel=100
             , limit_server=500
-            # The bundled credit cycle seed of the Venice key: the epoch of
-            # the cycle start and the pool standing there. 0 = unset, the
-            # credit derivation stays off. Set with `eliza setcredit`.
+            # The bundled credit cycle anchor of the Venice key: the epoch of
+            # the cycle start. 0 = unset, the guild song gate stays off.
+            # Set with `eliza setcredit`.
             , credit_cycle_start=0
-            , credit_cycle_pool=0
             , dm_rules=DEFAULT_DM_RULES
             , polls={}
+            , music={}
         )
         self.config.register_guild(rules=DEFAULT_GUILD_RULES)
         # Live MCP state lives in the manager, in memory only.
@@ -112,6 +114,8 @@ class Eliza(commands.Cog):
         self.memory = Memory(self.config)
         # The interactive votes: a button view first, a native poll after an idle time.
         self.polls = PollManager(self._get_channel, self._discord_call, self.config)
+        # The song requests: an approval embed with buttons, then the paid generation.
+        self.music = SongManager(self._get_channel, self._discord_call, self.config)
         # The workspace: one folder per session in the OS temp dir, for the file tools.
         self.workspace = Workspace()
         tool_options = HarnessOptions(memory=self.memory, session_getter=self._get_session)
@@ -139,6 +143,21 @@ class Eliza(commands.Cog):
         self.polls.on_event = self._poll_trigger
         # The majority rule of a guild poll counts the speakers of the session.
         self.polls.participants_getter = self._poll_participants
+        # A song event without a user message (a vote close, a generation
+        # outcome) wakes the agent the same way.
+        self.music.on_event = self._poll_trigger
+        # The majority rule of a guild song vote counts the speakers of the session.
+        self.music.participants_getter = self._poll_participants
+
+        async def song_api_post(path, *, json_body=None, data=None, binary=False, timeout=120):
+            api_key = await self.config.api_key()
+            if not api_key:
+                raise ChatError("auth", "The API key is not set. An admin can set it with the `eliza setkey` command.")
+            return await self.provider_post(api_key, path, json_body=json_body, data=data, binary=binary, timeout=timeout)
+
+        # The generation flow of the Venice audio API rides the cog provider surface.
+        self.music.queuer = lambda body: queue_song(song_api_post, body)
+        self.music.retriever = lambda model, queue_id: retrieve_song(song_api_post, model, queue_id)
 
     async def _poll_participants(self, session_id: int):
         """The active users of a poll session: the speakers of the current context."""
@@ -150,12 +169,14 @@ class Eliza(commands.Cog):
         self.mcp.start()
         self.compactor.sweep.start()
         await self.polls.restore(self.bot.add_view)
+        await self.music.restore(self.bot.add_view)
         # The janitor: folders untouched past the age cap die here and in the sweep.
         await asyncio.to_thread(self.workspace.sweep)
 
     async def cog_unload(self) -> None:
         self.compactor.sweep.cancel()
         self.polls.close()
+        self.music.close()
         try:
             # Persist every session before the RAM state dies.
             await self.compactor.compact_all()
@@ -182,6 +203,7 @@ class Eliza(commands.Cog):
         await self.config.user_from_id(user_id).clear()
         self.history.sessions.pop(user_id, None)
         await self.polls.drop_user(user_id)
+        await self.music.drop_user(user_id)
         await asyncio.to_thread(self.workspace.drop, user_id)
 
     #
@@ -259,44 +281,45 @@ class Eliza(commands.Cog):
         if self.session is None or self.session.closed:
             self.session = self._new_session()
         rows, error = await provider.fetch_usage(self.session, api_key)
-        if not error and rows and hasattr(provider, "bundled_credits"):
-            # The Venice row gains the derived bundled credit balance.
-            balance = await self.bundled_credits()
-            if isinstance(balance, (int, float)):
-                percent = min(balance / VENICE_CREDIT_ALLOWANCE, VENICE_CREDIT_BANK_MONTHS) * 100
-                rows[0]["text"] += (
-                    f", bundled credits {balance:,.6g} of {VENICE_CREDIT_ALLOWANCE:,} "
-                    f"({percent:.0f}%, bank cap {VENICE_CREDIT_BANK_MONTHS * 100:.0f}%)"
-                )
         return rows, error
 
     async def bundled_credits(self):
-        """The derived bundled credit balance of the Venice key, at most
-        VENICE_CREDIT_CACHE_SECONDS old (the analytics answer caches 10
-        minutes server-side). None while the cycle seed is unset (the
-        `eliza setcredit` command sets it), the provider has no derivation,
-        or no answer was ever read; a failed read keeps the last value."""
+        """The bundled credit balance in credits of the Venice key, at most USAGE_CACHE_SECONDS old (the rate-limits endpoint reports it live).
+           None while the provider reports no balance, the key is unset, or no answer was ever read; a failed read keeps the last value.
+        """
         provider = provider_for(await self._base_url())
         getter = getattr(provider, "bundled_credits", None)
         if getter is None:
             return None
-        cycle_start = await self.config.credit_cycle_start()
-        cycle_pool = await self.config.credit_cycle_pool()
-        if not cycle_start or not cycle_pool:
-            return None
         now = time.monotonic()
-        if self._credit_cache[0] and now - self._credit_cache[0] < VENICE_CREDIT_CACHE_SECONDS:
+        if self._credit_cache[0] and now - self._credit_cache[0] < USAGE_CACHE_SECONDS:
             return self._credit_cache[1]
         api_key = await self.config.api_key()
         if not api_key:
             return self._credit_cache[1]
         if self.session is None or self.session.closed:
             self.session = self._new_session()
-        balance = await getter(self.session, api_key, cycle_start, cycle_pool)
+        balance = await getter(self.session, api_key)
         if balance is None:
             return self._credit_cache[1]
         self._credit_cache = (now, balance)
         return balance
+
+    async def request_song(self, session_id: int, channel_id: int, request: dict) -> str:
+        """Post one song request of a native tool for approval, through the song manager."""
+        return await self.music.request(session_id, channel_id, request)
+
+    async def guild_media_gate(self) -> bool:
+        """True while the bundled credit balance sits under the paced floor of the
+        cycle rest (the remaining share of the allowance with the safety margin).
+        A guild hides the tools that carry the credit flag while this reads true."""
+        balance = await self.bundled_credits()
+        if balance is None:
+            return False
+        cycle_start = await self.config.credit_cycle_start()
+        if not cycle_start:
+            return False
+        return song_credit_gate(cycle_start, balance)
 
     async def _usage_rows(self):
         """The provider usage rows, cached. None when the check fails: never block on a failure."""
@@ -600,7 +623,11 @@ class Eliza(commands.Cog):
         else:
             for row in rows:
                 if row.get("text"):
-                    lines.append(f"- {row['name']}: {row['text']}")
+                    line = f"- {row['name']}: {row['text']}"
+                    reset = row.get("reset")
+                    if isinstance(reset, (int, float)):
+                        line += f", epoch resets {datetime.fromtimestamp(reset, timezone.utc):{MESSAGE_TIME_FORMAT}}"
+                    lines.append(line)
                     continue
                 parts = []
                 if row.get("used") is not None and row.get("limit"):
@@ -1016,7 +1043,7 @@ class Eliza(commands.Cog):
         await self.polls.native_vote(payload.message_id, payload.user_id, False)
 
     async def _poll_trigger(self, session_id: int, channel, harness_text: str) -> None:
-        """A poll event without a user message wakes the agent: the harness text in, the reply posted."""
+        """A harness event without a user message (a poll close, a song outcome) wakes the agent: the harness text in, the reply posted."""
         if self._closed:
             return
         guild = getattr(channel, "guild", None)
@@ -1230,7 +1257,12 @@ class Eliza(commands.Cog):
         lines = []
         for row in rows:
             if row.get("text"):
-                lines.append(f"**{row['name']}** — {row['text']}")
+                line = f"**{row['name']}** — {row['text']}"
+                reset = row.get("reset")
+                if isinstance(reset, (int, float)):
+                    # The absolute tag renders in the local time of the reader, the relative tag names the span.
+                    line += f", epoch resets <t:{int(reset)}:F> (<t:{int(reset)}:R>)"
+                lines.append(line)
                 continue
             parts = []
             if row.get("used") is not None and row.get("limit"):
@@ -1263,16 +1295,14 @@ class Eliza(commands.Cog):
 
     @eliza_group.command(name="setcredit")
     @commands.admin()
-    async def eliza_setcredit(self, ctx: commands.Context, when: str, pool: float) -> None:
-        """Set the bundled credit cycle seed of the Venice key: the cycle start
-        (a Unix epoch or an ISO 8601 timestamp, UTC — for example 2026-09-03T13:13:35Z)
-        and the credit pool standing at that moment. The derived balance reads
-        from this seed. `setcredit clear 0` removes it."""
+    async def eliza_setcredit(self, ctx: commands.Context, when: str) -> None:
+        """Set the bundled credit cycle anchor of the Venice key: the cycle start
+        (a Unix epoch or an ISO 8601 timestamp, UTC — for example 2026-09-03T13:13:35Z).
+        The anchor paces the guild song gate against the live balance of the
+        rate-limits endpoint. `setcredit clear` removes it."""
         if when.lower() == "clear":
             await self.config.credit_cycle_start.set(0)
-            await self.config.credit_cycle_pool.set(0)
-            self._credit_cache = (0.0, None)
-            await ctx.send("The credit cycle seed is removed. The balance derivation is off.")
+            await ctx.send("The credit cycle anchor is removed. The guild song gate stays off.")
             return
         epoch = None
         if re.fullmatch(r"\d{9,12}", when):
@@ -1285,19 +1315,16 @@ class Eliza(commands.Cog):
                 epoch = parsed.timestamp()
             except ValueError:
                 epoch = None
-        if epoch is None or pool <= 0:
+        if epoch is None:
             await ctx.send(
-                "Give the cycle start as a Unix epoch or an ISO 8601 timestamp (UTC), "
-                "and a positive pool. Example: `setcredit 2026-09-03T13:13:35Z 22500`."
+                "Give the cycle start as a Unix epoch or an ISO 8601 timestamp (UTC). "
+                "Example: `setcredit 2026-09-03T13:13:35Z`."
             )
             return
         await self.config.credit_cycle_start.set(epoch)
-        await self.config.credit_cycle_pool.set(pool)
-        self._credit_cache = (0.0, None)
-        seed_time = f"<t:{int(epoch)}:F>"
         await ctx.send(
-            f"The credit cycle seed is set: the pool held {pool:,.6g} credits at {seed_time}. "
-            "The derived balance reads from it on the next usage check."
+            f"The credit cycle anchor is set to <t:{int(epoch)}:F>. "
+            "The guild song gate paces from it against the live balance."
         )
 
     @eliza_group.command(name="forgetme")
