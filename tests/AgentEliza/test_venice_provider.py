@@ -176,6 +176,84 @@ async def test_the_edit_tool_sends_the_2k_preset_and_no_quality() -> None:
     assert posts[1]["resolution"] == "2K"
 
 
+async def test_the_edit_tool_composites_extra_images_through_multi_edit() -> None:
+    posts: list = []
+    fetches: list = []
+
+    async def api_post(path, *, json_body=None, data=None, binary=False, timeout=120):
+        posts.append((path, json_body))
+        return b"pngdata", {"content-type": "image/png"}
+
+    async def fetch_url(url):
+        fetches.append(url)
+        return (b"img", "image/png")
+
+    async def send_file(name, raw):
+        return f"The file {name} has been sent."
+
+    engine = SimpleNamespace(fetch_url=fetch_url, api_post=api_post, send_file=send_file, channel_nsfw=None)
+    tools = {tool["name"]: tool for tool in VeniceApiProvider().native_tools()}
+    entry = tools["edit_image"]
+    ask = {
+        "image": "https://cdn.discordapp.com/attachments/1/2/base.png"
+      , "extra_images": ["https://example.com/layer.png"]
+      , "prompt": "put the hat on the person"
+    }
+    # The blank model takes the default preset (Muse), a compositing one.
+    answer = await entry["handler"](ask, engine)
+    path, body = posts[0]
+    # Extra images route the call to the multi-edit endpoint, whose model
+    # field is modelId: the base image rides as base64 (a Discord
+    # download), the extra as the foreign URL.
+    assert path == "/image/multi-edit"
+    assert body["modelId"] == "muse-image-edit"
+    assert body["images"][0] == base64.b64encode(b"img").decode("ascii")
+    assert body["images"][1] == "https://example.com/layer.png"
+    assert "model" not in body and "image" not in body
+    assert fetches == ["https://cdn.discordapp.com/attachments/1/2/base.png"]
+    assert answer.startswith("The file muse-image-edit-")
+    # One image stays on the edit endpoint, whose model field is model.
+    ask.pop("extra_images")
+    await entry["handler"](ask, engine)
+    assert posts[1][0] == "/image/edit"
+    assert posts[1][1]["model"] == "muse-image-edit"
+    assert posts[1][1]["image"] == base64.b64encode(b"img").decode("ascii")
+
+
+async def test_the_edit_tool_refuses_extra_images_the_model_takes_not() -> None:
+    posts: list = []
+
+    async def api_post(path, *, json_body=None, data=None, binary=False, timeout=120):
+        posts.append((path, json_body))
+        return b"pngdata", {"content-type": "image/png"}
+
+    async def send_file(name, raw):
+        return f"The file {name} has been sent."
+
+    engine = SimpleNamespace(fetch_url=None, api_post=api_post, send_file=send_file, channel_nsfw=None)
+    tools = {tool["name"]: tool for tool in VeniceApiProvider().native_tools()}
+    ask = {"image": "https://example.com/pic.png", "prompt": "blend them", "extra_images": ["https://example.com/other.png"]}
+    # Luma carries no max_images key: the model composites no extra image.
+    answer = await tools["edit_image"]["handler"]({**ask, "model": "Luma"}, engine)
+    assert answer.startswith("Error: the model Luma composites no extra image.")
+    assert "Models that composite: Muse" in answer
+    # Muse caps the input images at six: seven asked refuses.
+    answer = await tools["edit_image"]["handler"]({**ask, "model": "Muse", "extra_images": [f"https://example.com/{i}.png" for i in range(6)]}, engine)
+    assert answer == "Error: the model Muse takes at most 6 input images (7 asked)."
+    # No call left the tool on either refusal.
+    assert posts == []
+
+
+def test_the_edit_model_enum_names_the_compositing_models() -> None:
+    tools = {tool["name"]: tool for tool in VeniceApiProvider().native_tools()}
+    model = tools["edit_image"]["parameters"]["properties"]["model"]
+    description = model["description"]
+    # The compositing group names every model that takes extra images, so
+    # Luma (no compositing) stays out of it.
+    assert "Composites extra images: Muse, Grok, Qwen, Wan, GPT Image, FireRed, Nano Banana, Flux, Seedream." in description
+    assert "Uncensored: Seedream." in description
+
+
 async def test_the_background_remove_tool_passes_the_url_or_the_bytes() -> None:
     posts: list = []
     fetches: list = []

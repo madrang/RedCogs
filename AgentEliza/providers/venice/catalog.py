@@ -136,17 +136,22 @@ VENICE_SEED_MAX = 999_999_999
 # grok-imagine-image-2-0-edit defaults to medium, so its 2K price is $0.10 either way.
 # Each entry holds the model id behind its name, its capability traits (plain names), and its real cost in USD per edit.
 # The comment on each entry names the release date (the created field of the live list).
+# The max_images key holds the input-image ceiling of the compositing models (constraints.maxInputImages of the live list, read 2026-09-19),
+# and None marks a model the live list caps not (the grok, qwen, and firered families).
+# A model with no max_images key composites no extra image (constraints.combineImages false, luma-uni-1-edit).
+# The extra images ride the multi-edit endpoint, one request with the whole image array.
+# An extra image can bill on its own (pricing.inputImages of the live list): every image past the included count pays the additional price.
 VENICE_EDIT_MODELS = {
-    "Muse": {"model": "muse-image-edit", "traits": [], "cost": 0.02}  # released Sep 2, 2026
-  , "Grok": {"model": "grok-imagine-image-2-0-edit", "traits": [], "cost": 0.10}  # released Aug 10, 2026
-  , "Qwen": {"model": "qwen-image-3-pro-edit", "traits": [], "cost": 0.09}  # released Jul 15, 2026
+    "Muse": {"model": "muse-image-edit", "traits": [], "cost": 0.02, "max_images": 6}  # released Sep 2, 2026
+  , "Grok": {"model": "grok-imagine-image-2-0-edit", "traits": [], "cost": 0.10, "max_images": None}  # released Aug 10, 2026
+  , "Qwen": {"model": "qwen-image-3-pro-edit", "traits": [], "cost": 0.09, "max_images": None}  # released Jul 15, 2026
   , "Luma": {"model": "luma-uni-1-edit", "traits": [], "cost": 0.06}  # released Jun 16, 2026
-  , "Wan": {"model": "wan-2-7-pro-edit", "traits": [], "cost": 0.094}  # released Apr 22, 2026
-  , "GPT Image": {"model": "gpt-image-2-5-sunburst-edit", "traits": [], "cost": 0.15}  # released Sep 7, 2026
-  , "FireRed": {"model": "firered-image-edit", "traits": [], "cost": 0.04}  # released Mar 24, 2026
-  , "Nano Banana": {"model": "nano-banana-2-edit", "traits": [], "cost": 0.14}  # released Feb 25, 2026
-  , "Flux": {"model": "flux-2-max-edit", "traits": [], "cost": 0.12}  # released Jan 4, 2026
-  , "Seedream": {"model": "seedream-v4-edit", "traits": ["uncensored"], "cost": 0.05}  # released Jan 3, 2026
+  , "Wan": {"model": "wan-2-7-pro-edit", "traits": [], "cost": 0.094, "max_images": 6}  # released Apr 22, 2026
+  , "GPT Image": {"model": "gpt-image-2-5-sunburst-edit", "traits": [], "cost": 0.15, "max_images": 6}  # released Sep 7, 2026
+  , "FireRed": {"model": "firered-image-edit", "traits": [], "cost": 0.04, "max_images": None}  # released Mar 24, 2026
+  , "Nano Banana": {"model": "nano-banana-2-edit", "traits": [], "cost": 0.14, "max_images": 6}  # released Feb 25, 2026
+  , "Flux": {"model": "flux-2-max-edit", "traits": [], "cost": 0.12, "max_images": 6}  # released Jan 4, 2026
+  , "Seedream": {"model": "seedream-v4-edit", "traits": ["uncensored"], "cost": 0.05, "max_images": 6}  # released Jan 3, 2026
 }
 # The edit models that price and render by resolution tier: the edit tool sends the same 2K constant as generate, so the catalog cost matches the bill.
 # A model outside the quality set renders at its default quality.

@@ -185,6 +185,11 @@ def _model_property(catalog: dict) -> dict:
             dialect_groups.setdefault(dialect, []).append(preset_name)
     notes = [f"{dialect.capitalize()} models: {', '.join(names)}." for dialect, names in dialect_groups.items()]
     notes.extend(f"{VENICE_IMAGE_TRAIT_LABELS[trait].capitalize()}: {', '.join(names)}." for trait, names in groups.items())
+    compositing = [preset_name for preset_name, entry in catalog.items() if "max_images" in entry]
+    if compositing:
+        # Only the edit catalog carries the key: a model without it composites
+        # no extra image, so the group names the models that take them.
+        notes.append(f"Composites extra images: {', '.join(compositing)}.")
     description = "The model preset name."
     if notes:
         description += " " + " ".join(notes)
@@ -322,12 +327,14 @@ def _image_tool() -> dict:
 
 
 def _edit_tool() -> dict:
-    """The image edit endpoint as a native tool: one edited image, posted to the conversation.
-       The endpoint always answers in binary (the JSON mode of generate does not exist here),
+    """The image edit endpoints as a native tool: one edited image, posted to the conversation.
+       The endpoints always answer in binary (the JSON mode of generate does not exist here),
        so the call rides provider_post with binary=True and the answer format names the file extension.
-       The input image comes as an http(s) URL: an attachment of the conversation or the URL the posting result of generate_image names.
+       The input images come as http(s) URLs: attachments of the conversation or the URLs the posting result of generate_image names.
        A Discord file host URL downloads with the bot token and rides the JSON body as base64; a foreign URL passes to the endpoint as-is.
-       The agent controls the image, the prompt, the model, and the aspect ratio.
+       One input image rides /image/edit. Extra images ride /image/multi-edit: the first image stays the base, the rest work as layers or masks.
+       The multi-edit endpoint names its model field modelId, and only a compositing model takes extra images (the catalog max_images key).
+       The agent controls the image, the extra images, the prompt, the model, and the aspect ratio.
        safe_mode drops only on an age-restricted channel.
        The moderation flags report like generate_image: only a flag that reads yes appears, and a blank refusal needs both marks.
     """
@@ -336,6 +343,16 @@ def _edit_tool() -> dict:
         image = str(arguments.get("image") or "").strip()
         if not image.startswith(("http://", "https://")):
             return "Error: the image must be the http(s) URL of the picture to edit."
+        extras: list[str] = []
+        raw_extras = arguments.get("extra_images")
+        if raw_extras is not None:
+            if not isinstance(raw_extras, list):
+                return "Error: extra_images must be a list of http(s) URLs."
+            for item in raw_extras:
+                extra = str(item or "").strip()
+                if not extra.startswith(("http://", "https://")):
+                    return "Error: every extra image must be an http(s) URL."
+                extras.append(extra)
         prompt = str(arguments.get("prompt") or "").strip()
         if not prompt:
             return "Error: the prompt must say what to change."
@@ -360,21 +377,49 @@ def _edit_tool() -> dict:
         prompt_limit = VENICE_IMAGE_PROMPT_LIMITS.get(model, VENICE_PROMPT_MAX_CHARS)
         if len(prompt) > prompt_limit:
             return f"Error: the prompt is over the {prompt_limit}-character limit of the model {preset_name}."
-        body = {"model": model, "prompt": prompt}
-        if urlparse(image).netloc.lower() in DISCORD_FILE_HOSTS:
-            # The Discord file hosts need an authorized download: the image
-            # rides the body as base64 instead of the URL.
+        if extras:
+            if "max_images" not in entry:
+                compositing = ", ".join(name for name, other in VENICE_EDIT_MODELS.items() if "max_images" in other)
+                return (
+                    f"Error: the model {preset_name} composites no extra image. "
+                    f"Models that composite: {compositing}."
+                )
+            max_images = entry["max_images"]
+            if max_images is not None and 1 + len(extras) > max_images:
+                return f"Error: the model {preset_name} takes at most {max_images} input images ({1 + len(extras)} asked)."
+
+        async def slot(url):
+            # Every image slot takes the same form: a Discord download as
+            # base64, a foreign URL as-is.
+            if urlparse(url).netloc.lower() not in DISCORD_FILE_HOSTS:
+                return url, None
+            # The Discord file hosts need an authorized download.
             if engine.fetch_url is None:
-                return "Error: the Discord download is not available here."
-            fetched = await engine.fetch_url(image)
+                return None, "Error: the Discord download is not available here."
+            fetched = await engine.fetch_url(url)
             if fetched is None:
-                return "Error: the download of the Discord file failed."
-            body["image"] = base64.b64encode(fetched[0]).decode("ascii")
+                return None, f"Error: the download of the Discord file failed: {url}"
+            return base64.b64encode(fetched[0]).decode("ascii"), None
+
+        if not extras:
+            resolved, failure = await slot(image)
+            if failure:
+                return failure
+            body = {"model": model, "prompt": prompt, "image": resolved}
+            path = "/image/edit"
         else:
-            body["image"] = image
+            images = []
+            for url in [image, *extras]:
+                resolved, failure = await slot(url)
+                if failure:
+                    return failure
+                images.append(resolved)
+            body = {"modelId": model, "prompt": prompt, "images": images}
+            path = "/image/multi-edit"
         aspect_ratio = str(arguments.get("aspect_ratio") or "").strip()
         if aspect_ratio and aspect_ratio != "auto":
-            # auto is the endpoint default: the edit keeps the input shape.
+            # auto is the endpoint default: the edit keeps the input shape,
+            # the multi-edit flow reads the shape of the first image.
             body["aspect_ratio"] = aspect_ratio
         if model in VENICE_EDIT_TIER_MODELS:
             # The tier models render at the 2K preset (the override map
@@ -390,7 +435,7 @@ def _edit_tool() -> dict:
             # where Discord itself gates the channel behind 18+.
             body["safe_mode"] = False
         try:
-            data, headers = await engine.api_post("/image/edit", json_body=body, binary=True, timeout=VENICE_RENDER_TIMEOUT)
+            data, headers = await engine.api_post(path, json_body=body, binary=True, timeout=VENICE_RENDER_TIMEOUT)
         except ChatError as e:
             return f"Error: the image edit failed: {e}"
         if not isinstance(data, (bytes, bytearray)) or not data:
@@ -417,25 +462,30 @@ def _edit_tool() -> dict:
         # The usage counter a successful edit increments (the engine counts
         # the call into the scope stats).
       , "media": "inpaints"
-        , "description": (
-            "Edit one image through Venice. "
+      , "description": (
+            "Edit images through Venice: one picture, or several pictures composited into one result. "
             "The result joins the current message as an attachment, and the tool answer names the posted file. "
             "A model that refuses copyrighted material says so in the model field: "
             "describe the subject instead of naming it, or pick another model."
         )
-        , "parameters": {
+      , "parameters": {
             "type": "object"
-            , "properties": {
+          , "properties": {
                 "image": {
                     "type": "string"
-                    , "description": "The http(s) URL of the picture to edit. Use an attachment of the conversation, or the URL a generate_image answer names."
+                  , "description": "The http(s) URL of the base picture to edit. Use an attachment of the conversation, or the URL a generate_image answer names."
+                }
+              , "extra_images": {
+                    "type": "array"
+                  , "items": {"type": "string"}
+                  , "description": "More http(s) URLs the model composites with the base picture, as layers or masks. The model property names the models that take them."
                 }
                 , "prompt": {"type": "string", "description": "What to change in the picture."}
                 , "model": _model_property(VENICE_EDIT_MODELS)
                 , "aspect_ratio": {
                     "type": "string"
                     , "default": "auto"
-                    , "description": "The aspect ratio of the result, for example 1:1, 16:9, or 9:16. Auto keeps the shape of the input image."
+                    , "description": "The aspect ratio of the result, for example 1:1, 16:9, or 9:16. Auto keeps the shape of the base image."
                 }
             }
             , "required": ["image", "prompt"]

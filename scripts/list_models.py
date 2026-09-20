@@ -7,9 +7,11 @@ model reports the per-image cost of the request the AgentEliza image tool
 sends: the 2K preset on the resolution-tier models (gpt-image-2-5-sunburst
 bills 2K medium), the flat generation price elsewhere, the default 1K tier when a
 model prices by tier and the tool sends no resolution. An inpaint model
-(an image edit model) reports its per-edit price at the same 2K preset:
+(an image edit model) reports the per-edit price at the same 2K preset:
 the quality table wins when the model has one (2K medium), else the 2K
-resolution tier, else the flat inpaint price. A music model reports the price of one standard song, 3 minutes
+resolution tier, else the flat inpaint price. An inpaint row also flags
+the compositing models: the multi-edit input-image ceiling and the
+per-extra-image price. A music model reports the price of one standard song, 3 minutes
 30 seconds (210 s): the duration bucket covering it, the per-second rate
 scaled to it, or the flat generation price; a model pricing text (speech)
 keeps its own unit.
@@ -109,6 +111,21 @@ def inpaint_prices(spec: dict) -> dict:
     return {"edit_usd": (pricing.get("inpaint") or {}).get("usd")}
 
 
+def inpaint_layers(spec: dict) -> list:
+    """The compositing markers of an inpaint model: the input-image ceiling
+    of the multi-edit flow (constraints.maxInputImages, uncapped when the
+    live list names none) and the per-extra-image price."""
+    constraints = spec.get("constraints") or {}
+    notes = []
+    if constraints.get("combineImages"):
+        cap = constraints.get("maxInputImages")
+        notes.append(f"combine<={cap}" if cap is not None else "combine")
+    additional = ((spec.get("pricing") or {}).get("inputImages") or {}).get("additional") or {}
+    if additional.get("usd") is not None:
+        notes.append(f"+{additional['usd']} $/input image")
+    return notes
+
+
 def music_prices(pricing: dict) -> dict:
     """The price of one standard song (MUSIC_SONG_SECONDS). A model pricing
     text keeps its own unit."""
@@ -158,16 +175,18 @@ def rows(models: list) -> list:
             entry["created"] = created
             entry["released"] = released_text(created)
         pricing = spec.get("pricing", {}) or {}
-        if mtype == "image":
-            entry.update(image_prices(spec))
-        elif mtype == "inpaint":
+        flags = provider_flags(caps)
+        if mtype == "inpaint":
             entry.update(inpaint_prices(spec))
+            flags += inpaint_layers(spec)
+        elif mtype == "image":
+            entry.update(image_prices(spec))
         elif mtype == "music":
             entry.update(music_prices(pricing))
         else:
             entry.update(text_prices(pricing))
-        if provider_flags(caps):
-            entry["flags"] = provider_flags(caps)
+        if flags:
+            entry["flags"] = flags
         out.append(entry)
     return out
 
