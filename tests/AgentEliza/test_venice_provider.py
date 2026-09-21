@@ -9,7 +9,7 @@ from aiohttp import ClientConnectionError
 import AgentEliza.providers.venice.audio as audio_flow
 from AgentEliza.llm_chat import ChatError
 from AgentEliza.providers.venice import (
-    VeniceApiProvider, VENICE_CHAT_PRESETS, VENICE_FIXED_TOOLS, VENICE_ROUTING_LITE_COST, _environment_tool
+    OTHER_OPTION, VeniceApiProvider, VENICE_CHAT_PRESETS, VENICE_FIXED_TOOLS, VENICE_ROUTING_LITE_COST, _environment_tool
   , model_decision_answer, model_decision_request,
 )
 from tests.AgentEliza.fakes import FakeResponse, FakeSession
@@ -441,9 +441,10 @@ def test_model_decision_answer_maps_the_choice_to_the_preset() -> None:
 
 
 def test_model_decision_answer_refuses_the_unmapped_choices() -> None:
-    # The option other answers a conversation that needs no special capability.
+    # The option other answers a conversation that needs no special
+    # capability: it rides back as its own name, the caller defers.
     other = {"answers": {"model": {"type": "choice", "choice": "other"}}}
-    assert model_decision_answer(other) is None
+    assert model_decision_answer(other) == OTHER_OPTION
     # An unknown name and a disabled preset never map.
     assert model_decision_answer({"answers": {"model": {"choice": "GLM Lite"}}}) is None
     assert model_decision_answer({"answers": {"model": {"choice": "no such preset"}}}) is None
@@ -476,7 +477,7 @@ async def test_decide_model_answers_none_on_failures() -> None:
     assert await provider.decide_model(FakeSession(FakeResponse(500, {"error": "beta"})), "k", "hi") is None
     assert await provider.decide_model(FakeSession(FakeResponse(200, ValueError("not json"))), "k", "hi") is None
     assert await provider.decide_model(FakeSession(ClientConnectionError("boom")), "k", "hi") is None
-    # A choice that names no enabled preset keeps the configured model too.
+    # The other option defers to the configured model, an unmapped pick keeps it too.
     other = FakeSession(FakeResponse(200, {"answers": {"model": {"choice": "other"}}}))
     assert await provider.decide_model(other, "k", "hi") is None
 

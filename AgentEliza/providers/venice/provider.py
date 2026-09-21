@@ -11,7 +11,7 @@ import aiohttp
 
 from ..base import Provider, analyze_image_tool
 from .catalog import VENICE_CREDIT_ALLOWANCE, VENICE_CHAT_PRESETS, VENICE_LIMIT_NAMES
-from .decisions import model_decision_answer, model_decision_request
+from .decisions import OTHER_OPTION, model_decision_answer, model_decision_request
 from .tools import (
     _background_remove_tool
   , _edit_tool
@@ -283,7 +283,12 @@ class VeniceApiProvider(Provider):
         except (aiohttp.ClientError, asyncio.TimeoutError) as e:
             log.warning("The decision call failed: %s: %s", type(e).__name__, e)
             return None
-        return model_decision_answer(data)
+        answer = model_decision_answer(data)
+        if answer == OTHER_OPTION:
+            # A valid deferral, not a failure: the configured model answers.
+            log.info("The decision model deferred to the configured model: the conversation needs no special capability.")
+            return None
+        return answer
 
     def parse_usage(self, data: dict) -> list:
         payload = data.get("data") if isinstance(data.get("data"), dict) else {}

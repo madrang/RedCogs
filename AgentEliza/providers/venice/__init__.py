@@ -36,7 +36,7 @@ from .catalog import (
   , VENICE_ROUTING_LITE_COST
 )
 from .credits import bundled_credit_gate, credit_ratio, next_refill, routing_tier
-from .decisions import model_decision_answer, model_decision_request
+from .decisions import OTHER_OPTION, model_decision_answer, model_decision_request
 from .moderation import _blank_check, _header_flag, _moderation_status, _refusal_error
 from .tools import (
     _search_tool

@@ -4,6 +4,10 @@
 
 from .catalog import JEV_MODEL_ID, VENICE_CHAT_PRESETS, VENICE_ROUTING_LITE_COST
 
+# The null option of the choice question: it answers a conversation that
+# needs no special capability, so the configured model answers.
+OTHER_OPTION = "other"
+
 
 def model_decision_request(state_text: str, lite: bool = False) -> dict:
     """
@@ -20,7 +24,7 @@ def model_decision_request(state_text: str, lite: bool = False) -> dict:
             continue
         traits = ", ".join(preset.get("traits") or ()) or "general conversation"
         criteria[name] = f"{traits}. Operating cost {preset.get('cost', 0.0):.2f} of the priciest catalog model."
-    criteria["other"] = None
+    criteria[OTHER_OPTION] = None
     return {
         "model": JEV_MODEL_ID
         , "state": state_text
@@ -40,12 +44,15 @@ def model_decision_request(state_text: str, lite: bool = False) -> dict:
 
 def model_decision_answer(data: dict) -> str | None:
     """
-       The chosen preset name of a decision answer.
-       None when the answer names no enabled preset, the option other included: the caller keeps the configured model.
+       The chosen option of a decision answer: the preset name, or OTHER_OPTION
+       when the conversation needs no special capability.
+       None when the answer names no enabled preset or the shape is broken.
     """
     answers = data.get("answers") if isinstance(data, dict) else None
     answer = answers.get("model") if isinstance(answers, dict) else None
     choice = answer.get("choice") if isinstance(answer, dict) else None
+    if choice == OTHER_OPTION:
+        return OTHER_OPTION
     preset = VENICE_CHAT_PRESETS.get(choice) if isinstance(choice, str) else None
     if preset is None or preset.get("disabled"):
         return None
