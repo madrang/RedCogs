@@ -5,6 +5,7 @@
 #  , and the chat model routing.
 
 import asyncio
+import json
 import logging
 
 import aiohttp
@@ -283,6 +284,9 @@ class VeniceApiProvider(Provider):
         except (aiohttp.ClientError, asyncio.TimeoutError) as e:
             log.warning("The decision call failed: %s: %s", type(e).__name__, e)
             return None
+        # The raw answer rides the log: the choice, the confidence, and the
+        # probability of every option, for the debugging of the routing.
+        log.info("The decision endpoint answered: %s", json.dumps(data, ensure_ascii=False)[:1500])
         answer = model_decision_answer(data)
         if answer == OTHER_OPTION:
             # A valid deferral, not a failure: the configured model answers.
