@@ -24,7 +24,10 @@ from .music import SongManager
 from .pages import paginate
 from .polls import PollManager
 from .providers import DEFAULT_PROVIDER, PROVIDERS, provider_for, provider_named
-from .providers.venice import bundled_credit_gate, next_refill, routing_tier
+from .providers.venice import (
+    bundled_credit_gate, credit_ratio, next_refill, routing_tier
+  , VENICE_CREDIT_ROUTING_FLOOR,
+)
 from .providers.venice.audio import queue_song, retrieve_song
 from .stats import ScopeStats, month_key
 from .tools import HarnessOptions, HarnessTools, MESSAGE_TIME_FORMAT
@@ -391,6 +394,11 @@ class Eliza(commands.Cog):
         if cycle_day and balance is not None:
             tier = routing_tier(cycle_day, balance)
             if tier == "none":
+                ratio = credit_ratio(cycle_day, balance)
+                log.info(
+                    "The chat model routing skipped: the bundled balance %.0f credits reads the ratio %.2f, under the routing floor %.2f."
+                    , balance, ratio, VENICE_CREDIT_ROUTING_FLOOR,
+                )
                 return None
             lite = tier == "lite"
         if self.session is None or self.session.closed:

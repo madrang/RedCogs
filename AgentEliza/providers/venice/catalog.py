@@ -295,11 +295,9 @@ VENICE_CHAT_PRESETS = {
       , "tool_filter": VENICE_FIXED_TOOLS
     }
     , "Gemini": {
-        # Disabled, untested.
         "normal": "gemini-3-8-flash"  # released Sep 2, 2026
       , "traits": ["vision", "coding", "long context", "concise answers"]
       , "cost": 0.22
-      , "disabled": True
       , "mcp": False
     }
 
