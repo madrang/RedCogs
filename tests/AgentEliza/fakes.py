@@ -257,12 +257,15 @@ class FakeCompactor:
         self.apply = apply
         self.calls: list[tuple[int, int]] = []
 
-    async def compact(self, session_id, session, api_key, preset, keep=16):
+    async def compact(self, session_id, session, api_key, preset, keep=16, reroute=True):
         self.calls.append((session_id, keep))
         if self.usage is None:
             return None
         if self.apply is not None:
             self.apply(session)
+        if reroute:
+            # The real compaction marks the session the same way.
+            session.reroute = True
         return self.usage
 
 

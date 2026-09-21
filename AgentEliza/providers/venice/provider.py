@@ -11,8 +11,8 @@ import logging
 import aiohttp
 
 from ..base import Provider, analyze_image_tool
-from .catalog import VENICE_CREDIT_ALLOWANCE, VENICE_CHAT_PRESETS, VENICE_LIMIT_NAMES
-from .decisions import OTHER_OPTION, model_decision_answer, model_decision_request
+from .catalog import VENICE_CREDIT_ALLOWANCE, VENICE_CHAT_PRESETS, VENICE_LIMIT_NAMES, VENICE_ROUTING_TRAIT_AT
+from .decisions import model_decision_request, preset_for_traits, trait_strengths
 from .tools import (
     _background_remove_tool
   , _edit_tool
@@ -260,12 +260,13 @@ class VeniceApiProvider(Provider):
         return float(usd) * 100
 
     async def decide_model(self, session: aiohttp.ClientSession, api_key: str, state_text: str, lite: bool = False) -> str | None:
-        """The chat preset the decision model picks for a new conversation (POST /decisions,
-           one choice question over the enabled presets of the catalog).
-           lite keeps the options at the lite cost ceiling, for a tight credit balance.
-           None when the call fails or the answer names no enabled preset: the caller
-           keeps the configured model."""
-        body = model_decision_request(state_text, lite)
+        """The chat preset the decision flow routes a new conversation to (POST /decisions,
+           one noul question per capability). The judgments name the trait strengths,
+           the selection walks the catalog in code: the first enabled preset that
+           covers the needed traits, the lite cost ceiling when lite holds.
+           None when the call fails or no judgment reads: the caller keeps the
+           configured model."""
+        body = model_decision_request(state_text)
         try:
             async with session.post(
                 f"{self.base_url}/decisions"
@@ -284,15 +285,18 @@ class VeniceApiProvider(Provider):
         except (aiohttp.ClientError, asyncio.TimeoutError) as e:
             log.warning("The decision call failed: %s: %s", type(e).__name__, e)
             return None
-        # The raw answer rides the log: the choice, the confidence, and the
-        # probability of every option, for the debugging of the routing.
+        # The raw answer rides the log: the probability of every capability,
+        # for the debugging of the routing.
         log.info("The decision endpoint answered: %s", json.dumps(data, ensure_ascii=False)[:1500])
-        answer = model_decision_answer(data)
-        if answer == OTHER_OPTION:
-            # A valid deferral, not a failure: the configured model answers.
-            log.info("The decision model deferred to the configured model: the conversation needs no special capability.")
+        strengths = trait_strengths(data)
+        if not strengths:
+            # No judgment read: a drifted or broken answer, not a conversation
+            # clear of every capability.
+            log.warning("The decision answer named no readable judgment.")
             return None
-        return answer
+        needed = sorted(trait for trait, strength in strengths.items() if strength >= VENICE_ROUTING_TRAIT_AT)
+        log.info("The decision traits at or above %.2f: %s.", VENICE_ROUTING_TRAIT_AT, ", ".join(needed) or "none")
+        return preset_for_traits(strengths, lite)
 
     def parse_usage(self, data: dict) -> list:
         payload = data.get("data") if isinstance(data.get("data"), dict) else {}

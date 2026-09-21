@@ -596,6 +596,30 @@ async def test_a_failed_decision_keeps_the_configured_model() -> None:
     assert engine.history.sessions[7].model_override is None
 
 
+async def test_a_compacted_session_reroutes_on_the_next_message() -> None:
+    api = DecidingApi([close("Hello.")], decision="DeepSeek Pro")
+    engine = build_engine(api)
+    session = await engine.history.get(7, "user")
+    session.start_context("system")
+    session.append("user", "an old turn")
+    session.summary = "The user fixed a python bug."
+    session.reroute = True
+    assert await drain(engine, "and another thing") == ["Hello."]
+    # The state carries the fresh summary beside the new message.
+    assert api.decision_calls == [
+        "Summary of the conversation so far:\nThe user fixed a python bug.\n"
+        "New message: Madrang: and another thing"
+    ]
+    # The pick rides the override, no condense ran for the move.
+    assert api.requests[0]["model"] == "DeepSeek Pro"
+    assert session.model_override == "DeepSeek Pro"
+    assert session.reroute is False
+    # The next message keeps the pick without a second decision call.
+    api.answers.append(close("Done."))
+    assert await drain(engine, "thanks") == ["Done."]
+    assert len(api.decision_calls) == 1
+
+
 async def test_a_session_without_the_router_skips_the_decision_call() -> None:
     # The plain stand-in carries no decide_session_model: a provider without
     # the capability never sees a call.

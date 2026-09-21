@@ -370,20 +370,28 @@ class ChatEngine:
             , channel=self.bot.get_channel(channel_id) if session.scope == "channel" else None
             , user_name=message.user_name
         )
-        if not session.messages and session.model_override is None:
-            # A fresh session asks the decision model of the provider for its
-            # first chat preset: the model reads the opening message and the
-            # traits of the chat presets. The pick rides the session override
-            # and dies with the session. A miss (no decision model, a low
-            # bundled credit balance, a failed call) keeps the configured
-            # model.
+        if not session.messages or session.reroute:
+            # A fresh session asks the decision flow of the provider for the
+            # capability strengths of the conversation, and a compaction asks
+            # again: the context was just rebuilt, so the model choice
+            # deserves a re-check. The harness picks the preset in code, and
+            # a pick lands on the override with no condense: the fresh
+            # summary already fits the target window. A miss (no decision
+            # flow, a low bundled credit balance, a failed call) keeps the
+            # current model.
+            session.reroute = False
             decider = getattr(self.api, "decide_session_model", None)
             if decider is not None:
                 state = f"{message.speaker}: {message.content}{attachments_text(attachments)}"
+                if session.summary:
+                    state = f"Summary of the conversation so far:\n{session.summary}\nNew message: {state}"
                 picked = await decider(state)
                 if picked:
                     session.model_override = picked
-                    log.info("The decision model picked the preset %s for session %s.", picked, label)
+                    log.info(
+                        "The decision routing picked the preset %s for session %s%s."
+                        , picked, label, "" if not session.messages else " after the compaction",
+                    )
         # The conversation's model string, an override included: it decides
         # the compaction budget here and the request model below.
         request_model = session.model_override or await self.api.model_name()
@@ -623,7 +631,7 @@ class ChatEngine:
                     current_window and target_window and target_window < current_window
                     and len(session.messages) > 1
                 ):
-                    compact_usage = await self.compactor.compact(session_id, session, api_key, preset, keep=0)
+                    compact_usage = await self.compactor.compact(session_id, session, api_key, preset, keep=0, reroute=False)
                     if compact_usage is None:
                         name = model_id if model_id is not None else "the default model"
                         reason = f" ({session.error})" if session.error else ""

@@ -9,8 +9,8 @@ from aiohttp import ClientConnectionError
 import AgentEliza.providers.venice.audio as audio_flow
 from AgentEliza.llm_chat import ChatError
 from AgentEliza.providers.venice import (
-    OTHER_OPTION, VeniceApiProvider, VENICE_CHAT_PRESETS, VENICE_FIXED_TOOLS, VENICE_ROUTING_LITE_COST, _environment_tool
-  , model_decision_answer, model_decision_request,
+    VeniceApiProvider, VENICE_CHAT_CAPABILITIES, VENICE_CHAT_PRESETS, VENICE_FIXED_TOOLS, VENICE_ROUTING_LITE_COST, VENICE_ROUTING_TRAIT_AT, _environment_tool
+  , model_decision_request, preset_for_traits, trait_strengths,
 )
 from tests.AgentEliza.fakes import FakeResponse, FakeSession
 
@@ -401,75 +401,65 @@ async def test_the_retrieve_polls_stop_at_the_time_budget(monkeypatch) -> None:
     assert "time budget" in str(caught.value)
 
 
-def test_model_decision_request_builds_the_choice_question() -> None:
+def test_model_decision_request_asks_every_capability() -> None:
     body = model_decision_request("Madrang: fix this python bug")
     assert body["model"] == "jev-latest"
     assert body["state"] == "Madrang: fix this python bug"
-    question = body["questions"]["model"]
-    assert question["type"] == "choice"
-    criteria = question["criteria"]
-    # Every enabled preset is an option, the disabled presets stay out.
-    enabled = {name for name, preset in VENICE_CHAT_PRESETS.items() if not preset.get("disabled")}
-    assert {name for name in criteria if name != "other"} == enabled
-    # The option other carries no rubric.
-    assert criteria["other"] is None
-    # A rubric names the traits and the operating cost of the preset.
-    assert "long context" in criteria["DeepSeek Pro"]
-    assert "coding" in criteria["DeepSeek Pro"]
-    assert "0.33" in criteria["DeepSeek Pro"]
+    # One noul question per capability, no options and no null answer.
+    assert set(body["questions"]) == set(VENICE_CHAT_CAPABILITIES)
+    assert all(question["type"] == "noul" for question in body["questions"].values())
+    assert all("criteria" not in question for question in body["questions"].values())
 
 
-def test_model_decision_request_lite_keeps_the_cheap_options() -> None:
-    criteria = model_decision_request("Madrang: hi", lite=True)["questions"]["model"]["criteria"]
-    # The lite tier holds the enabled presets at the lite cost ceiling.
-    lite = {
-        name for name, preset in VENICE_CHAT_PRESETS.items()
-        if not preset.get("disabled") and preset.get("cost", 0.0) <= VENICE_ROUTING_LITE_COST
-    }
-    assert {name for name in criteria if name != "other"} == lite
-    # The pricier presets stay out, the null option stays.
-    assert "Kimi" not in criteria
-    assert "DeepSeek Pro" not in criteria
-    assert criteria["other"] is None
+def test_trait_strengths_reads_and_clamps_the_probabilities() -> None:
+    data = {"answers": {
+        "vision": {"probability": 0.9}
+      , "coding": {"noul": 0.6}
+      , "writing": {"value": 1.7}
+      , "nsfw": {"probability": True}
+      , "roleplay": {"probability": "high"}
+      , "unknown question": {"probability": 0.8}
+    }}
+    # The readable fields parse, the values clamp to the 0 to 1 range.
+    assert trait_strengths(data) == {"vision": 0.9, "coding": 0.6, "writing": 1.0}
+    # A boolean, a string, and a question outside the vocabulary stay out.
+    assert trait_strengths({}) == {}
+    assert trait_strengths({"answers": {"vision": {"probability": None}}}) == {}
 
 
-def test_model_decision_answer_maps_the_choice_to_the_preset() -> None:
-    data = {"model": "jev-latest", "answers": {"model": {
-        "type": "choice", "choice": "DeepSeek Pro", "probabilities": {}, "confidence": 0.9
-    }}}
-    assert model_decision_answer(data) == "DeepSeek Pro"
+def test_preset_for_traits_walks_the_catalog_order() -> None:
+    # No trait at the threshold: the first enabled preset answers.
+    assert preset_for_traits({}) == "DeepSeek Lite"
+    assert preset_for_traits({"coding": VENICE_ROUTING_TRAIT_AT - 0.01}) == "DeepSeek Lite"
+    # The first carrier of one trait wins the walk.
+    assert preset_for_traits({"vision": 0.9}) == "Gemma"
+    assert preset_for_traits({"coding": 0.8}) == "DeepSeek Pro"
+    # The imagination carriers sit in the Google pair, before the Aion storytellers.
+    assert preset_for_traits({"imagination": 0.9}) == "Gemma"
+    assert preset_for_traits({"imagination": 0.9, "coding": 0.8}) == "Gemini"
+    # A combination names the first preset that carries every trait.
+    assert preset_for_traits({"vision": 0.9, "thorough answers": 0.8}) == "Kimi"
+    # The lite ceiling keeps the walk at the cheap presets.
+    assert preset_for_traits({"vision": 0.9}, lite=True) == "Gemma"
+    assert preset_for_traits({"coding": 0.8}, lite=True) == "GLM Vision"
+    # No cheap preset carries roleplay: the configured model answers.
+    assert preset_for_traits({"roleplay": 0.9}, lite=True) is None
 
 
-def test_model_decision_answer_refuses_the_unmapped_choices() -> None:
-    # The option other answers a conversation that needs no special
-    # capability: it rides back as its own name, the caller defers.
-    other = {"answers": {"model": {"type": "choice", "choice": "other"}}}
-    assert model_decision_answer(other) == OTHER_OPTION
-    # An unknown name and a disabled preset never map.
-    assert model_decision_answer({"answers": {"model": {"choice": "GLM Lite"}}}) is None
-    assert model_decision_answer({"answers": {"model": {"choice": "no such preset"}}}) is None
-    # Broken shapes degrade to no pick.
-    assert model_decision_answer({}) is None
-    assert model_decision_answer({"answers": {}}) is None
-    assert model_decision_answer({"answers": {"model": {"choice": 7}}}) is None
-
-
-async def test_decide_model_posts_and_parses_the_choice() -> None:
+async def test_decide_model_posts_and_selects_the_preset() -> None:
     provider = VeniceApiProvider()
-    answer = {"answers": {"model": {"type": "choice", "choice": "GLM Vision", "probabilities": {}, "confidence": 0.8}}}
+    answer = {"answers": {"vision": {"probability": 0.91}, "coding": {"probability": 0.05}}}
     session = FakeSession(FakeResponse(200, answer))
-    assert await provider.decide_model(session, "test-key", "Madrang: hi") == "GLM Vision"
+    assert await provider.decide_model(session, "test-key", "Madrang: hi") == "Gemma"
     url, kwargs = session.calls[0]
     assert url == "https://api.venice.ai/api/v1/decisions"
     assert kwargs["headers"]["Authorization"] == "Bearer test-key"
     assert kwargs["json"]["model"] == "jev-latest"
     assert kwargs["json"]["state"] == "Madrang: hi"
-    # The lite flag rides the call: the criteria keep the cheap options alone.
-    lite = FakeSession(FakeResponse(200, answer))
-    assert await provider.decide_model(lite, "test-key", "Madrang: hi", lite=True) == "GLM Vision"
-    criteria = lite.calls[0][1]["json"]["questions"]["model"]["criteria"]
-    assert "Kimi" not in criteria
-    assert "DeepSeek Lite" in criteria
+    assert set(kwargs["json"]["questions"]) == set(VENICE_CHAT_CAPABILITIES)
+    # The lite flag keeps the selection among the cheap presets.
+    lite = FakeSession(FakeResponse(200, {"answers": {"roleplay": {"probability": 0.9}}}))
+    assert await provider.decide_model(lite, "test-key", "Madrang: hi", lite=True) is None
 
 
 async def test_decide_model_answers_none_on_failures() -> None:
@@ -477,9 +467,12 @@ async def test_decide_model_answers_none_on_failures() -> None:
     assert await provider.decide_model(FakeSession(FakeResponse(500, {"error": "beta"})), "k", "hi") is None
     assert await provider.decide_model(FakeSession(FakeResponse(200, ValueError("not json"))), "k", "hi") is None
     assert await provider.decide_model(FakeSession(ClientConnectionError("boom")), "k", "hi") is None
-    # The other option defers to the configured model, an unmapped pick keeps it too.
-    other = FakeSession(FakeResponse(200, {"answers": {"model": {"choice": "other"}}}))
-    assert await provider.decide_model(other, "k", "hi") is None
+    # An answer with no readable judgment keeps the configured model.
+    empty = FakeSession(FakeResponse(200, {"answers": {}}))
+    assert await provider.decide_model(empty, "k", "hi") is None
+    # A low answer across the vocabulary routes to the first preset.
+    low = FakeSession(FakeResponse(200, {"answers": {"coding": {"probability": 0.1}}}))
+    assert await provider.decide_model(low, "k", "hi") == "DeepSeek Lite"
 
 
 def test_tool_filter_names_the_fixed_tool_presets() -> None:

@@ -239,6 +239,8 @@ VENICE_CREDIT_GATE_MIN = 0.5
 VENICE_CREDIT_ROUTING_FLOOR = 1.0
 # The cost ceiling of the lite tier of the chat routing.
 VENICE_ROUTING_LITE_COST = 0.10
+# The strength a capability must read before the chat routing counts it as needed.
+VENICE_ROUTING_TRAIT_AT = 0.5
 # The decision model of the chat routing: a fresh session asks it which chat
 # preset fits its opening message. Source: the live decision list
 # (GET /models?type=decision, read 2026-09-20), the only id it publishes.
@@ -248,8 +250,11 @@ JEV_MODEL_ID = "jev-latest"
 # The coding trait mirrors the optimizedForCode flag of the live model list. The roleplay and storytelling traits ride the Aion pair.
 # The concise answers and thorough answers traits mark the size pairs: the lite and mini presets answer concisely, the regular and pro presets thoroughly.
 # The reasoning trait marks a model that solves hard problems far above its class. The writing trait marks a model whose prose stands close to the leaders.
+# The imagination trait names a model that brings more original ideas than its class: the Google entries carry it on the benchmarks and the owner's word
+# of 2026-09-21, distinct from the roleplay and storytelling of the Aion pair.
+# The Qwen pair carries no such trait on the community word: the 3.8 answers read stiff and filtered for creative work.
 VENICE_CHAT_CAPABILITIES = (
-    "vision", "nsfw", "long context", "coding", "reasoning", "writing"
+    "vision", "nsfw", "long context", "coding", "reasoning", "writing", "imagination"
   , "roleplay", "storytelling", "concise answers", "thorough answers"
 )
 # The fixed tool list of the presets whose models overuse the wider tool
@@ -289,14 +294,14 @@ VENICE_CHAT_PRESETS = {
   , "Gemma": {
         # The fixed tool list stays under the model cap of 20 tool definitions.
         "normal": "google-gemma-4-31b-it"  # released Apr 3, 2026
-      , "traits": ["vision", "reasoning", "nsfw"]
+      , "traits": ["vision", "reasoning", "nsfw", "imagination"]
       , "cost": -0.01
       , "nsfw": "gemma-4-uncensored"  # released Apr 13, 2026
       , "tool_filter": VENICE_FIXED_TOOLS
     }
     , "Gemini": {
         "normal": "gemini-3-8-flash"  # released Sep 2, 2026
-      , "traits": ["vision", "coding", "long context", "concise answers"]
+      , "traits": ["vision", "coding", "long context", "imagination", "concise answers"]
       , "cost": 0.22
       , "mcp": False
     }
@@ -362,7 +367,7 @@ VENICE_CHAT_PRESETS = {
     }
   , "Qwen": {
         "normal": "qwen-3-8-2-4t-a95b"  # 262K Ctx, released Aug 12, 2026
-      , "traits": ["coding", "nsfw", "thorough answers"]
+      , "traits": ["coding", "nsfw", "reasoning", "thorough answers"]
       , "cost": 0.56
       , "tool_filter": VENICE_FIXED_TOOLS
     }
@@ -376,7 +381,7 @@ VENICE_CHAT_PRESETS = {
   , "Aion": {
         # Model based on GLM-5.1
         "normal": "aion-labs-aion-3-0"  # released Jul 8, 2026
-      , "traits": ["nsfw", "roleplay", "storytelling", "thorough answers"]
+      , "traits": ["nsfw", "reasoning", "roleplay", "storytelling", "thorough answers"]
       , "cost": 0.80
     }
 

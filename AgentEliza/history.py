@@ -110,6 +110,8 @@ class Session:
     seen_users tracks the users with an injected memory note in this
     context, so the note appears once per user per context. last_prompt_tokens
     is the real prompt size of the last API answer, 0 when unknown.
+    reroute marks a capacity compaction: the next message asks the decision
+    routing for its preset again, the fresh summary moves with no condense.
     """
 
     def __init__(self, scope: str):
@@ -125,6 +127,8 @@ class Session:
         self.lock = asyncio.Lock()
         # Stamp of the last compaction, so the sweeper does not re-fire on an idle session.
         self.last_compaction = 0.0
+        # True after a capacity compaction: the next message re-routes the model.
+        self.reroute = False
         # The last compaction error, None when the last compaction worked.
         self.error = None
         # Consecutive compaction failures and the monotonic time the sweeper

@@ -71,7 +71,7 @@ class Compressor:
         # one interval later.
         self._last_workspace_sweep = time.monotonic()
 
-    async def compact(self, session_id: int, session: Session, api_key: str, preset, keep: int = COMPACTION_KEEP_TURNS) -> dict | None:
+    async def compact(self, session_id: int, session: Session, api_key: str, preset, keep: int = COMPACTION_KEEP_TURNS, reroute: bool = True) -> dict | None:
         """Summarize the turns of a session and persist the summary.
 
         Runs while the provider cache is still warm, with the session cache
@@ -83,6 +83,9 @@ class Compressor:
         failure: the session then stays as it is and the next message retries.
         A content filter rejection is permanent: the session is unloaded and
         the error raised again for the caller.
+        reroute marks the session on success: the next message asks the
+        decision routing for its preset again. A move condense passes False,
+        the model choice was just made.
         """
         if len(session.messages) <= 1:
             return None
@@ -138,6 +141,8 @@ class Compressor:
         # An over-long note loses its start, never its end.
         summary = summary[-SUMMARY_MAX_CHARS:]
         session.apply_compaction(summary, len(old))
+        if reroute:
+            session.reroute = True
         # The summary joins the context as the compaction exchange: the harness
         # request and the agent answer. It is not repeated in the system message.
         session.inject_summary()
