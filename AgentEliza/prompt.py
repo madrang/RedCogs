@@ -36,7 +36,7 @@ SYSTEM_PROMPT = (
     "- After 10 tool calls in one answer, finish the answer in text without tools.\n"
     "- Before a task that needs coding, long context, vision, roleplay, storytelling, or nsfw content, "
     "call the configure_environment tool with the needed capabilities.\n"
-    "- The short answers and the long answers capabilities pick between a brief reply and a thorough one. Match the need of the moment.\n"
+    "- The concise answers and the thorough answers capabilities pick between a tight reply and a complete one. Match the need of the moment.\n"
     "\n"
     "Discord renders your answers. You can use markdown: **bold**, *italics*, __underline__, ~~strikethrough~~, `code`, code blocks, quotes, lists, and # headers.\n"
     "You can also use the Discord forms: ||spoiler||, -# subtext, [masked links](https://url), and <t:UNIX:R> timestamps.\n"

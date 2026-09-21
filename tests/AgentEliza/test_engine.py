@@ -557,3 +557,70 @@ async def test_analyze_image_of_a_plain_conversation_passes_a_foreign_url_remote
     assert fetches == []
     part = calls[0]["messages"][0]["content"][0]
     assert part["image_url"]["url"] == "https://example.com/pic.jpg"
+
+
+class DecidingApi(FakeApi):
+    """The cog stand-in with the decision router of the provider."""
+
+    def __init__(self, *args, decision=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.decision = decision
+        self.decision_calls: list[str] = []
+
+    async def decide_session_model(self, state_text):
+        self.decision_calls.append(state_text)
+        return self.decision
+
+
+async def test_a_fresh_session_opens_on_the_decision_pick() -> None:
+    api = DecidingApi([close("Hello.")], decision="DeepSeek Pro")
+    engine = build_engine(api)
+    assert await drain(engine, "fix this python bug") == ["Hello."]
+    # The state carries the opening message, and the pick rides the session override.
+    assert api.decision_calls == ["Madrang: fix this python bug"]
+    assert api.requests[0]["model"] == "DeepSeek Pro"
+    assert engine.history.sessions[7].model_override == "DeepSeek Pro"
+    # The next message keeps the pick without a second decision call.
+    api.answers.append(close("Done."))
+    assert await drain(engine, "thanks") == ["Done."]
+    assert len(api.decision_calls) == 1
+    assert api.requests[1]["model"] == "DeepSeek Pro"
+
+
+async def test_a_failed_decision_keeps_the_configured_model() -> None:
+    api = DecidingApi([close("Hello.")], decision=None)
+    engine = build_engine(api)
+    assert await drain(engine, "hi") == ["Hello."]
+    assert api.decision_calls == ["Madrang: hi"]
+    assert api.requests[0]["model"] == "test-model"
+    assert engine.history.sessions[7].model_override is None
+
+
+async def test_a_session_without_the_router_skips_the_decision_call() -> None:
+    # The plain stand-in carries no decide_session_model: a provider without
+    # the capability never sees a call.
+    api = FakeApi([close("Hello.")])
+    engine = build_engine(api)
+    assert await drain(engine, "hi") == ["Hello."]
+    assert api.requests[0]["model"] == "test-model"
+    assert engine.history.sessions[7].model_override is None
+
+
+async def test_a_filtered_preset_carries_only_the_fixed_tools() -> None:
+    async def noop(arguments, engine):
+        return "ok"
+
+    native = [
+        {"name": "generate_image", "description": "d", "parameters": {}, "handler": noop}
+      , {"name": "web_search", "description": "d", "parameters": {}, "handler": noop}
+    ]
+    preset = FakePreset(native, tool_filter=frozenset({"generate_image", "propose_choices"}))
+    api = FakeApi([close("Hi.")], preset=preset)
+    engine = build_engine(api, harness_tools=FakeHarnessTools(["propose_choices", "read_history"]))
+    # The conversation sits on the filtered preset: a session override names it.
+    session = await engine.history.get(7, "user")
+    session.model_override = "Qwen"
+    assert await drain(engine, "hi") == ["Hi."]
+    names = {tool["function"]["name"] for tool in api.requests[0]["tools"]}
+    # The harness defaults and the provider tools outside the filter stay off.
+    assert names == {"generate_image", "propose_choices"}

@@ -1,14 +1,17 @@
 # The Venice provider class:
 #    the request surface
 #  , the usage rows
-#  , and the bundled credit fetch.
+#  , the bundled credit fetch
+#  , and the chat model routing.
 
 import asyncio
+import logging
 
 import aiohttp
 
 from ..base import Provider, analyze_image_tool
 from .catalog import VENICE_CREDIT_ALLOWANCE, VENICE_CHAT_PRESETS, VENICE_LIMIT_NAMES
+from .decisions import model_decision_answer, model_decision_request
 from .tools import (
     _background_remove_tool
   , _edit_tool
@@ -20,6 +23,8 @@ from .tools import (
   , _search_tool
   , preset_menu_line
 )
+
+log = logging.getLogger("red.agenteliza")
 
 
 class VeniceApiProvider(Provider):
@@ -142,6 +147,16 @@ class VeniceApiProvider(Provider):
                 return preset["normal"]
         return name
 
+    def tool_filter(self, model: str) -> frozenset | None:
+        """The names of the only tools a request model may carry, None when the model takes the full set.
+           A preset names its filter through the tool_filter key: the Qwen pair and Gemma carry VENICE_FIXED_TOOLS."""
+        for catalog_name, preset in VENICE_CHAT_PRESETS.items():
+            if (catalog_name.lower() == str(model).strip().lower()
+                    or model in (preset.get("normal"), preset.get("nsfw"))):
+                allowed = preset.get("tool_filter")
+                return frozenset(allowed) if allowed else None
+        return None
+
     def resolve_model(self, name: str) -> str:
         """Map a short preset name (any casing) to its model id, pass anything else through unchanged."""
         return self.request_model(name, nsfw=False)
@@ -232,6 +247,32 @@ class VeniceApiProvider(Provider):
         if not isinstance(usd, (int, float)) or usd < 0:
             return None
         return float(usd) * 100
+
+    async def decide_model(self, session: aiohttp.ClientSession, api_key: str, state_text: str) -> str | None:
+        """The chat preset the decision model picks for a new conversation (POST /decisions,
+           one choice question over the enabled presets of the catalog).
+           None when the call fails or the answer names no enabled preset: the caller
+           keeps the configured model."""
+        body = model_decision_request(state_text)
+        try:
+            async with session.post(
+                f"{self.base_url}/decisions"
+                , json=body
+                , headers={"Authorization": f"Bearer {api_key}"}
+                , timeout=aiohttp.ClientTimeout(total=20),
+            ) as response:
+                if response.status != 200:
+                    log.warning("The decision endpoint answered HTTP %d.", response.status)
+                    return None
+                try:
+                    data = await response.json(content_type=None)
+                except Exception:
+                    log.warning("The decision endpoint answered no readable JSON.")
+                    return None
+        except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+            log.warning("The decision call failed: %s: %s", type(e).__name__, e)
+            return None
+        return model_decision_answer(data)
 
     def parse_usage(self, data: dict) -> list:
         payload = data.get("data") if isinstance(data.get("data"), dict) else {}

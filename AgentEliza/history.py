@@ -64,6 +64,31 @@ async def _acquire(lock: asyncio.Lock):
 COMPACTION_KEEP_TURNS = BACKFILL_MESSAGES
 
 
+def session_label(scope: str, session_id: int, *, channel=None, user_name: str | None = None) -> str:
+    """The readable name of a session: the channel of a guild conversation,
+    the user of a direct message. The id stands in when no name resolves.
+    The sessions list and the log lines share this one format."""
+    if scope == "channel":
+        if channel is not None and getattr(channel, "guild", None) is not None:
+            return f"#{channel.name} — {channel.guild.name}"
+        return f"channel {session_id}"
+    if user_name:
+        return f"DM — {user_name}"
+    return f"DM — user {session_id}"
+
+
+async def session_log_label(getter, session_id: int) -> str:
+    """The readable session name of a log line, through the getter of the
+    cog: the id until the cog wires the getter, and the id again when the
+    getter fails or answers empty."""
+    if getter is None:
+        return str(session_id)
+    try:
+        return await getter(session_id) or str(session_id)
+    except Exception:
+        return str(session_id)
+
+
 class Session:
     """One conversation context: a guild session, or the DM session of a user.
 

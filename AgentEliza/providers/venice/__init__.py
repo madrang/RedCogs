@@ -1,6 +1,7 @@
 # The Venice provider as a package:
 #   - The curated tables (catalog)
 #   - The bundled credit walk (credits)
+#   - The decision routing (decisions)
 #   - The content-refusal checks (moderation)
 #   - The native tools (tools)
 #   - The provider class (provider).
@@ -30,8 +31,10 @@ from .catalog import (
   , VENICE_MUSIC_MODELS
   , VENICE_CHAT_CAPABILITIES
   , VENICE_CHAT_PRESETS
+  , VENICE_FIXED_TOOLS
 )
-from .credits import next_refill, song_credit_gate
+from .credits import bundled_credit_gate, next_refill
+from .decisions import model_decision_answer, model_decision_request
 from .moderation import _blank_check, _header_flag, _moderation_status, _refusal_error
 from .tools import (
     _search_tool

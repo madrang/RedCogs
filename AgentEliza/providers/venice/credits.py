@@ -1,4 +1,5 @@
-# The bundled credit cycle calendar and the guild song gate: pure date math over the cycle day.
+# The bundled credit cycle calendar and the credit gate: pure date math over the cycle day.
+# The gate paces the guild media tools and the chat model routing against the cycle rest.
 # The balance itself reads from the rate-limits endpoint of the provider.
 # The cycle day lives in Config (`eliza setcycleday`).
 
@@ -27,10 +28,10 @@ def next_refill(cycle_day: int, now: datetime | None = None) -> datetime:
     return _cycle_day_of(year, month, cycle_day)
 
 
-def song_credit_gate(cycle_day: int, balance: float, now: datetime | None = None) -> bool:
+def bundled_credit_gate(cycle_day: int, balance: float, now: datetime | None = None) -> bool:
     """True when the balance sits under the paced floor of the cycle rest:
     the remaining share of the monthly allowance, with VENICE_CREDIT_GATE_BUFFER
-    as the safety margin. The guild song tool hides while the gate reads true."""
+    as the safety margin."""
     moment = now if now is not None else datetime.now(timezone.utc)
     upcoming = next_refill(cycle_day, moment)
     this_month = _cycle_day_of(moment.year, moment.month, cycle_day)

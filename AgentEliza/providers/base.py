@@ -159,6 +159,11 @@ class Provider:
         the model sits in none."""
         return None
 
+    def tool_filter(self, model: str) -> frozenset | None:
+        """The names of the only tools a request model may carry, None when
+        the model takes the full set."""
+        return None
+
     def resolve_model(self, name: str) -> str:
         """Map a display name to its model id, pass anything else through."""
         return name

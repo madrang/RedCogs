@@ -14,7 +14,7 @@ from redbot.core.utils.mod import is_admin_or_superior
 
 from .history import (
     CHARS_PER_TOKEN, COMPACTION_AT, CONTEXT_FILL, DEFAULT_CACHE_TTL, HISTORY_MAX_CHARS,
-    HISTORY_MAX_TOKENS, History,
+    HISTORY_MAX_TOKENS, History, session_label,
 )
 from .llm_chat import ChatEngine, ChatError, IncomingMessage, MAX_SESSIONS
 from .llm_compress import Compressor
@@ -24,7 +24,7 @@ from .music import SongManager
 from .pages import paginate
 from .polls import PollManager
 from .providers import DEFAULT_PROVIDER, PROVIDERS, provider_for, provider_named
-from .providers.venice import next_refill, song_credit_gate
+from .providers.venice import bundled_credit_gate, next_refill
 from .providers.venice.audio import queue_song, retrieve_song
 from .stats import ScopeStats, month_key
 from .tools import HarnessOptions, HarnessTools, MESSAGE_TIME_FORMAT
@@ -51,6 +51,17 @@ FILTER_TIMEOUT = 1800
 # LONG_REPLY_MAX_PAGES inline pages the rest of the text rides in a file
 # on a closing message.
 LONG_REPLY_MAX_PAGES = 4
+# The snippet cap of the on_message log line: longer messages clip.
+MESSAGE_LOG_MAX_CHARS = 200
+
+
+def _log_snippet(text: str) -> str:
+    """The message snippet of a log line: the full text, or its clipped start
+    with the dropped count when it runs long."""
+    if len(text) <= MESSAGE_LOG_MAX_CHARS:
+        return text
+    dropped = len(text) - MESSAGE_LOG_MAX_CHARS
+    return f"{text[:MESSAGE_LOG_MAX_CHARS]}... [{dropped} characters dropped]"
 
 
 def _error_message(data) -> str | None:
@@ -148,6 +159,10 @@ class Eliza(commands.Cog):
         self.music.on_event = self._poll_trigger
         # The majority rule of a guild song vote counts the speakers of the session.
         self.music.participants_getter = self._poll_participants
+        # The poll and song logs name a session: the same label as the
+        # sessions list.
+        self.polls.label_getter = self.session_label_of
+        self.music.label_getter = self.session_label_of
 
         async def song_api_post(path, *, json_body=None, data=None, binary=False, timeout=120):
             api_key = await self.config.api_key()
@@ -226,6 +241,27 @@ class Eliza(commands.Cog):
             with contextlib.suppress(discord.NotFound, discord.Forbidden, discord.HTTPException):
                 channel = await self.bot.fetch_channel(channel_id)
         return channel
+
+    async def _user_name(self, user_id: int) -> str | None:
+        """The display name of a user id: the cache first, the API on a miss, None when neither answers."""
+        user = self.bot.get_user(user_id)
+        if user is None:
+            with contextlib.suppress(discord.NotFound, discord.Forbidden, discord.HTTPException):
+                user = await self.bot.fetch_user(user_id)
+        return user.display_name if user is not None else None
+
+    async def session_label_of(self, session_id: int) -> str:
+        """The readable name of a session id, for the poll and song logs.
+        A live session names its scope, an unloaded id probes the channel
+        first, then the user. The id stands in when neither resolves."""
+        session = self.history.sessions.get(session_id)
+        if session is not None and session.scope == "user":
+            return session_label("user", session_id, user_name=await self._user_name(session_id))
+        channel = await self._get_channel(session_id)
+        if session is not None or channel is not None:
+            return session_label("channel", session_id, channel=channel)
+        name = await self._user_name(session_id)
+        return session_label("user", session_id, user_name=name) if name else str(session_id)
 
     async def _rate_limits(self) -> dict:
         """The configured interaction limits per scope, 0 for unlimited."""
@@ -309,17 +345,41 @@ class Eliza(commands.Cog):
         """Post one song request of a native tool for approval, through the song manager."""
         return await self.music.request(session_id, channel_id, request)
 
-    async def guild_media_gate(self) -> bool:
+    async def bundled_credit_low(self) -> bool:
         """True while the bundled credit balance sits under the paced floor of the
         cycle rest (the remaining share of the allowance with the safety margin).
-        A guild hides the tools that carry the credit flag while this reads true."""
+        The guild media tools hide and the chat model routing skips while this reads true."""
         balance = await self.bundled_credits()
         if balance is None:
             return False
         cycle_day = await self.config.credit_cycle_day()
         if not cycle_day:
             return False
-        return song_credit_gate(cycle_day, balance)
+        return bundled_credit_gate(cycle_day, balance)
+
+    async def guild_media_gate(self) -> bool:
+        """True while the bundled credit balance sits under the paced floor of the
+        cycle rest. A guild hides the tools that carry the credit flag while this reads true."""
+        return await self.bundled_credit_low()
+
+    async def decide_session_model(self, state_text: str) -> str | None:
+        """The chat preset the decision model of the active provider picks for a new
+           conversation (the Venice Jev router, POST /decisions).
+           None when the provider ships no routing, the key is unset, or the bundled
+           credits sit under the paced floor of the cycle rest: the configured model answers,
+           so a tight balance never lands the conversation on a costlier preset."""
+        provider = provider_for(await self._base_url())
+        decider = getattr(provider, "decide_model", None)
+        if decider is None:
+            return None
+        api_key = await self.config.api_key()
+        if not api_key:
+            return None
+        if await self.bundled_credit_low():
+            return None
+        if self.session is None or self.session.closed:
+            self.session = self._new_session()
+        return await decider(self.session, api_key, state_text)
 
     async def _usage_rows(self):
         """The provider usage rows, cached. None when the check fails: never block on a failure."""
@@ -836,6 +896,14 @@ class Eliza(commands.Cog):
             # An empty poke still reaches the agent: history and memory give it meaning.
             content = "(poke: the user sent an empty message)"
         guild_id = message.guild.id if message.guild else None
+        # The arrival line of the log: the message and its conversation.
+        # The decision line of a fresh session names the same label.
+        label = (
+            session_label("channel", message.channel.id, channel=message.channel)
+            if guild_id is not None
+            else session_label("user", message.author.id, user_name=message.author.display_name)
+        )
+        log.info("on_message -> %s in %s: %s", message.author.display_name, label, _log_snippet(content))
         is_owner = await self.bot.is_owner(message.author)
         incoming = IncomingMessage(
             channel_id=message.channel.id
@@ -1401,17 +1469,10 @@ class Eliza(commands.Cog):
         for session_id, session in recent_first:
             if session.scope == "channel":
                 channel = await self._get_channel(session_id)
-                if channel is not None and channel.guild is not None:
-                    label = f"#{channel.name} — {channel.guild.name}"
-                else:
-                    label = f"channel {session_id}"
+                label = session_label(session.scope, session_id, channel=channel)
                 scope = "channel"
             else:
-                user = self.bot.get_user(session_id)
-                if user is None:
-                    with contextlib.suppress(discord.NotFound, discord.Forbidden, discord.HTTPException):
-                        user = await self.bot.fetch_user(session_id)
-                label = f"DM — {user.display_name}" if user is not None else f"DM — user {session_id}"
+                label = session_label(session.scope, session_id, user_name=await self._user_name(session_id))
                 scope = "user"
             idle = session.idle()
             state = "active" if idle < cache_ttl else f"idle {int(idle // 60)} min"

@@ -7,6 +7,8 @@ from datetime import timedelta
 
 import discord
 
+from .history import session_log_label
+
 log = logging.getLogger("red.agenteliza")
 
 # The view phase of a poll: idle this long and the vote converts to a
@@ -70,6 +72,9 @@ class PollManager:
         # Async callable (session_id) returning the ids of the active users
         # of the conversation, for the majority rule of a guild poll.
         self.participants_getter = None
+        # Async callable (session_id) returning the readable name of a
+        # session for the log lines. Wired by the cog.
+        self.label_getter = None
         self.active: dict = {}
 
     def _counts(self, state: dict) -> list:
@@ -243,12 +248,12 @@ class PollManager:
             # A completion without votes stays silent by design.
             return
         if self.on_event is None:
-            log.warning("The poll trigger of session %s was skipped: no callback.", session_id)
+            log.warning("The poll trigger of session %s was skipped: no callback.", await session_log_label(self.label_getter, session_id))
             return
         try:
             await self.on_event(session_id, state["channel"], text)
         except Exception:
-            log.exception("The poll agent trigger failed for session %s.", session_id)
+            log.exception("The poll agent trigger failed for session %s.", await session_log_label(self.label_getter, session_id))
 
     async def create(self, session_id: int, channel, question: str, answers: list, multiple: bool) -> str | None:
         """Post the view poll of a session. Return an error text, or None on success.
@@ -370,7 +375,7 @@ class PollManager:
         except Exception:
             # An unhandled failure here kills the conversion silently:
             # the task dies and the view never converts. Log it loud.
-            log.exception("The vote conversion failed for session %s.", session_id)
+            log.exception("The vote conversion failed for session %s.", await session_log_label(self.label_getter, session_id))
 
     async def _convert(self, session_id: int, state: dict) -> None:
         """End the view phase: a native poll in a guild, an expired view elsewhere."""
@@ -436,7 +441,7 @@ class PollManager:
             # notification still reaches the agent through the backfill.
             await self._fire(session_id, await self.status_text(session_id, require_votes=True), state)
         except Exception:
-            log.exception("The native poll expiry failed for session %s.", session_id)
+            log.exception("The native poll expiry failed for session %s.", await session_log_label(self.label_getter, session_id))
 
     async def native_vote(self, message_id: int, user_id: int, added: bool) -> None:
         """Track one native poll vote. At the majority, end the poll and wake the agent."""

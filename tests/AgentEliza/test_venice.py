@@ -1,8 +1,8 @@
-"""The Venice credit calendar: the cycle day and the guild song gate."""
+"""The Venice credit calendar: the cycle day and the credit gate."""
 
 from datetime import datetime, timezone
 
-from AgentEliza.providers.venice import next_refill, song_credit_gate
+from AgentEliza.providers.venice import bundled_credit_gate, next_refill
 
 
 def _moment(*args) -> datetime:
@@ -23,16 +23,16 @@ def test_next_refill_clamps_the_shorter_months() -> None:
     assert next_refill(31, _moment(2028, 2, 1)) == _moment(2028, 2, 29)
 
 
-def test_song_credit_gate_paces_the_cycle_rest() -> None:
+def test_bundled_credit_gate_paces_the_cycle_rest() -> None:
     # Half of the 31-day October cycle is left: the floor is 1.5 x 22500 x 0.5.
     half = _moment(2026, 10, 18, 12)
     floor = 1.5 * 22500 * 0.5
-    assert song_credit_gate(3, floor - 1, half) is True
-    assert song_credit_gate(3, floor, half) is False
+    assert bundled_credit_gate(3, floor - 1, half) is True
+    assert bundled_credit_gate(3, floor, half) is False
 
 
-def test_song_credit_gate_clamps_the_fraction_at_one_cycle() -> None:
+def test_bundled_credit_gate_clamps_the_fraction_at_one_cycle() -> None:
     # The midnight of the refill itself: the whole cycle lies ahead, the floor is 1.5 allowances.
     fresh = _moment(2026, 10, 3)
-    assert song_credit_gate(3, 1.5 * 22500 - 1, fresh) is True
-    assert song_credit_gate(3, 1.5 * 22500, fresh) is False
+    assert bundled_credit_gate(3, 1.5 * 22500 - 1, fresh) is True
+    assert bundled_credit_gate(3, 1.5 * 22500, fresh) is False

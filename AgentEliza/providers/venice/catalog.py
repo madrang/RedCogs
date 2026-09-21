@@ -8,7 +8,8 @@
 VENICE_LIMIT_NAMES = {"RPM": "requests/min", "RPD": "requests/day", "TPM": "tokens/min"}
 # The bundled credit plan: the monthly allowance — Venice keeps at most three months of allowance banked (300%), the rest is lost.
 # The rate-limits endpoint reports the live balance in data.balances.BUNDLED_CREDITS (USD, 100 credits a dollar).
-# The cycle day — the day of the month the cycle restarts — paces the guild song gate:
+# The cycle day — the day of the month the cycle restarts — paces the credit gate
+# (the guild media tools and the chat model routing):
 # it lives in Config (`eliza setcycleday`), never in this file.
 VENICE_CREDIT_ALLOWANCE = 22500
 # The augment endpoints are experimental and billed per request ($0.01 each).
@@ -228,12 +229,27 @@ VENICE_MUSIC_TIMEOUT = 900
 # The safety margin of the guild credit gate: the balance must cover the remaining
 # share of the cycle allowance with this much room to spare.
 VENICE_CREDIT_GATE_BUFFER = 1.5
+# The decision model of the chat routing: a fresh session asks it which chat
+# preset fits its opening message. Source: the live decision list
+# (GET /models?type=decision, read 2026-09-20), the only id it publishes.
+# The input price rides at $0.042 per 1M tokens, the answers stay free.
+JEV_MODEL_ID = "jev-latest"
 # The capabilities the agent can ask of the environment tool. One settled vocabulary: the same words in the schema enum, the catalog traits, and the tool answers, in the language a user types — no spec terms.
 # The coding trait mirrors the optimizedForCode flag of the live model list. The roleplay and storytelling traits ride the Aion pair.
-# The short answers and long answers traits mark the size pairs: the lite and mini presets answer briefly, the regular and pro presets at length.
+# The concise answers and thorough answers traits mark the size pairs: the lite and mini presets answer concisely, the regular and pro presets thoroughly.
+# The reasoning trait marks a model that solves hard problems far above its class. The writing trait marks a model whose prose stands close to the leaders.
 VENICE_CHAT_CAPABILITIES = (
-    "vision", "nsfw", "long context", "coding"
-  , "roleplay", "storytelling", "short answers", "long answers"
+    "vision", "nsfw", "long context", "coding", "reasoning", "writing"
+  , "roleplay", "storytelling", "concise answers", "thorough answers"
+)
+# The fixed tool list of the presets whose models overuse the wider tool
+# surface (the Qwen pair and Gemma): the choice poll, the environment
+# switch, and the media endpoints whose results stay small. The MCP servers
+# of the Config and every other harness or provider tool stay off these
+# presets.
+VENICE_FIXED_TOOLS = (
+    "propose_choices", "configure_environment"
+  , "generate_image", "edit_image", "remove_background", "generate_song"
 )
 # Chat presets: a short display name for the agent and the user, the model id behind it, an optional NSFW variant id for conversations behind the 18+ gate, the capability names the preset provides, and the cost of the preset.
 # The variant carries the same capabilities as the normal id: a model whose capabilities differ joins the catalog under its own preset.
@@ -241,34 +257,36 @@ VENICE_CHAT_CAPABILITIES = (
 # The scale anchors DeepSeek Lite at 0 and the priciest catalog model at 1. A negative cost marks a preset cheaper than the default.
 # The catalog order is preference order: the first preset that satisfies a request wins. The short names are the only model handle the agent ever sees.
 # An entry may carry disabled True: the environment tool and the overload fallback skip it, so the agent cannot reach it, while the user commands (setmodel, the providers menu) keep it.
+# An entry may carry tool_filter, the names of the only tools its models may carry: the engine drops every other tool, the MCP set included.
+# The comment on each entry names the release date of its model ids (the created field of the live list).
 VENICE_CHAT_PRESETS = {
     "DeepSeek Lite": {
         # No coding trait (the operator's call): a coding request upgrades to DeepSeek Pro, the next preset that carries it.
-        "normal": "deepseek-v4-flash-0731"
+        "normal": "deepseek-v4-flash-0731"  # released Jul 31, 2026
         # "normal": "deepseek-v4-1-flash" # Sep 9, 2026 - cost:
-      , "traits": ["long context", "short answers"]
+      , "traits": ["long context", "concise answers"]
       , "cost": 0.0
     }
   , "DeepSeek Pro": {
-        "normal": "deepseek-v4-pro"
+        "normal": "deepseek-v4-pro"  # released Apr 24, 2026
         # "normal": "deepseek-v4-pro-0813" # Aug 13, 2026 - cost:
-      , "traits": ["long context", "coding", "long answers"]
+      , "traits": ["long context", "coding", "thorough answers", "writing"]
       , "cost": 0.33
     }
 
     # Google
   , "Gemma": {
-        # Disabled for the agent: the model accepts at most 20 tool definitions, the harness offers more on every reply.
-        "normal": "google-gemma-4-31b-it"
-      , "traits": ["vision"]
+        # The fixed tool list stays under the model cap of 20 tool definitions.
+        "normal": "google-gemma-4-31b-it"  # released Apr 3, 2026
+      , "traits": ["vision", "reasoning", "nsfw"]
       , "cost": -0.01
-      , "nsfw": "gemma-4-uncensored"
-      , "disabled": True
+      , "nsfw": "gemma-4-uncensored"  # released Apr 13, 2026
+      , "tool_filter": VENICE_FIXED_TOOLS
     }
     , "Gemini": {
         # Disabled, untested.
-        "normal": "gemini-3-8-flash"
-      , "traits": ["vision"]
+        "normal": "gemini-3-8-flash"  # released Sep 2, 2026
+      , "traits": ["vision", "coding", "long context", "concise answers"]
       , "cost": 0.22
       , "disabled": True
     }
@@ -277,14 +295,14 @@ VENICE_CHAT_PRESETS = {
   , "Llama Lite": {
         # Disabled, untested - 128K Ctx.
         "normal": "llama-3.2-3b"  # released Oct 3, 2024
-      , "traits": ["long context", "short answers"]
+      , "traits": ["concise answers"]
       , "cost": 0.0
       , "disabled": True
     }
   , "Llama": {
         # Disabled, untested - 128K Ctx.
-        "normal": "llama-3.3-70b"  # released Feb 19, 2026
-      , "traits": ["long context", "coding", "long answers"]
+        "normal": "llama-3.3-70b"  # released Apr 6, 2025
+      , "traits": ["thorough answers"]
       , "cost": 0.14
       , "disabled": True
     }
@@ -293,66 +311,69 @@ VENICE_CHAT_PRESETS = {
   , "GLM Lite": {
         # Disabled for the agent: Low quality output.
         # The negative-cost preset stays a manual choice of the operator.
-        "normal": "zai-org-glm-4.7-flash"
-      , "traits": ["short answers"]
+        "normal": "zai-org-glm-4.7-flash"  # released Jan 29, 2026
+      , "traits": ["concise answers"]
       , "cost": -0.02
-      , "nsfw": "olafangensan-glm-4.7-flash-heretic"
+      , "nsfw": "olafangensan-glm-4.7-flash-heretic"  # released Feb 4, 2026
       , "disabled": True
     }
   , "GLM Vision": {
-        "normal": "z-ai-glm-5-3-flash"
+        "normal": "z-ai-glm-5-3-flash"  # released Aug 21, 2026
       , "traits": ["long context", "vision", "coding"]
       , "cost": 0.0
     }
   , "GLM 1M": {
-        "normal": "z-ai-glm-5-3"
-      , "traits": ["long context", "coding", "long answers"]
+        "normal": "z-ai-glm-5-3"  # released Aug 18, 2026
+      , "traits": ["long context", "coding", "thorough answers"]
       , "cost": 0.39
     }
 
     # Thinking Machines
   , "Inkling": {
-        "normal": "inkling"
-      , "traits": ["vision", "coding"]
+        "normal": "inkling"  # released Jul 16, 2026
+      , "traits": ["vision", "concise answers"]
       , "cost": 0.29
     }
 
     # MoonshotAI
   , "Kimi": {
-        "normal": "kimi-k3"
-      , "traits": ["long context", "vision", "coding", "long answers"]
+        "normal": "kimi-k3"  # released Jul 16, 2026
+      , "traits": ["long context", "vision", "coding", "thorough answers", "writing"]
       , "cost": 1.0
     }
 
     # Alibaba
   , "Qwen Lite": {
         # No coding trait (the operator's call): a coding request upgrades to Qwen, the next preset that carries it.
-        "normal": "qwen-3-8-27b" # 262K Ctx
-      , "traits": ["vision", "nsfw", "short answers"]
+        "normal": "qwen-3-8-27b"  # 262K Ctx, released Aug 17, 2026
+      , "traits": ["vision", "nsfw", "reasoning", "concise answers"]
       , "cost": 0.10
+      , "tool_filter": VENICE_FIXED_TOOLS
     }
   , "Qwen": {
-        "normal": "qwen-3-8-2-4t-a95b" # 262K Ctx
-      , "traits": ["coding", "nsfw", "long answers"]
+        "normal": "qwen-3-8-2-4t-a95b"  # 262K Ctx, released Aug 12, 2026
+      , "traits": ["coding", "nsfw", "thorough answers"]
       , "cost": 0.56
+      , "tool_filter": VENICE_FIXED_TOOLS
     }
 
   , "Aion Mini": {
         # Model based on DeepSeek
-        "normal": "aion-labs-aion-3-0-mini"
-      , "traits": ["nsfw", "roleplay", "storytelling", "short answers"]
+        "normal": "aion-labs-aion-3-0-mini"  # released Jul 8, 2026
+      , "traits": ["nsfw", "roleplay", "storytelling", "concise answers"]
       , "cost": 0.16
     }
   , "Aion": {
         # Model based on GLM-5.1
-        "normal": "aion-labs-aion-3-0"
-      , "traits": ["nsfw", "roleplay", "storytelling", "long answers"]
+        "normal": "aion-labs-aion-3-0"  # released Jul 8, 2026
+      , "traits": ["nsfw", "roleplay", "storytelling", "thorough answers"]
       , "cost": 0.80
     }
 
   , "Venice Uncensored": {
-        "normal": "venice-uncensored-1-2"
-      , "traits": ["vision", "nsfw"]
+        "normal": "venice-uncensored-1-2"  # released Apr 1, 2026
+      , "traits": ["vision", "nsfw", "roleplay"]
       , "cost": 0.01
+      , "disabled": True # Spaz outs and repeat in loops the same 3 words. Broken!
     }
 }

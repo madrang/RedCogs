@@ -6,6 +6,7 @@ import time
 
 import discord
 
+from .history import session_log_label
 from .llm_chat import ChatError
 from .tools.files import post_file
 
@@ -72,6 +73,9 @@ class SongManager:
         # Async callable (session_id) returning the ids of the active users
         # of the conversation, for the majority rule of a guild vote.
         self.participants_getter = None
+        # Async callable (session_id) returning the readable name of a
+        # session for the log lines. Wired by the cog.
+        self.label_getter = None
         # Async callables of the provider audio flow, wired by the cog:
         # queuer(body) -> (model, queue_id), retriever(model, queue_id) -> (name, bytes).
         self.queuer = None
@@ -200,12 +204,12 @@ class SongManager:
         if not text:
             return
         if self.on_event is None:
-            log.warning("The song trigger of session %s was skipped: no callback.", session_id)
+            log.warning("The song trigger of session %s was skipped: no callback.", await session_log_label(self.label_getter, session_id))
             return
         try:
             await self.on_event(session_id, state["channel"], text)
         except Exception:
-            log.exception("The song agent trigger failed for session %s.", session_id)
+            log.exception("The song agent trigger failed for session %s.", await session_log_label(self.label_getter, session_id))
 
     def _restart_idle(self, session_id: int, state: dict) -> None:
         task = state["idle_task"]
@@ -221,7 +225,7 @@ class SongManager:
         try:
             await self._expire(session_id, state)
         except Exception:
-            log.exception("The song request expiry failed for session %s.", session_id)
+            log.exception("The song request expiry failed for session %s.", await session_log_label(self.label_getter, session_id))
 
     async def _expire(self, session_id: int, state: dict, note: str = "expired", wake: bool = True) -> None:
         """Close an open vote without a decision. No cost was billed.
@@ -365,7 +369,7 @@ class SongManager:
             await self._fail(session_id, state, str(e))
             return
         except Exception as e:
-            log.exception("The song queue call failed for session %s.", session_id)
+            log.exception("The song queue call failed for session %s.", await session_log_label(self.label_getter, session_id))
             await self._fail(session_id, state, f"{type(e).__name__}: {e}")
             return
         async with state["lock"]:
@@ -386,7 +390,7 @@ class SongManager:
             await self._fail(session_id, state, str(e))
             return
         except Exception as e:
-            log.exception("The song generation failed for session %s.", session_id)
+            log.exception("The song generation failed for session %s.", await session_log_label(self.label_getter, session_id))
             await self._fail(session_id, state, f"{type(e).__name__}: {e}")
             return
         if result.startswith("Error:"):

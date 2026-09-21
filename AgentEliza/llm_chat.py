@@ -12,7 +12,7 @@ from urllib.parse import urlparse
 import aiohttp
 import discord
 
-from .history import BACKFILL_MESSAGES, DEFAULT_CACHE_TTL, Session
+from .history import BACKFILL_MESSAGES, DEFAULT_CACHE_TTL, Session, session_label
 from .prompt import place_block, system_text
 from .stats import Scope
 from .tools import MESSAGE_TIME_FORMAT
@@ -362,6 +362,28 @@ class ChatEngine:
         # Only then is the system message rebuilt (prompt, memory, summary).
         # An agent memory update is already in the context as a tool call, so no reload between.
         expired = not session.messages or session.idle() >= cache_ttl
+        # The readable session name of the log lines, built like the sessions
+        # list. The channel read stays on the cache: a reply never waits on
+        # a fetch for a log line.
+        label = session_label(
+            session.scope, session_id
+            , channel=self.bot.get_channel(channel_id) if session.scope == "channel" else None
+            , user_name=message.user_name
+        )
+        if not session.messages and session.model_override is None:
+            # A fresh session asks the decision model of the provider for its
+            # first chat preset: the model reads the opening message and the
+            # traits of the chat presets. The pick rides the session override
+            # and dies with the session. A miss (no decision model, a low
+            # bundled credit balance, a failed call) keeps the configured
+            # model.
+            decider = getattr(self.api, "decide_session_model", None)
+            if decider is not None:
+                state = f"{message.speaker}: {message.content}{attachments_text(attachments)}"
+                picked = await decider(state)
+                if picked:
+                    session.model_override = picked
+                    log.info("The decision model picked the preset %s for session %s.", picked, label)
         # The conversation's model string, an override included: it decides
         # the compaction budget here and the request model below.
         request_model = session.model_override or await self.api.model_name()
@@ -423,7 +445,15 @@ class ChatEngine:
         # The stamp names the send time of the message: the snowflake or
         # the moment of the call.
         stamp = message.stamp
-        tools, routes, replaced = await self.mcp.gather_tools(preset, api_key)
+        # A preset may name the only tools its request model may carry (the
+        # Qwen pair and Gemma of Venice: the models overuse the wider tool
+        # surface). The filter keeps the named tools alone, and the MCP
+        # servers never join the reply: their gather is skipped whole.
+        allowed = preset.tool_filter(request_model) if preset is not None else None
+        if allowed is None:
+            tools, routes, replaced = await self.mcp.gather_tools(preset, api_key)
+        else:
+            tools, routes, replaced = [], {}, set()
         native_routes = {}
         media_counts = {}
         if preset is not None:
@@ -440,6 +470,9 @@ class ChatEngine:
             if guild_id is not None and hasattr(self.api, "guild_media_gate"):
                 guild_gate = await self.api.guild_media_gate()
             for entry in preset.native_tools():
+                if allowed is not None and entry["name"] not in allowed:
+                    # The filter keeps the fixed tool set alone.
+                    continue
                 if guild_id is None and entry.get("dm_owner_only") and not is_owner:
                     # A direct message of anyone but the owner never sees the tool.
                     continue
@@ -462,6 +495,10 @@ class ChatEngine:
         # A provider tool in the replaced set takes the place of the harness
         # default of the same name.
         tools = [tool for tool in self.harness_tools.tools() if tool["function"]["name"] not in replaced] + tools
+        if allowed is not None:
+            # The filter trims the harness defaults too: the request carries
+            # the fixed tool set alone.
+            tools = [tool for tool in tools if tool["function"]["name"] in allowed]
         async def channel_nsfw():
             """Whether the current channel sits behind the Discord 18+ gate,
             for the payload build and the native provider tools: the channel
@@ -765,7 +802,7 @@ class ChatEngine:
                 # stay invisible.
                 log.info(
                     "Reply for session %s: model %s, %d tool rounds, closing %s."
-                    , session_id, payload.get("model"), len(exchange)
+                    , label, payload.get("model"), len(exchange)
                     , "silent (the no-reply tag or an empty close)" if segment is None else "posted",
                 )
                 if segment is not None:
@@ -916,7 +953,7 @@ class ChatEngine:
             # stay invisible.
             log.info(
                 "Reply for session %s: model %s, %d tool rounds, closing %s."
-                , session_id, payload.get("model"), len(exchange)
+                , label, payload.get("model"), len(exchange)
                 , "silent (the no-reply tag or an empty close)" if segment is None else "posted",
             )
             if segment is not None:

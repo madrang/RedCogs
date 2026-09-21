@@ -1,9 +1,10 @@
-"""The session registry and the per-session lock."""
+"""The session registry, the per-session lock, and the session label."""
 
 import asyncio
 import time
+from types import SimpleNamespace
 
-from AgentEliza.history import History, Session
+from AgentEliza.history import History, Session, session_label, session_log_label
 
 
 class _NoMemory:
@@ -74,3 +75,44 @@ async def test_one_session_locks_itself() -> None:
     await holder
     await waiter
     assert through == [True]
+
+
+class _NamedChannel:
+    """The channel stand-in of the label: a name and a guild."""
+
+    def __init__(self, name: str, guild_name: str):
+        self.name = name
+        self.guild = SimpleNamespace(name=guild_name)
+
+
+def test_session_label_names_a_guild_channel() -> None:
+    channel = _NamedChannel("general", "Test Server")
+    assert session_label("channel", 100, channel=channel) == "#general — Test Server"
+    # An unresolved channel falls back to the id.
+    assert session_label("channel", 100) == "channel 100"
+
+
+def test_session_label_names_a_direct_message_user() -> None:
+    assert session_label("user", 7, user_name="Madrang") == "DM — Madrang"
+    # A wake without a user name falls back to the id.
+    assert session_label("user", 7) == "DM — user 7"
+
+
+async def test_session_log_label_falls_back_to_the_id() -> None:
+    # Without the cog wiring, the id stands in.
+    assert await session_log_label(None, 7) == "7"
+
+    async def label_of(session_id):
+        return "#general — Test Server"
+
+    assert await session_log_label(label_of, 7) == "#general — Test Server"
+
+    async def empty(session_id):
+        return ""
+
+    async def broken(session_id):
+        raise RuntimeError("boom")
+
+    # An empty answer and a broken getter never break the log line.
+    assert await session_log_label(empty, 7) == "7"
+    assert await session_log_label(broken, 7) == "7"

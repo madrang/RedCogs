@@ -82,19 +82,25 @@ class FakeResponse:
 class FakeSession:
     """The aiohttp session stand-in: the answers come in call order.
 
-    An Exception entry raises from the get call itself, the way a
+    An Exception entry raises from the request call itself, the way a
     connection failure raises from the request context."""
 
     def __init__(self, *answers):
         self.answers = list(answers)
         self.calls: list[tuple[str, dict]] = []
 
-    def get(self, url, **kwargs):
+    def _next(self, url, kwargs):
         self.calls.append((url, kwargs))
         answer = self.answers.pop(0) if self.answers else FakeResponse(status=599)
         if isinstance(answer, Exception):
             raise answer
         return answer
+
+    def get(self, url, **kwargs):
+        return self._next(url, kwargs)
+
+    def post(self, url, **kwargs):
+        return self._next(url, kwargs)
 
 
 class FakeApi:
@@ -142,10 +148,11 @@ class FakePreset:
     cache_ttl = 300
     vision_models: set = set()
 
-    def __init__(self, native=(), context_lengths=None, fallback=None):
+    def __init__(self, native=(), context_lengths=None, fallback=None, tool_filter=None):
         self._native = list(native)
         self.context_lengths = dict(context_lengths or {})
         self.fallback = fallback
+        self._tool_filter = tool_filter
 
     def native_tools(self):
         return self._native
@@ -158,6 +165,9 @@ class FakePreset:
 
     def preset_fallback(self, model):
         return self.fallback
+
+    def tool_filter(self, model):
+        return self._tool_filter
 
     def extra_payload(self, session_id, model=None, nsfw=False):
         return {}

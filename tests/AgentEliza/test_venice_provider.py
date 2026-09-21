@@ -8,7 +8,10 @@ from aiohttp import ClientConnectionError
 
 import AgentEliza.providers.venice.audio as audio_flow
 from AgentEliza.llm_chat import ChatError
-from AgentEliza.providers.venice import VeniceApiProvider, _environment_tool
+from AgentEliza.providers.venice import (
+    VeniceApiProvider, VENICE_CHAT_PRESETS, VENICE_FIXED_TOOLS, _environment_tool
+  , model_decision_answer, model_decision_request,
+)
 from tests.AgentEliza.fakes import FakeResponse, FakeSession
 
 USAGE_ANSWER = {
@@ -128,7 +131,7 @@ def test_preset_fallback_steps_onto_a_smaller_window() -> None:
     # up to Qwen (262K), and the switch condenses the session at the move.
     assert VeniceApiProvider().preset_fallback("z-ai-glm-5-3") == "Qwen"
     # The ceiling cycles to the cheapest enabled preset.
-    assert VeniceApiProvider().preset_fallback("kimi-k3") == "DeepSeek Lite"
+    assert VeniceApiProvider().preset_fallback("kimi-k3") == "Gemma"
 
 
 async def test_the_environment_tool_names_a_failed_switch() -> None:
@@ -396,3 +399,84 @@ async def test_the_retrieve_polls_stop_at_the_time_budget(monkeypatch) -> None:
     with pytest.raises(ChatError) as caught:
         await audio_flow.retrieve_song(api_post, "m", "q1")
     assert "time budget" in str(caught.value)
+
+
+def test_model_decision_request_builds_the_choice_question() -> None:
+    body = model_decision_request("Madrang: fix this python bug")
+    assert body["model"] == "jev-latest"
+    assert body["state"] == "Madrang: fix this python bug"
+    question = body["questions"]["model"]
+    assert question["type"] == "choice"
+    criteria = question["criteria"]
+    # Every enabled preset is an option, the disabled presets stay out.
+    enabled = {name for name, preset in VENICE_CHAT_PRESETS.items() if not preset.get("disabled")}
+    assert {name for name in criteria if name != "other"} == enabled
+    # The option other carries no rubric.
+    assert criteria["other"] is None
+    # A rubric names the traits and the operating cost of the preset.
+    assert "long context" in criteria["DeepSeek Pro"]
+    assert "coding" in criteria["DeepSeek Pro"]
+    assert "0.33" in criteria["DeepSeek Pro"]
+
+
+def test_model_decision_answer_maps_the_choice_to_the_preset() -> None:
+    data = {"model": "jev-latest", "answers": {"model": {
+        "type": "choice", "choice": "DeepSeek Pro", "probabilities": {}, "confidence": 0.9
+    }}}
+    assert model_decision_answer(data) == "DeepSeek Pro"
+
+
+def test_model_decision_answer_refuses_the_unmapped_choices() -> None:
+    # The option other answers a conversation that needs no special capability.
+    other = {"answers": {"model": {"type": "choice", "choice": "other"}}}
+    assert model_decision_answer(other) is None
+    # An unknown name and a disabled preset never map.
+    assert model_decision_answer({"answers": {"model": {"choice": "GLM Lite"}}}) is None
+    assert model_decision_answer({"answers": {"model": {"choice": "no such preset"}}}) is None
+    # Broken shapes degrade to no pick.
+    assert model_decision_answer({}) is None
+    assert model_decision_answer({"answers": {}}) is None
+    assert model_decision_answer({"answers": {"model": {"choice": 7}}}) is None
+
+
+async def test_decide_model_posts_and_parses_the_choice() -> None:
+    provider = VeniceApiProvider()
+    answer = {"answers": {"model": {"type": "choice", "choice": "GLM Vision", "probabilities": {}, "confidence": 0.8}}}
+    session = FakeSession(FakeResponse(200, answer))
+    assert await provider.decide_model(session, "test-key", "Madrang: hi") == "GLM Vision"
+    url, kwargs = session.calls[0]
+    assert url == "https://api.venice.ai/api/v1/decisions"
+    assert kwargs["headers"]["Authorization"] == "Bearer test-key"
+    assert kwargs["json"]["model"] == "jev-latest"
+    assert kwargs["json"]["state"] == "Madrang: hi"
+
+
+async def test_decide_model_answers_none_on_failures() -> None:
+    provider = VeniceApiProvider()
+    assert await provider.decide_model(FakeSession(FakeResponse(500, {"error": "beta"})), "k", "hi") is None
+    assert await provider.decide_model(FakeSession(FakeResponse(200, ValueError("not json"))), "k", "hi") is None
+    assert await provider.decide_model(FakeSession(ClientConnectionError("boom")), "k", "hi") is None
+    # A choice that names no enabled preset keeps the configured model too.
+    other = FakeSession(FakeResponse(200, {"answers": {"model": {"choice": "other"}}}))
+    assert await provider.decide_model(other, "k", "hi") is None
+
+
+def test_tool_filter_names_the_fixed_tool_presets() -> None:
+    provider = VeniceApiProvider()
+    fixed = frozenset(VENICE_FIXED_TOOLS)
+    # A preset name, its raw id, and its NSFW variant all resolve the filter.
+    assert provider.tool_filter("Qwen Lite") == fixed
+    assert provider.tool_filter("qwen") == fixed
+    assert provider.tool_filter("qwen-3-8-27b") == fixed
+    assert provider.tool_filter("gemma-4-uncensored") == fixed
+    # The rest of the catalog takes the full tool set.
+    assert provider.tool_filter("DeepSeek Lite") is None
+    assert provider.tool_filter("kimi-k3") is None
+    assert provider.tool_filter("no-such-model") is None
+
+
+def test_the_fixed_tool_list_holds_the_small_answer_tools() -> None:
+    assert set(VENICE_FIXED_TOOLS) == {
+        "propose_choices", "configure_environment"
+      , "generate_image", "edit_image", "remove_background", "generate_song"
+    }
