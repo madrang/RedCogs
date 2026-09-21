@@ -5,13 +5,12 @@
 #  , and the chat model routing.
 
 import asyncio
-import json
 import logging
 
 import aiohttp
 
 from ..base import Provider, analyze_image_tool
-from .catalog import VENICE_CREDIT_ALLOWANCE, VENICE_CHAT_PRESETS, VENICE_LIMIT_NAMES, VENICE_ROUTING_TRAIT_AT
+from .catalog import JEV_MODEL_ID, VENICE_CREDIT_ALLOWANCE, VENICE_CHAT_PRESETS, VENICE_LIMIT_NAMES, VENICE_ROUTING_TRAIT_AT
 from .decisions import model_decision_request, preset_for_traits, trait_strengths
 from .tools import (
     _background_remove_tool
@@ -285,14 +284,18 @@ class VeniceApiProvider(Provider):
         except (aiohttp.ClientError, asyncio.TimeoutError) as e:
             log.warning("The decision call failed: %s: %s", type(e).__name__, e)
             return None
-        # The raw answer rides the log: the probability of every capability,
-        # for the debugging of the routing.
-        log.info("The decision endpoint answered: %s", json.dumps(data, ensure_ascii=False)[:1500])
         strengths = trait_strengths(data)
+        # The answer rides the log as name: value pairs: the judgment fields
+        # of the protocol stay out, the debugging reads the strengths alone.
+        answered_model = data.get("model") if isinstance(data, dict) else None
+        pairs = ", ".join(f"{trait}: {strength:.2f}" for trait, strength in strengths.items())
+        log.info(
+            "The decision endpoint answered (%s): %s."
+            , answered_model or JEV_MODEL_ID, pairs or "no readable judgment",
+        )
         if not strengths:
             # No judgment read: a drifted or broken answer, not a conversation
             # clear of every capability.
-            log.warning("The decision answer named no readable judgment.")
             return None
         needed = sorted(trait for trait, strength in strengths.items() if strength >= VENICE_ROUTING_TRAIT_AT)
         log.info("The decision traits at or above %.2f: %s.", VENICE_ROUTING_TRAIT_AT, ", ".join(needed) or "none")
