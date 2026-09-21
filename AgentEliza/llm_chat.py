@@ -449,8 +449,12 @@ class ChatEngine:
         # Qwen pair and Gemma of Venice: the models overuse the wider tool
         # surface). The filter keeps the named tools alone, and the MCP
         # servers never join the reply: their gather is skipped whole.
+        # A preset may also bar the MCP servers alone (Gemini of Venice: its
+        # backend rejects the schema keywords of the user servers), the
+        # harness and provider tools stay.
         allowed = preset.tool_filter(request_model) if preset is not None else None
-        if allowed is None:
+        mcp_allowed = preset is None or preset.mcp_tools_allowed(request_model)
+        if allowed is None and mcp_allowed:
             tools, routes, replaced = await self.mcp.gather_tools(preset, api_key)
         else:
             tools, routes, replaced = [], {}, set()

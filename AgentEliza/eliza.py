@@ -24,7 +24,7 @@ from .music import SongManager
 from .pages import paginate
 from .polls import PollManager
 from .providers import DEFAULT_PROVIDER, PROVIDERS, provider_for, provider_named
-from .providers.venice import bundled_credit_gate, next_refill
+from .providers.venice import bundled_credit_gate, next_refill, routing_tier
 from .providers.venice.audio import queue_song, retrieve_song
 from .stats import ScopeStats, month_key
 from .tools import HarnessOptions, HarnessTools, MESSAGE_TIME_FORMAT
@@ -53,15 +53,18 @@ FILTER_TIMEOUT = 1800
 LONG_REPLY_MAX_PAGES = 4
 # The snippet cap of the on_message log line: longer messages clip.
 MESSAGE_LOG_MAX_CHARS = 200
+# The clip cap of each part of an error notice: the exception text and the raw
+# provider answer together stay under the Discord content cap of 4000.
+ERROR_NOTICE_MAX_CHARS = 1500
 
 
-def _log_snippet(text: str) -> str:
-    """The message snippet of a log line: the full text, or its clipped start
-    with the dropped count when it runs long."""
-    if len(text) <= MESSAGE_LOG_MAX_CHARS:
+def _log_snippet(text: str, limit: int = MESSAGE_LOG_MAX_CHARS) -> str:
+    """The snippet of a log line or a notice: the full text, or its clipped
+    start with the dropped count when it runs long."""
+    if len(text) <= limit:
         return text
-    dropped = len(text) - MESSAGE_LOG_MAX_CHARS
-    return f"{text[:MESSAGE_LOG_MAX_CHARS]}... [{dropped} characters dropped]"
+    dropped = len(text) - limit
+    return f"{text[:limit]}... [{dropped} characters dropped]"
 
 
 def _error_message(data) -> str | None:
@@ -347,8 +350,9 @@ class Eliza(commands.Cog):
 
     async def bundled_credit_low(self) -> bool:
         """True while the bundled credit balance sits under the paced floor of the
-        cycle rest (the remaining share of the allowance with the safety margin).
-        The guild media tools hide and the chat model routing skips while this reads true."""
+        cycle rest (the remaining share of the allowance with the safety margin,
+        never under half the allowance). A guild hides the tools that carry the
+        credit flag while this reads true."""
         balance = await self.bundled_credits()
         if balance is None:
             return False
@@ -365,9 +369,11 @@ class Eliza(commands.Cog):
     async def decide_session_model(self, state_text: str) -> str | None:
         """The chat preset the decision model of the active provider picks for a new
            conversation (the Venice Jev router, POST /decisions).
-           None when the provider ships no routing, the key is unset, or the bundled
-           credits sit under the paced floor of the cycle rest: the configured model answers,
-           so a tight balance never lands the conversation on a costlier preset."""
+           None when the provider ships no routing, the key is unset, or a model
+           is fixed through `setmodel`: the fixed model answers every session.
+           The credit ratio tiers the options: the full set at the gate buffer,
+           the lite tier above the routing floor, and no routing under it, so the
+           default lite preset of the catalog answers a tight balance."""
         provider = provider_for(await self._base_url())
         decider = getattr(provider, "decide_model", None)
         if decider is None:
@@ -375,11 +381,21 @@ class Eliza(commands.Cog):
         api_key = await self.config.api_key()
         if not api_key:
             return None
-        if await self.bundled_credit_low():
+        if await self.config.model_name():
+            # A model fixed by the operator answers every session. The
+            # environment tool still switches a conversation on its own.
             return None
+        lite = False
+        cycle_day = await self.config.credit_cycle_day()
+        balance = await self.bundled_credits()
+        if cycle_day and balance is not None:
+            tier = routing_tier(cycle_day, balance)
+            if tier == "none":
+                return None
+            lite = tier == "lite"
         if self.session is None or self.session.closed:
             self.session = self._new_session()
-        return await decider(self.session, api_key, state_text)
+        return await decider(self.session, api_key, state_text, lite)
 
     async def _usage_rows(self):
         """The provider usage rows, cached. None when the check fails: never block on a failure."""
@@ -631,6 +647,13 @@ class Eliza(commands.Cog):
             )
         vision_model = getattr(preset, "vision_model", None)
         model_display = (preset.preset_name(await self.model_name()) or await self.model_name()) if preset is not None else await self.model_name()
+        fixed = bool(await self.config.model_name())
+        router = getattr(preset, "decide_model", None) is not None if preset is not None else False
+        mode = (
+            "fixed" if fixed
+            else "auto: the decision routing picks each conversation" if router
+            else "auto: the provider default"
+        )
         if reading is not None and reading.model_override:
             override = (preset.preset_name(reading.model_override) or reading.model_override) if preset is not None else reading.model_override
             model_display = f"{model_display} (this conversation: {override})"
@@ -640,7 +663,7 @@ class Eliza(commands.Cog):
             , ""
             , "## Provider"
             , f"- Provider: {preset.name if preset is not None else 'custom'} — {await self._base_url()}"
-            , f"- Model: {model_display}"
+            , f"- Model: {model_display} ({mode})"
             , context_line
         ]
         if vision_model:
@@ -947,11 +970,12 @@ class Eliza(commands.Cog):
                 )
             except ChatError as e:
                 # The API error reaches the user as a notice, the raw provider answer in a code block.
+                # Both parts clip: a giant error body never kills the notice itself.
                 raw = e.raw
                 if isinstance(raw, (dict, list)):
                     raw = json.dumps(raw, ensure_ascii=False)
-                detail = f"\n```\n{str(raw)[:1500]}\n```" if raw else ""
-                notice = f"⚠️ {e}{detail}"
+                detail = f"\n```\n{_log_snippet(str(raw), ERROR_NOTICE_MAX_CHARS)}\n```" if raw else ""
+                notice = f"⚠️ {_log_snippet(str(e), ERROR_NOTICE_MAX_CHARS)}{detail}"
                 if e.kind == "content_filter" and not is_owner:
                     now = time.monotonic()
                     self._filter_timeouts = {uid: expiry for uid, expiry in self._filter_timeouts.items() if expiry > now}
@@ -1173,12 +1197,12 @@ class Eliza(commands.Cog):
         preset = provider_named(target)
         if preset is not None:
             await self.config.base_url.set(preset.base_url)
-            # The default of the provider, a preset name where one exists:
-            # the request-time resolution maps it, gate-aware.
+            # The provider switch clears the model: the default of the new
+            # provider resolves per request, and the decision routing runs.
             default = preset.default_model()
-            await self.config.model_name.set(default)
+            await self.config.model_name.clear()
             await ctx.send(
-                f"Provider set to **{preset.name}**: `{preset.base_url}`, model `{preset.preset_name(default) or default}`. "
+                f"Provider set to **{preset.name}**: `{preset.base_url}`, model `{preset.preset_name(default) or default}` (the default, auto). "
                 f"Check it with the `eliza status` command."
             )
             return
@@ -1210,14 +1234,17 @@ class Eliza(commands.Cog):
     @eliza_group.command(name="setmodel")
     @commands.admin()
     async def eliza_setmodel(self, ctx: commands.Context, model_name: str) -> None:
-        """Set the model the agent uses. Known names come from the provider list, others are allowed. Use `clear` to reset."""
+        """Set the model the agent uses: every conversation answers on it, the decision routing stays off. Known names come from the provider list, others are allowed. Use `clear` to reset."""
         if model_name.lower() == "clear":
             await self.config.model_name.clear()
             # The default of the ACTIVE provider, not the global one.
             preset = await self.current_preset()
             default = preset.default_model() if preset is not None else DEFAULT_PROVIDER.models[0]
             display = preset.preset_name(default) or default if preset is not None else default
-            await ctx.send(f"The model has been reset to the default: `{display}`.")
+            await ctx.send(
+                f"The model has been reset to the default: `{display}`. "
+                "The decision routing is back on: a fresh conversation asks for its preset again."
+            )
             return
         preset = await self.current_preset()
         # A preset name of the provider stores as the name itself: the
@@ -1227,7 +1254,8 @@ class Eliza(commands.Cog):
             await self.config.model_name.set(model_name)
             variant = " It loads its 18+ variant in conversations behind the 18+ gate." if preset.request_model(model_name, nsfw=True) != preset.request_model(model_name) else ""
             await ctx.send(
-                f"The model has been set to the preset `{model_name}`.{variant} "
+                f"The model has been fixed to the preset `{model_name}`.{variant} "
+                "The decision routing stays off until `eliza setmodel clear`. "
                 "Check it with the `eliza status` command."
             )
             return
@@ -1235,11 +1263,15 @@ class Eliza(commands.Cog):
         if preset is not None and model_name not in preset.models:
             known = ", ".join(f"`{m}`" for m in preset.models)
             await ctx.send(
-                f"The model has been set to `{model_name}`. It is not in the known list for this provider: {known}. "
-                f"The API decides if it works."
+                f"The model has been fixed to `{model_name}`. It is not in the known list for this provider: {known}. "
+                f"The API decides if it works. The decision routing stays off until `eliza setmodel clear`."
             )
             return
-        await ctx.send(f"The model has been set to `{model_name}`. Check it with the `eliza status` command.")
+        await ctx.send(
+            f"The model has been fixed to `{model_name}`. "
+            "The decision routing stays off until `eliza setmodel clear`. "
+            "Check it with the `eliza status` command."
+        )
 
     @eliza_group.command(name="status")
     @commands.admin()

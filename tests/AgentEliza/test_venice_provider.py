@@ -9,7 +9,7 @@ from aiohttp import ClientConnectionError
 import AgentEliza.providers.venice.audio as audio_flow
 from AgentEliza.llm_chat import ChatError
 from AgentEliza.providers.venice import (
-    VeniceApiProvider, VENICE_CHAT_PRESETS, VENICE_FIXED_TOOLS, _environment_tool
+    VeniceApiProvider, VENICE_CHAT_PRESETS, VENICE_FIXED_TOOLS, VENICE_ROUTING_LITE_COST, _environment_tool
   , model_decision_answer, model_decision_request,
 )
 from tests.AgentEliza.fakes import FakeResponse, FakeSession
@@ -419,6 +419,20 @@ def test_model_decision_request_builds_the_choice_question() -> None:
     assert "0.33" in criteria["DeepSeek Pro"]
 
 
+def test_model_decision_request_lite_keeps_the_cheap_options() -> None:
+    criteria = model_decision_request("Madrang: hi", lite=True)["questions"]["model"]["criteria"]
+    # The lite tier holds the enabled presets at the lite cost ceiling.
+    lite = {
+        name for name, preset in VENICE_CHAT_PRESETS.items()
+        if not preset.get("disabled") and preset.get("cost", 0.0) <= VENICE_ROUTING_LITE_COST
+    }
+    assert {name for name in criteria if name != "other"} == lite
+    # The pricier presets stay out, the null option stays.
+    assert "Kimi" not in criteria
+    assert "DeepSeek Pro" not in criteria
+    assert criteria["other"] is None
+
+
 def test_model_decision_answer_maps_the_choice_to_the_preset() -> None:
     data = {"model": "jev-latest", "answers": {"model": {
         "type": "choice", "choice": "DeepSeek Pro", "probabilities": {}, "confidence": 0.9
@@ -449,6 +463,12 @@ async def test_decide_model_posts_and_parses_the_choice() -> None:
     assert kwargs["headers"]["Authorization"] == "Bearer test-key"
     assert kwargs["json"]["model"] == "jev-latest"
     assert kwargs["json"]["state"] == "Madrang: hi"
+    # The lite flag rides the call: the criteria keep the cheap options alone.
+    lite = FakeSession(FakeResponse(200, answer))
+    assert await provider.decide_model(lite, "test-key", "Madrang: hi", lite=True) == "GLM Vision"
+    criteria = lite.calls[0][1]["json"]["questions"]["model"]["criteria"]
+    assert "Kimi" not in criteria
+    assert "DeepSeek Lite" in criteria
 
 
 async def test_decide_model_answers_none_on_failures() -> None:
@@ -480,3 +500,14 @@ def test_the_fixed_tool_list_holds_the_small_answer_tools() -> None:
         "propose_choices", "configure_environment"
       , "generate_image", "edit_image", "remove_background", "generate_song"
     }
+
+
+def test_mcp_tools_allowed_bars_the_gemini_preset() -> None:
+    provider = VeniceApiProvider()
+    # The preset name and the model id of Gemini bar the MCP tools.
+    assert provider.mcp_tools_allowed("Gemini") is False
+    assert provider.mcp_tools_allowed("gemini-3-8-flash") is False
+    # Every other model takes the MCP tools.
+    assert provider.mcp_tools_allowed("DeepSeek Lite") is True
+    assert provider.mcp_tools_allowed("gemma-4-uncensored") is True
+    assert provider.mcp_tools_allowed("no-such-model") is True

@@ -157,6 +157,16 @@ class VeniceApiProvider(Provider):
                 return frozenset(allowed) if allowed else None
         return None
 
+    def mcp_tools_allowed(self, model: str) -> bool:
+        """Whether the request model may carry the tools of the configured MCP servers.
+           A preset bars them through the mcp key: the Gemini backend rejects the schema
+           keywords of the user servers, so every harness and provider tool stays."""
+        for catalog_name, preset in VENICE_CHAT_PRESETS.items():
+            if (catalog_name.lower() == str(model).strip().lower()
+                    or model in (preset.get("normal"), preset.get("nsfw"))):
+                return preset.get("mcp", True)
+        return True
+
     def resolve_model(self, name: str) -> str:
         """Map a short preset name (any casing) to its model id, pass anything else through unchanged."""
         return self.request_model(name, nsfw=False)
@@ -248,12 +258,13 @@ class VeniceApiProvider(Provider):
             return None
         return float(usd) * 100
 
-    async def decide_model(self, session: aiohttp.ClientSession, api_key: str, state_text: str) -> str | None:
+    async def decide_model(self, session: aiohttp.ClientSession, api_key: str, state_text: str, lite: bool = False) -> str | None:
         """The chat preset the decision model picks for a new conversation (POST /decisions,
            one choice question over the enabled presets of the catalog).
+           lite keeps the options at the lite cost ceiling, for a tight credit balance.
            None when the call fails or the answer names no enabled preset: the caller
            keeps the configured model."""
-        body = model_decision_request(state_text)
+        body = model_decision_request(state_text, lite)
         try:
             async with session.post(
                 f"{self.base_url}/decisions"

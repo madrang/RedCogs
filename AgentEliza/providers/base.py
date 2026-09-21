@@ -164,6 +164,12 @@ class Provider:
         the model takes the full set."""
         return None
 
+    def mcp_tools_allowed(self, model: str) -> bool:
+        """Whether the request model may carry the tools of the configured MCP
+        servers. False bars the MCP tools alone: the harness and provider
+        tools stay."""
+        return True
+
     def resolve_model(self, name: str) -> str:
         """Map a display name to its model id, pass anything else through."""
         return name

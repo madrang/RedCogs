@@ -143,16 +143,17 @@ class FakeApi:
 
 
 class FakePreset:
-    """The provider preset stand-in: cache facts and a native tool set."""
+    """The provider stand-in of the engine: the preset surface."""
 
     cache_ttl = 300
     vision_models: set = set()
 
-    def __init__(self, native=(), context_lengths=None, fallback=None, tool_filter=None):
+    def __init__(self, native=(), context_lengths=None, fallback=None, tool_filter=None, mcp=True):
         self._native = list(native)
         self.context_lengths = dict(context_lengths or {})
         self.fallback = fallback
         self._tool_filter = tool_filter
+        self._mcp = mcp
 
     def native_tools(self):
         return self._native
@@ -168,6 +169,9 @@ class FakePreset:
 
     def tool_filter(self, model):
         return self._tool_filter
+
+    def mcp_tools_allowed(self, model):
+        return self._mcp
 
     def extra_payload(self, session_id, model=None, nsfw=False):
         return {}
@@ -209,10 +213,13 @@ class FakeHarnessTools:
 
 
 class FakeMCP:
-    """The MCP manager stand-in: no servers, no tools."""
+    """The MCP manager stand-in: no servers, and the tools a test names."""
+
+    def __init__(self, tools=None):
+        self._tools = list(tools or [])
 
     async def gather_tools(self, preset, api_key):
-        return [], {}, set()
+        return list(self._tools), {}, set()
 
     async def run_tool(self, name, arguments, routes):
         return f"Error: the tool {name} is unknown."

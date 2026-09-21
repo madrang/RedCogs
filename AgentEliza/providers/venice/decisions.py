@@ -2,18 +2,21 @@
 # The endpoint reads a state and typed questions, and answers structured
 # judgments, not generated text.
 
-from .catalog import JEV_MODEL_ID, VENICE_CHAT_PRESETS
+from .catalog import JEV_MODEL_ID, VENICE_CHAT_PRESETS, VENICE_ROUTING_LITE_COST
 
 
-def model_decision_request(state_text: str) -> dict:
+def model_decision_request(state_text: str, lite: bool = False) -> dict:
     """
        The decision body of a new conversation: one choice question over the enabled chat presets.
        Each option rubric names the traits and the operating cost of the preset.
        The option other carries no rubric, it answers a conversation that needs no special capability.
+       lite keeps the options at the lite cost ceiling of the catalog, for a tight credit balance.
     """
     criteria = {}
     for name, preset in VENICE_CHAT_PRESETS.items():
         if preset.get("disabled"):
+            continue
+        if lite and preset.get("cost", 0.0) > VENICE_ROUTING_LITE_COST:
             continue
         traits = ", ".join(preset.get("traits") or ()) or "general conversation"
         criteria[name] = f"{traits}. Operating cost {preset.get('cost', 0.0):.2f} of the priciest catalog model."

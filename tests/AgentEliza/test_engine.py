@@ -16,14 +16,14 @@ from tests.AgentEliza.fakes import (
 )
 
 
-def build_engine(api: FakeApi, *, harness_tools=None, stats=None, config=None, compactor=None, bot=None) -> ChatEngine:
+def build_engine(api: FakeApi, *, harness_tools=None, stats=None, config=None, compactor=None, bot=None, mcp=None) -> ChatEngine:
     memory = FakeMemory()
     return ChatEngine(
         bot or FakeBot()
         , config or FakeConfig({"api_key": "test-key"})
         , History(memory)
         , memory
-        , FakeMCP()
+        , mcp or FakeMCP()
         , harness_tools or FakeHarnessTools()
         , stats or FakeScopeStats()
         , compactor or FakeCompactor()
@@ -624,3 +624,28 @@ async def test_a_filtered_preset_carries_only_the_fixed_tools() -> None:
     names = {tool["function"]["name"] for tool in api.requests[0]["tools"]}
     # The harness defaults and the provider tools outside the filter stay off.
     assert names == {"generate_image", "propose_choices"}
+
+
+async def test_a_preset_that_bars_mcp_keeps_the_other_tools() -> None:
+    async def noop(arguments, engine):
+        return "ok"
+
+    native = [
+        {"name": "generate_image", "description": "d", "parameters": {}, "handler": noop}
+    ]
+    preset = FakePreset(native, mcp=False)
+    api = FakeApi([close("Hi.")], preset=preset)
+    mcp_tool = {"type": "function", "function": {"name": "user_server_tool", "description": "d", "parameters": {}}}
+    engine = build_engine(
+        api
+        , harness_tools=FakeHarnessTools(["propose_choices", "read_history"])
+        , mcp=FakeMCP([mcp_tool])
+    )
+    # The conversation sits on the barring preset: a session override names it.
+    session = await engine.history.get(7, "user")
+    session.model_override = "Gemini"
+    assert await drain(engine, "hi") == ["Hi."]
+    names = {tool["function"]["name"] for tool in api.requests[0]["tools"]}
+    # The MCP tool of the user server stays out, the harness defaults and the provider tool stay.
+    assert "user_server_tool" not in names
+    assert names == {"propose_choices", "read_history", "generate_image"}

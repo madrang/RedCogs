@@ -229,6 +229,16 @@ VENICE_MUSIC_TIMEOUT = 900
 # The safety margin of the guild credit gate: the balance must cover the remaining
 # share of the cycle allowance with this much room to spare.
 VENICE_CREDIT_GATE_BUFFER = 1.5
+# The smallest share of the cycle allowance the gate floor never drops under:
+# near the refill the guild media tools stay hidden until the balance covers it.
+VENICE_CREDIT_GATE_MIN = 0.5
+# The credit ratio bands of the chat routing. The ratio reads the balance over
+# the paced allowance of the cycle rest: the full preset set needs the gate
+# buffer, the lite tier sits above the routing floor, and under the floor the
+# routing stops.
+VENICE_CREDIT_ROUTING_FLOOR = 1.0
+# The cost ceiling of the lite tier of the chat routing.
+VENICE_ROUTING_LITE_COST = 0.10
 # The decision model of the chat routing: a fresh session asks it which chat
 # preset fits its opening message. Source: the live decision list
 # (GET /models?type=decision, read 2026-09-20), the only id it publishes.
@@ -258,6 +268,7 @@ VENICE_FIXED_TOOLS = (
 # The catalog order is preference order: the first preset that satisfies a request wins. The short names are the only model handle the agent ever sees.
 # An entry may carry disabled True: the environment tool and the overload fallback skip it, so the agent cannot reach it, while the user commands (setmodel, the providers menu) keep it.
 # An entry may carry tool_filter, the names of the only tools its models may carry: the engine drops every other tool, the MCP set included.
+# An entry may carry mcp False: the model takes no MCP server tools, the harness and provider tools stay (the Gemini backend rejects the schema keywords of the user servers).
 # The comment on each entry names the release date of its model ids (the created field of the live list).
 VENICE_CHAT_PRESETS = {
     "DeepSeek Lite": {
@@ -289,6 +300,7 @@ VENICE_CHAT_PRESETS = {
       , "traits": ["vision", "coding", "long context", "concise answers"]
       , "cost": 0.22
       , "disabled": True
+      , "mcp": False
     }
 
     # Meta

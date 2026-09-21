@@ -1,8 +1,8 @@
-"""The Venice credit calendar: the cycle day and the credit gate."""
+"""The Venice credit calendar: the cycle day, the credit gate, and the routing bands."""
 
 from datetime import datetime, timezone
 
-from AgentEliza.providers.venice import bundled_credit_gate, next_refill
+from AgentEliza.providers.venice import bundled_credit_gate, credit_ratio, next_refill, routing_tier
 
 
 def _moment(*args) -> datetime:
@@ -36,3 +36,30 @@ def test_bundled_credit_gate_clamps_the_fraction_at_one_cycle() -> None:
     fresh = _moment(2026, 10, 3)
     assert bundled_credit_gate(3, 1.5 * 22500 - 1, fresh) is True
     assert bundled_credit_gate(3, 1.5 * 22500, fresh) is False
+
+
+def test_bundled_credit_gate_keeps_the_minimum_near_the_refill() -> None:
+    # Hours before the refill the paced floor falls under half the allowance,
+    # the gate still requires it.
+    eve = _moment(2026, 10, 2, 23)
+    assert bundled_credit_gate(3, 11250 - 1, eve) is True
+    assert bundled_credit_gate(3, 11250, eve) is False
+
+
+def test_credit_ratio_reads_the_paced_cycle_rest() -> None:
+    fresh = _moment(2026, 10, 3)
+    # The full buffer right after a refill reads 1.5, the allowance itself 1.0.
+    assert credit_ratio(3, 33750, fresh) == 1.5
+    assert credit_ratio(3, 22500, fresh) == 1.0
+    assert credit_ratio(3, 11250, fresh) == 0.5
+    # Half of the cycle is left: the balance divides by half the allowance.
+    assert credit_ratio(3, 16875, _moment(2026, 10, 18, 12)) == 1.5
+
+
+def test_routing_tier_bands_the_balance() -> None:
+    fresh = _moment(2026, 10, 3)
+    # The buffer band carries the full preset set, the floor band the lite tier.
+    assert routing_tier(3, 33750, fresh) == "full"
+    assert routing_tier(3, 22500, fresh) == "lite"
+    # Under the routing floor the routing stops.
+    assert routing_tier(3, 22500 - 1, fresh) == "none"
