@@ -252,13 +252,13 @@ JEV_MODEL_ID = "jev-latest"
 # The reasoning trait marks a model that solves hard problems far above its class. The writing trait marks a model whose prose stands close to the leaders.
 # The imagination trait names a model that brings more original ideas than its class: the Google entries carry it on the benchmarks and the owner's word
 # of 2026-09-21, distinct from the roleplay and storytelling of the Aion pair.
-# The Qwen pair carries no such trait on the community word: the 3.8 answers read stiff and filtered for creative work.
+# The Qwen presets carry no such trait on the community word: the 3.8 answers read stiff and filtered for creative work.
 VENICE_CHAT_CAPABILITIES = (
     "vision", "nsfw", "long context", "coding", "reasoning", "writing", "imagination"
   , "roleplay", "storytelling", "concise answers", "thorough answers"
 )
 # The fixed tool list of the presets whose models overuse the wider tool
-# surface (the Qwen pair and Gemma): the choice poll, the environment
+# surface (the Qwen presets and Gemma): the choice poll, the environment
 # switch, and the media endpoints whose results stay small. The MCP servers
 # of the Config and every other harness or provider tool stay off these
 # presets.
@@ -279,13 +279,13 @@ VENICE_CHAT_PRESETS = {
     "DeepSeek Lite": {
         # No coding trait (the operator's call): a coding request upgrades to DeepSeek Pro, the next preset that carries it.
         "normal": "deepseek-v4-flash-0731"  # released Jul 31, 2026
-        # "normal": "deepseek-v4-1-flash" # Sep 9, 2026 - cost:
+        # "normal": "deepseek-v4-1-flash" # Sep 9, 2026 - cost: 0.06
       , "traits": ["long context", "concise answers"]
       , "cost": 0.0
     }
   , "DeepSeek Pro": {
         "normal": "deepseek-v4-pro"  # released Apr 24, 2026
-        # "normal": "deepseek-v4-pro-0813" # Aug 13, 2026 - cost:
+        # "normal": "deepseek-v4-pro-0813" # Aug 13, 2026 - cost: 0.36
       , "traits": ["long context", "coding", "thorough answers", "writing"]
       , "cost": 0.33
     }
@@ -359,17 +359,94 @@ VENICE_CHAT_PRESETS = {
 
     # Alibaba
   , "Qwen Lite": {
-        # No coding trait (the operator's call): a coding request upgrades to Qwen, the next preset that carries it.
+        # No coding trait (the operator's call): a coding request upgrades to Qwen Max.
+        "normal": "qwen-3-8-flash"  # 1M Ctx, released Sep 9, 2026
+      , "traits": ["long context", "vision", "reasoning", "concise answers"]
+      , "cost": 0.0
+      , "tool_filter": VENICE_FIXED_TOOLS
+    }
+  , "Qwen": {
+        # No coding trait (the operator's call): a coding request upgrades to Qwen Max.
         "normal": "qwen-3-8-27b"  # 262K Ctx, released Aug 17, 2026
       , "traits": ["vision", "nsfw", "reasoning", "concise answers"]
       , "cost": 0.10
       , "tool_filter": VENICE_FIXED_TOOLS
     }
-  , "Qwen": {
+  , "Qwen Max": {
         "normal": "qwen-3-8-2-4t-a95b"  # 262K Ctx, released Aug 12, 2026
       , "traits": ["coding", "nsfw", "reasoning", "thorough answers"]
       , "cost": 0.56
       , "tool_filter": VENICE_FIXED_TOOLS
+    }
+
+    # xAI
+  , "Grok": {
+        # Disabled, untested - 500K Ctx.
+        "normal": "grok-4-7"  # released Sep 15, 2026
+      , "traits": ["vision", "coding", "reasoning"]
+      , "cost": 0.51
+      , "disabled": True
+    }
+
+    # MiniMaxAI
+  , "MiniMax": {
+        # Disabled, untested - 512K Ctx.
+        "normal": "minimax-m3-preview"  # released Jun 11, 2026
+      , "traits": ["vision", "coding", "reasoning"]
+      , "cost": 0.04
+      , "disabled": True
+    }
+
+    # Xiaomi
+  , "MiMo": {
+        # Disabled, untested - 1M Ctx.
+        "normal": "xiaomi-mimo-v2-5"  # released Jun 10, 2026
+      , "traits": ["long context", "vision", "coding", "reasoning"]
+      , "cost": 0.07
+      , "disabled": True
+    }
+
+    # Inception
+  , "Mercury": {
+        # Disabled, untested - 260K Ctx.
+        "normal": "mercury-2-5"  # released Sep 7, 2026
+      , "traits": ["reasoning"]
+      , "cost": -0.03
+      , "disabled": True
+    }
+
+    # ByteDance/BytePlus
+  , "Dola-Seed": {
+        # Disabled, untested - 256K Ctx.
+        "normal": "seed-2-1-turbo"  # released Jun 27, 2026
+      , "traits": ["vision", "coding", "reasoning"]
+      , "cost": 0.14
+      , "disabled": True
+    }
+
+    # Mistral
+  , "Mistral": {
+        # Disabled, untested - 256K Ctx.
+        "normal": "mistral-small-3-2-24b-instruct"  # released Jan 14, 2026
+      , "traits": ["vision"]
+      , "cost": -0.02
+      , "disabled": True
+    }
+
+    # NVIDIA
+  , "Nemotron Nano": {
+        # Disabled, untested - 128K Ctx.
+        "normal": "nvidia-nemotron-3-nano-30b-a3b"  # released Jan 26, 2026
+      , "traits": []
+      , "cost": -0.02
+      , "disabled": True
+    }
+  , "Nemotron Ultra": {
+        # Disabled, untested - 256K Ctx.
+        "normal": "nvidia-nemotron-3-ultra-550b-a55b"  # released Jun 3, 2026
+      , "traits": ["reasoning"]
+      , "cost": 0.14
+      , "disabled": True
     }
 
   , "Aion Mini": {

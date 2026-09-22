@@ -128,8 +128,8 @@ async def test_bundled_credits_answers_none_on_failures() -> None:
 
 def test_preset_fallback_steps_onto_a_smaller_window() -> None:
     # The ladder ranks cost alone: the move from GLM 1M (a 1M window) steps
-    # up to Qwen (262K), and the switch condenses the session at the move.
-    assert VeniceApiProvider().preset_fallback("z-ai-glm-5-3") == "Qwen"
+    # up to Qwen Max (262K), and the switch condenses the session at the move.
+    assert VeniceApiProvider().preset_fallback("z-ai-glm-5-3") == "Qwen Max"
     # The ceiling cycles to the cheapest enabled preset.
     assert VeniceApiProvider().preset_fallback("kimi-k3") == "Gemma"
 
