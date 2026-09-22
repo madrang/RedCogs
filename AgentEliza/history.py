@@ -28,17 +28,25 @@ SUMMARY_MAX_CHARS = 4000
 # provider reports no token counts.
 HISTORY_IMAGE_CHARS = 8_000
 
-# The harness request that asks for the summary. It goes to the API as a
-# user message after the untouched session, and it introduces the summary
-# inside the session as the compaction exchange: the harness request,
-# answered by the agent with the summary as its own reply. Harness messages
-# use the same square-bracket tags as the memory notes.
+# The harness request that asks for the summary. The summarization call
+# sends it to the API as its last user message. It never rides the context
+# of a reply: the stored summary enters as the compaction exchange below.
+# Harness messages use the same square-bracket tags as the memory notes.
 COMPACT_REQUEST = (
     "[harness] condense this conversation into a short summary. "
     "Keep names, facts, decisions, and open questions. Drop small talk. "
     "Keep the character of the exchange too: the tone, the mood of each person, "
     "the state of the relationship, and the shared references that give the conversation continuity. "
     "When the conversation holds a summary from an earlier condense, merge its content into the new summary. [/harness]"
+)
+# The user turn that opens the compaction exchange. The agent answer that
+# follows is the stored summary. It is a record of the past exchange, never
+# a task to run.
+SUMMARY_NOTE = (
+    "[harness] The conversation resumes an earlier session. "
+    "The answer below is your summary of it. "
+    "Read it as your own record of what was already said and done, "
+    "and continue the conversation from it. [/harness]"
 )
 # Context backfill target of a fresh session: recent channel messages from
 # Discord. eliza.py scans the channel history for them.
@@ -100,8 +108,7 @@ class Session:
     the reasoning fields stay in the turns until a compaction summarizes
     them. The summary joins the context as a turn, not in the system
     message: inject_summary places it after the system message as the
-    compaction exchange (harness request, agent answer), so a rebuilt
-    context keeps it without repeating it. size counts the characters of
+    compaction exchange, so a rebuilt context keeps it without repeating it. size counts the characters of
     all messages, not their number: many small messages and a few giant
     ones do not cost the same context. scope is the Memory scope the
     session belongs to: guild, or user for a DM. summary is the condensed
@@ -220,7 +227,7 @@ class Session:
     def inject_summary(self) -> None:
         """Place the summary into the turns as the compaction exchange, after the system message."""
         trace = [
-            {"role": "user", "content": COMPACT_REQUEST},
+            {"role": "user", "content": SUMMARY_NOTE},
             {"role": "assistant", "content": self.summary},
         ]
         self.messages[1:1] = trace

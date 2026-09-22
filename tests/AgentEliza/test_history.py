@@ -4,7 +4,7 @@ import asyncio
 import time
 from types import SimpleNamespace
 
-from AgentEliza.history import History, Session, session_label, session_log_label
+from AgentEliza.history import SUMMARY_NOTE, History, Session, session_label, session_log_label
 
 
 class _NoMemory:
@@ -27,6 +27,22 @@ def test_plan_compaction_at_keep_zero_unloads_every_turn() -> None:
     empty = Session("user")
     empty.start_context("system")
     assert empty.plan_compaction(0) == []
+
+
+def test_inject_summary_places_the_exchange_after_the_system_message() -> None:
+    session = Session("user")
+    session.start_context("system")
+    session.append("user", "one")
+    session.summary = "The user fixed a python bug."
+    session.inject_summary()
+    # The exchange opens with the resume note, never the condense request,
+    # and the summary rides as the agent answer.
+    note, answer = session.messages[1], session.messages[2]
+    assert note == {"role": "user", "content": SUMMARY_NOTE}
+    assert "condense" not in note["content"]
+    assert answer == {"role": "assistant", "content": "The user fixed a python bug."}
+    assert session.messages[3]["content"] == "one"
+    assert session.size == sum(Session._size_of(message) for message in session.messages)
 
 
 async def test_parallel_sessions_do_not_serialize() -> None:

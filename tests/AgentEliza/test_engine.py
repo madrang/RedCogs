@@ -620,6 +620,22 @@ async def test_a_compacted_session_reroutes_on_the_next_message() -> None:
     assert len(api.decision_calls) == 1
 
 
+async def test_a_fresh_session_opens_from_the_compaction_exchange() -> None:
+    api = FakeApi([close("Hello.")])
+    engine = build_engine(api)
+    engine.memory.summaries[("user", 7)] = "The user fixed a python bug."
+    assert await drain(engine, "hi") == ["Hello."]
+    messages = api.requests[0]["messages"]
+    # The stored summary rides after the system message as the compaction
+    # exchange: the resume note, then the summary as the agent answer.
+    assert messages[1]["role"] == "user"
+    assert messages[1]["content"].startswith("[harness] The conversation resumes")
+    assert messages[1]["content"].endswith("[/harness]")
+    assert "condense" not in messages[1]["content"]
+    assert messages[2] == {"role": "assistant", "content": "The user fixed a python bug."}
+    assert messages[-1]["content"].endswith("Madrang <@7>: hi")
+
+
 async def test_a_session_without_the_router_skips_the_decision_call() -> None:
     # The plain stand-in carries no decide_session_model: a provider without
     # the capability never sees a call.
