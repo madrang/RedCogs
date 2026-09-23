@@ -33,16 +33,17 @@ def test_parse_usage_builds_the_balance_row() -> None:
     assert row["name"] == "Balance"
     assert row["exhausted"] is False
     assert row["used"] is None and row["limit"] is None and row["percent"] is None
-    text = row["text"]
-    assert "tier paid" in text
-    assert "$1.5 USD available" in text
-    assert "2 Diem available" in text
+    properties = row["properties"]
+    # The settled labels: a caller renders the ones it wants.
+    assert properties["tier"] == "paid"
+    assert properties["usd"] == "$1.5"
+    assert properties["diem"] == "2"
     # The endpoint names USD: the credits ride at 100 a dollar.
-    assert "bundled credits 150 of 22,500" in text
+    assert properties["bundled credits"] == "150 of 22,500"
     # The highest amount of each type stands for the whole key.
-    assert "150 requests/min" in text
-    assert "60 requests/min" not in text
-    assert "3,000,000 tokens/min" in text
+    assert properties["requests/min"] == "150"
+    assert properties["tokens/min"] == "3,000,000"
+    assert len(properties) == 6
 
 
 def test_parse_usage_flags_a_refused_key() -> None:
@@ -61,7 +62,7 @@ def test_parse_usage_flags_a_spent_charged_key() -> None:
 
 def test_parse_usage_degrades_on_an_empty_answer() -> None:
     row = VeniceApiProvider().parse_usage({})[0]
-    assert row["text"] == "tier unknown"
+    assert row["properties"] == {"tier": "unknown"}
     # The exhausted flag reads None here, a type drift the row carries:
     # every reader treats falsy as not exhausted.
     assert not row["exhausted"]

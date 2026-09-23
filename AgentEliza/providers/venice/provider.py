@@ -325,16 +325,17 @@ class VeniceApiProvider(Provider):
             and usd <= 0
             and diem <= 0
         )
-        parts = [f"tier {tier.get('id') or 'unknown'}"]
+        # The properties carry the answer with settled labels: a caller
+        # renders the ones it wants, in its own shape.
+        properties = {"tier": tier.get("id") or "unknown"}
         if isinstance(usd, (int, float)):
-            parts.append(f"${usd:g} USD available")
+            properties["usd"] = f"${usd:g}"
         if isinstance(diem, (int, float)):
-            parts.append(f"{diem:g} Diem available")
+            properties["diem"] = f"{diem:g}"
         bundled = balances.get("BUNDLED_CREDITS") if isinstance(balances, dict) else None
         if isinstance(bundled, (int, float)):
             # The endpoint names USD: the credits ride at 100 a dollar.
-            parts.append(f"bundled credits {bundled * 100:,.6g} of {VENICE_CREDIT_ALLOWANCE:,}")
-        text = ", ".join(parts)
+            properties["bundled credits"] = f"{bundled * 100:,.6g} of {VENICE_CREDIT_ALLOWANCE:,}"
         # The endpoint reports per-model limits only: the consumption lives in
         # the x-ratelimit-* response headers, which a poll cannot read. The
         # highest amount of each type stands for the whole key.
@@ -345,18 +346,14 @@ class VeniceApiProvider(Provider):
                 amount = self._num(limit.get("amount"))
                 if limit_type and amount is not None:
                     amounts[limit_type] = max(amounts.get(limit_type, 0), amount)
-        if amounts:
-            limits = ", ".join(
-                f"{amount:,} {VENICE_LIMIT_NAMES.get(limit_type, limit_type)}"
-                for limit_type, amount in sorted(amounts.items())
-            )
-            text += f"; {limits}"
+        for limit_type, amount in sorted(amounts.items()):
+            properties[VENICE_LIMIT_NAMES.get(limit_type, limit_type)] = f"{amount:,}"
         return [{
             "name": "Balance"
             , "used": None
             , "limit": None
             , "percent": None
             , "reset": None
-            , "text": text
+            , "properties": properties
             , "exhausted": exhausted
         }]

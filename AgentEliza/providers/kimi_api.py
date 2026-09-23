@@ -28,15 +28,17 @@ class KimiApiProvider(Provider):
     def parse_usage(self, data: dict) -> list:
         balance = data.get("data") or {}
         available = balance.get("available_balance")
+        properties = {
+            key.replace("_balance", ""): f"${balance.get(key)}"
+            for key in ("available_balance", "voucher_balance", "cash_balance")
+            if balance.get(key) is not None
+        }
         return [{
             "name": "Balance",
             "used": None,
             "limit": None,
             "percent": None,
             "reset": None,
-            "text": (
-                f"available ${available}, voucher ${balance.get('voucher_balance')}, "
-                f"cash ${balance.get('cash_balance')}"
-            ),
+            "properties": properties,
             "exhausted": available is not None and available <= 0,
         }]

@@ -711,8 +711,9 @@ class Eliza(commands.Cog):
             lines.append("- No usage data: the provider has no known usage endpoint, or the check failed.")
         else:
             for row in rows:
-                if row.get("text"):
-                    lines.append(f"- {row['name']}: {row['text']}")
+                if row.get("properties"):
+                    joined = ", ".join(f"{label} {value}" for label, value in row["properties"].items())
+                    lines.append(f"- {row['name']}: {joined}")
                     continue
                 parts = []
                 if row.get("used") is not None and row.get("limit"):
@@ -725,9 +726,11 @@ class Eliza(commands.Cog):
                         parts.append(f"resets {datetime.fromtimestamp(reset, timezone.utc):{MESSAGE_TIME_FORMAT}}")
                     else:
                         parts.append(f"resets {reset}")
+                if row.get("text"):
+                    parts.append(row["text"])
                 if threshold and row.get("percent") is not None and row["percent"] >= threshold:
                     parts.append("over the throttle")
-                    lines.append(f"- {row['name']}: " + ", ".join(parts) if parts else f"- {row['name']}")
+                lines.append(f"- {row['name']}: " + ", ".join(parts) if parts else f"- {row['name']}")
             cycle_day = await self.config.credit_cycle_day()
             if hasattr(preset, "bundled_credits") and cycle_day:
                 # The fixed cycle day names the next refill of the bundled allowance.
@@ -1380,30 +1383,34 @@ class Eliza(commands.Cog):
         if not rows:
             await ctx.send("The usage endpoint returned no data.")
             return
-        lines = []
+        embed = discord.Embed(title="Provider usage", color=await ctx.embed_colour())
         for row in rows:
-            if row.get("text"):
-                lines.append(f"**{row['name']}** — {row['text']}")
-                continue
-            parts = []
+            # One labeled property per line: the provider properties first,
+            # the generic window fields after, the flat text as a fallback.
+            entries = [f"{label}: {value}" for label, value in (row.get("properties") or {}).items()]
             if row.get("used") is not None and row.get("limit"):
-                parts.append(f"{row['used']:,} / {row['limit']:,}")
+                entries.append(f"used: {row['used']:,} / {row['limit']:,}")
             if row.get("percent") is not None:
-                parts.append(f"{row['percent']:.1f}% used")
+                entries.append(f"{row['percent']:.1f}% used")
             if row.get("reset"):
                 reset = row["reset"]
-                parts.append(f"resets <t:{reset}:R>" if isinstance(reset, int) else f"resets {reset}")
-            lines.append(f"**{row['name']}** — " + ", ".join(parts) if parts else f"**{row['name']}**")
+                entries.append(f"resets <t:{reset}:R>" if isinstance(reset, int) else f"resets {reset}")
+            if not entries and row.get("text"):
+                entries.append(row["text"])
+            embed.add_field(name=row["name"], value="\n".join(entries) if entries else "—", inline=False)
         cycle_day = await self.config.credit_cycle_day()
         if hasattr(provider_for(await self._base_url()), "bundled_credits") and cycle_day:
-            # The fixed cycle day names the next refill of the bundled allowance.
+            # The ratio and the next refill read against the fixed cycle day.
+            ratio = await self.credit_ratio_now()
+            if ratio is None:
+                reading = "unknown (no balance read)"
+            elif ratio < 1.0:
+                reading = f"{ratio:.2f} (short by {1.0 - ratio:.2f})"
+            else:
+                reading = f"{ratio:.2f} (+{ratio - 1.0:.2f} surplus)"
+            embed.add_field(name="Credit ratio", value=reading, inline=False)
             refill = int(next_refill(cycle_day).timestamp())
-            lines.append(f"The bundled allowance resets <t:{refill}:F> (<t:{refill}:R>).")
-        embed = discord.Embed(
-            title="Provider usage",
-            description="\n".join(lines),
-            color=await ctx.embed_colour(),
-        )
+            embed.add_field(name="Bundled refill", value=f"<t:{refill}:F> (<t:{refill}:R>)", inline=False)
         await ctx.send(embed=embed)
 
     @eliza_group.command(name="setthreshold")
