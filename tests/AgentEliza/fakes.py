@@ -235,8 +235,8 @@ class FakeScopeStats:
         self.media_counts: list = []
         self.records: list[dict] = []
 
-    async def media_refusal(self, scope):
-        self.media_checks.append(scope)
+    async def media_refusal(self, scope, limits=None):
+        self.media_checks.append((scope, limits))
         return self.refusal
 
     async def count_media(self, scope):

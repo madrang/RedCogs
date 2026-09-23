@@ -668,7 +668,7 @@ def _music_tool() -> dict:
       , "media": "music"
         # The availability flags of the engine: a direct message carries the
         # tool only for the bot owner, and a guild hides it while the
-        # bundled credit balance sits under the paced floor.
+        # credit ratio sits under the media disable band.
       , "dm_owner_only": True
       , "guild_credit_gate": True
         , "description": (

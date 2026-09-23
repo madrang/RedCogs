@@ -9,8 +9,7 @@ import calendar
 from datetime import datetime, timezone
 
 from .catalog import (
-  VENICE_CREDIT_ALLOWANCE, VENICE_CREDIT_GATE_BUFFER, VENICE_CREDIT_GATE_MIN
-  , VENICE_CREDIT_ROUTING_FLOOR,
+  VENICE_CREDIT_ALLOWANCE, VENICE_CREDIT_GATE_BUFFER, VENICE_CREDIT_ROUTING_FLOOR,
 )
 
 
@@ -43,22 +42,6 @@ def _cycle_rest(cycle_day: int, moment: datetime) -> float | None:
     if span <= 0:
         return None
     return min(max((upcoming - moment).total_seconds() / span, 0.0), 1.0)
-
-
-def bundled_credit_gate(cycle_day: int, balance: float, now: datetime | None = None) -> bool:
-    """True when the balance sits under the paced floor of the cycle rest:
-    the remaining share of the monthly allowance, with VENICE_CREDIT_GATE_BUFFER
-    as the safety margin. The floor never drops under the VENICE_CREDIT_GATE_MIN
-    share of the allowance, so the gate holds near the refill too."""
-    moment = now if now is not None else datetime.now(timezone.utc)
-    remaining = _cycle_rest(cycle_day, moment)
-    if remaining is None:
-        return False
-    floor = max(
-        VENICE_CREDIT_GATE_MIN * VENICE_CREDIT_ALLOWANCE
-      , VENICE_CREDIT_GATE_BUFFER * VENICE_CREDIT_ALLOWANCE * remaining,
-    )
-    return float(balance) < floor
 
 
 def credit_ratio(cycle_day: int, balance: float, now: datetime | None = None) -> float | None:

@@ -31,14 +31,16 @@ def test_collapse_blank_lines(raw: str, expected: str) -> None:
 
 
 class GatedApi(FakeApi):
-    """The cog stand-in with the guild credit gate of the song tool."""
+    """The cog stand-in with the media windows of the song tool."""
 
     def __init__(self, *args, gate=False, **kwargs):
         super().__init__(*args, **kwargs)
         self.gate = gate
 
-    async def guild_media_gate(self):
-        return self.gate
+    async def media_limits(self):
+        # None names the disable band of the credit ratio: the media tools
+        # stay off. A dict names the hourly windows.
+        return None if self.gate else {"user": 8, "channel": 32}
 
 
 async def _tool_names(api, *, guild_id=None, is_owner=False) -> set:
@@ -73,11 +75,11 @@ async def test_the_song_tool_joins_only_the_direct_message_of_the_owner() -> Non
     # The owner sees it in a direct message.
     api = FakeApi([close], preset=FakePreset(native=native))
     assert "generate_song" in await _tool_names(api, guild_id=None, is_owner=True)
-    # A guild sees it while the cog carries no gate (the plain stand-in) or the gate reads open.
+    # A guild sees it while the cog carries no media policy (the plain stand-in) or the windows hold.
     api = FakeApi([close], preset=FakePreset(native=native))
     assert "generate_song" in await _tool_names(api, guild_id=5, is_owner=False)
     api = GatedApi([close], gate=False, preset=FakePreset(native=native))
     assert "generate_song" in await _tool_names(api, guild_id=5, is_owner=False)
-    # The credit gate closes the guild list.
+    # The disable band of the credit ratio closes the guild list.
     api = GatedApi([close], gate=True, preset=FakePreset(native=native))
     assert "generate_song" not in await _tool_names(api, guild_id=5, is_owner=False)

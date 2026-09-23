@@ -8,6 +8,31 @@ COST_MONTHS_KEPT = 13
 # guild. A direct message knows only the user window.
 MEDIA_RATE_USER = 8
 MEDIA_RATE_CHANNEL = 32
+# The credit ratio bands of the media windows: the full windows hold at and
+# above MEDIA_LIMIT_AT, they slide linearly to one generation at
+# MEDIA_LIMIT_FLOOR, the single hourly generation holds above
+# MEDIA_DISABLE_AT, and under it the media tools stay off.
+MEDIA_LIMIT_AT = 1.25
+MEDIA_LIMIT_FLOOR = 0.9
+MEDIA_DISABLE_AT = 0.75
+
+
+def media_windows(ratio: float | None) -> dict | None:
+    """The hourly media windows of a credit ratio: the full windows at and
+    above the top band, a linear slide to one generation at the floor band,
+    the single hourly generation above the disable band, and None under it.
+    A None ratio keeps the full windows: an unread balance never blocks."""
+    if ratio is None or ratio >= MEDIA_LIMIT_AT:
+        return {"user": MEDIA_RATE_USER, "channel": MEDIA_RATE_CHANNEL}
+    if ratio < MEDIA_DISABLE_AT:
+        return None
+    if ratio < MEDIA_LIMIT_FLOOR:
+        return {"user": 1, "channel": 1}
+    part = (ratio - MEDIA_LIMIT_FLOOR) / (MEDIA_LIMIT_AT - MEDIA_LIMIT_FLOOR)
+    return {
+        "user": 1 + round(part * (MEDIA_RATE_USER - 1))
+      , "channel": 1 + round(part * (MEDIA_RATE_CHANNEL - 1))
+    }
 
 # Default counters registered at each scope.
 _STATS_DEFAULT = {
@@ -159,13 +184,19 @@ class ScopeStats:
         """The stats dict of one scope instance."""
         return await self._group(scope, scope_id).stats()
 
-    async def media_refusal(self, scope: Scope) -> str | None:
+    async def media_refusal(self, scope: Scope, limits: dict | None = None) -> str | None:
         """The refusal text when one more media generation would pass an
-        hourly window, else None. The user window (MEDIA_RATE_USER) counts
-        everywhere; the channel window (MEDIA_RATE_CHANNEL) counts in a
-        guild only. Images and inpaints share the windows; the count rises
-        on a successful generation only, so the text starts with the
-        uniform error prefix and never counts as one."""
+        hourly window, else None. limits names the windows: None keeps the
+        full constants, an empty dict marks the media tools off (the bundled
+        credits run low). The user window counts everywhere; the channel
+        window (MEDIA_RATE_CHANNEL) counts in a guild only. Images and
+        inpaints share the windows; the count rises on a successful
+        generation only, so the text starts with the uniform error prefix
+        and never counts as one."""
+        if limits is not None and not limits:
+            return "Error: the bundled credits run low, the media tools stay off for now."
+        if limits is None:
+            limits = {"user": MEDIA_RATE_USER, "channel": MEDIA_RATE_CHANNEL}
         ids = {"user": scope.user_id}
         if scope.guild_id is not None:
             ids["channel"] = scope.channel_id

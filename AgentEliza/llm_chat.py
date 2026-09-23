@@ -496,11 +496,16 @@ class ChatEngine:
             # The availability flags of an entry: dm_owner_only joins a
             # direct message only when the bot owner speaks (a guild is not
             # affected), guild_credit_gate hides the entry in a guild while
-            # the cog reports the bundled credits under the paced floor of
-            # the cycle rest.
+            # the cog reports the bundled credits under the disable band of
+            # the media windows.
             guild_gate = False
-            if guild_id is not None and hasattr(self.api, "guild_media_gate"):
-                guild_gate = await self.api.guild_media_gate()
+            media_windows = None
+            if hasattr(self.api, "media_limits"):
+                # The windows scale with the credit ratio; an empty dict
+                # marks the media tools off (no credits for media). A
+                # provider without the policy keeps the full constants.
+                media_windows = await self.api.media_limits() or {}
+                guild_gate = guild_id is not None and not media_windows
             for entry in preset.native_tools():
                 if allowed is not None and entry["name"] not in allowed:
                     # The filter keeps the fixed tool set alone.
@@ -850,7 +855,7 @@ class ChatEngine:
                     # The bot owner bypasses the media windows, like the
                     # interaction limits. A generation still counts: the
                     # channel budget stays honest.
-                    await self.scope_stats.media_refusal(message.scope)
+                    await self.scope_stats.media_refusal(message.scope, media_windows)
                     if media and not is_owner else None
                 )
                 try:

@@ -25,11 +25,11 @@ from .pages import paginate
 from .polls import PollManager
 from .providers import DEFAULT_PROVIDER, PROVIDERS, provider_for, provider_named
 from .providers.venice import (
-    bundled_credit_gate, credit_ratio, next_refill
+    credit_ratio, next_refill
   , VENICE_CREDIT_ROUTING_FLOOR,
 )
 from .providers.venice.audio import queue_song, retrieve_song
-from .stats import ScopeStats, month_key
+from .stats import ScopeStats, media_windows, month_key
 from .tools import HarnessOptions, HarnessTools, MESSAGE_TIME_FORMAT
 from .tools.base import TRANSCRIBE_MAX_BYTES, is_audio_attachment, speech_embed
 from .tools.files import channel_post_count
@@ -351,23 +351,17 @@ class Eliza(commands.Cog):
         """Post one song request of a native tool for approval, through the song manager."""
         return await self.music.request(session_id, channel_id, request)
 
-    async def bundled_credit_low(self) -> bool:
-        """True while the bundled credit balance sits under the paced floor of the
-        cycle rest (the remaining share of the allowance with the safety margin,
-        never under half the allowance). A guild hides the tools that carry the
-        credit flag while this reads true."""
+    async def media_limits(self):
+        """The hourly media windows of the bundled credit ratio: the full
+        windows on a healthy balance, a slide toward one generation as the
+        balance runs down, and None (the tools off) under the disable band.
+        A missing cycle day or an unread balance keeps the full windows:
+        an unknown ratio never blocks the media tools."""
         balance = await self.bundled_credits()
-        if balance is None:
-            return False
         cycle_day = await self.config.credit_cycle_day()
-        if not cycle_day:
-            return False
-        return bundled_credit_gate(cycle_day, balance)
-
-    async def guild_media_gate(self) -> bool:
-        """True while the bundled credit balance sits under the paced floor of the
-        cycle rest. A guild hides the tools that carry the credit flag while this reads true."""
-        return await self.bundled_credit_low()
+        if balance is None or not cycle_day:
+            return media_windows(None)
+        return media_windows(credit_ratio(cycle_day, balance))
 
     async def decide_session_model(self, state_text: str, nsfw_allowed: bool = False) -> str | None:
         """The chat preset the decision model of the active provider picks for a new

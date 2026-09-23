@@ -226,17 +226,14 @@ VENICE_MUSIC_FORMATS = {"audio/mpeg": "mp3", "audio/mp3": "mp3", "audio/wav": "w
 # The total budget of one song generation: the queue call plus every retrieve poll.
 # The value matches the inference cap of chat_request — a server-side render waits like a long generation.
 VENICE_MUSIC_TIMEOUT = 900
-# The safety margin of the guild credit gate: the balance must cover the remaining
-# share of the cycle allowance with this much room to spare.
+# The healthy-balance mark of the credit ratio: the cost pressure of the
+# selection tiebreak reads its minimum at and above it, its maximum at the
+# routing floor.
 VENICE_CREDIT_GATE_BUFFER = 1.5
-# The smallest share of the cycle allowance the gate floor never drops under:
-# near the refill the guild media tools stay hidden until the balance covers it.
-VENICE_CREDIT_GATE_MIN = 0.5
 # The routing floor of the credit ratio: under it the chat routing stops and
 # the configured model answers.
 VENICE_CREDIT_ROUTING_FLOOR = 1.0
-# The cost ceiling of the lite tier of the chat routing (retired: the cost
-# pressure of the selection tiebreak replaced the ceiling).
+# The cost ceiling of the lite tier of the chat routing. No caller rides it.
 VENICE_ROUTING_LITE_COST = 0.10
 # The strength a capability must read before the chat routing counts it as needed.
 VENICE_ROUTING_TRAIT_AT = 0.5
