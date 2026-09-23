@@ -29,7 +29,7 @@ from .providers.venice import (
   , VENICE_CREDIT_ROUTING_FLOOR,
 )
 from .providers.venice.audio import queue_song, retrieve_song
-from .stats import ScopeStats, media_windows, month_key
+from .stats import MEDIA_DISABLE_AT, MEDIA_LIMIT_AT, MEDIA_LIMIT_FLOOR, ScopeStats, media_windows, month_key
 from .tools import HarnessOptions, HarnessTools, MESSAGE_TIME_FORMAT
 from .tools.base import TRANSCRIBE_MAX_BYTES, is_audio_attachment, speech_embed
 from .tools.files import channel_post_count
@@ -351,17 +351,22 @@ class Eliza(commands.Cog):
         """Post one song request of a native tool for approval, through the song manager."""
         return await self.music.request(session_id, channel_id, request)
 
+    async def credit_ratio_now(self):
+        """The credit ratio of the bundled balance over the cycle rest:
+        None while the balance or the cycle day reads unknown."""
+        balance = await self.bundled_credits()
+        cycle_day = await self.config.credit_cycle_day()
+        if balance is None or not cycle_day:
+            return None
+        return credit_ratio(cycle_day, balance)
+
     async def media_limits(self):
         """The hourly media windows of the bundled credit ratio: the full
         windows on a healthy balance, a slide toward one generation as the
         balance runs down, and None (the tools off) under the disable band.
         A missing cycle day or an unread balance keeps the full windows:
         an unknown ratio never blocks the media tools."""
-        balance = await self.bundled_credits()
-        cycle_day = await self.config.credit_cycle_day()
-        if balance is None or not cycle_day:
-            return media_windows(None)
-        return media_windows(credit_ratio(cycle_day, balance))
+        return media_windows(await self.credit_ratio_now())
 
     async def decide_session_model(self, state_text: str, nsfw_allowed: bool = False) -> str | None:
         """The chat preset the decision model of the active provider picks for a new
@@ -734,6 +739,26 @@ class Eliza(commands.Cog):
             , f"- Interactions per hour: user {limits['user']}, channel {limits['channel']}, server {limits['guild']}. "
               "A limit of 0 is off. The bot owner is unlimited."
         ]
+        if preset is not None and hasattr(preset, "bundled_credits"):
+            # The media windows ride the bundled credits of the provider: an
+            # active provider without them carries no media policy to report.
+            windows = await self.media_limits()
+            ratio = await self.credit_ratio_now()
+            if windows is None:
+                lines.append(
+                    f"- Media generations: off. The credit ratio {ratio:.2f} sits under {MEDIA_DISABLE_AT}."
+                )
+            else:
+                lines.append(f"- Media generations per hour: user {windows['user']}, channel {windows['channel']}.")
+                if ratio is None:
+                    lines.append("- The credit ratio reads unknown, the full windows hold.")
+                else:
+                    lines.append(
+                        f"- The windows derive from the bundled credit ratio: {ratio:.2f} now "
+                        f"(the balance over the cycle rest). The full windows hold at {MEDIA_LIMIT_AT} and above, "
+                        f"they slide to one generation at {MEDIA_LIMIT_FLOOR}, one per hour holds "
+                        f"to {MEDIA_DISABLE_AT}, and under it they turn off."
+                    )
         if session is not None:
             stats = await self.scope_stats.get(session.scope, session_id)
             rate = await self.scope_stats.rate(session.scope, session_id)
