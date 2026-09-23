@@ -232,15 +232,20 @@ VENICE_CREDIT_GATE_BUFFER = 1.5
 # The smallest share of the cycle allowance the gate floor never drops under:
 # near the refill the guild media tools stay hidden until the balance covers it.
 VENICE_CREDIT_GATE_MIN = 0.5
-# The credit ratio bands of the chat routing. The ratio reads the balance over
-# the paced allowance of the cycle rest: the full preset set needs the gate
-# buffer, the lite tier sits above the routing floor, and under the floor the
-# routing stops.
+# The routing floor of the credit ratio: under it the chat routing stops and
+# the configured model answers.
 VENICE_CREDIT_ROUTING_FLOOR = 1.0
-# The cost ceiling of the lite tier of the chat routing.
+# The cost ceiling of the lite tier of the chat routing (retired: the cost
+# pressure of the selection tiebreak replaced the ceiling).
 VENICE_ROUTING_LITE_COST = 0.10
 # The strength a capability must read before the chat routing counts it as needed.
 VENICE_ROUTING_TRAIT_AT = 0.5
+# The cost pressure of the selection tiebreak: the pressure names the cost
+# step one extra preset trait must stay under. A healthy balance reads the
+# min, the routing floor reads the max, and the ratio between them scales
+# linearly.
+VENICE_ROUTING_PRESSURE_MIN = 1.0
+VENICE_ROUTING_PRESSURE_MAX = 8.0
 # The decision model of the chat routing: a fresh session asks it which chat
 # preset fits its opening message. Source: the live decision list
 # (GET /models?type=decision, read 2026-09-20), the only id it publishes.
@@ -249,6 +254,7 @@ JEV_MODEL_ID = "jev-latest"
 # The capabilities the agent can ask of the environment tool. One settled vocabulary: the same words in the schema enum, the catalog traits, and the tool answers, in the language a user types — no spec terms.
 # The coding trait mirrors the optimizedForCode flag of the live model list. The roleplay and storytelling traits ride the Aion pair.
 # The concise answers and thorough answers traits mark the size pairs: the lite and mini presets answer concisely, the regular and pro presets thoroughly.
+# The decision flow judges the pair as one score axis: a conversation cannot need both ends.
 # The reasoning trait marks a model that solves hard problems far above its class. The writing trait marks a model whose prose stands close to the leaders.
 # The imagination trait names a model that brings more original ideas than its class: the Google entries carry it on the benchmarks and the owner's word
 # of 2026-09-21, distinct from the roleplay and storytelling of the Aion pair.

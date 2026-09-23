@@ -370,6 +370,26 @@ class ChatEngine:
             , channel=self.bot.get_channel(channel_id) if session.scope == "channel" else None
             , user_name=message.user_name
         )
+        async def channel_nsfw():
+            """Whether the current channel sits behind the Discord 18+ gate,
+            for the model routing, the payload build, and the native provider
+            tools: the channel flag, the flag of the parent channel of a
+            thread, or an age-restricted guild. A direct message of the bot
+            owner counts as gated: the API reports no user age, and the owner
+            operates the bot."""
+            if guild_id is None and is_owner:
+                return True
+            getter = self.harness_tools.channel_getter
+            channel = await getter(channel_id) if getter else None
+            parent = getattr(channel, "parent", None)
+            guild = getattr(channel, "guild", None) or getattr(parent, "guild", None)
+            return bool(
+                getattr(channel, "nsfw", False)
+                or getattr(parent, "nsfw", False)
+                or getattr(guild, "nsfw_level", None) == discord.NSFWLevel.age_restricted
+            )
+
+        gated = await channel_nsfw()
         if not session.messages or session.reroute:
             # A fresh session asks the decision flow of the provider for the
             # capability strengths of the conversation, and a compaction asks
@@ -385,7 +405,7 @@ class ChatEngine:
                 state = f"{message.speaker}: {message.content}{attachments_text(attachments)}"
                 if session.summary:
                     state = f"Summary of the conversation so far:\n{session.summary}\nNew message: {state}"
-                picked = await decider(state)
+                picked = await decider(state, gated)
                 if picked:
                     session.model_override = picked
                     log.info(
@@ -511,26 +531,6 @@ class ChatEngine:
             # The filter trims the harness defaults too: the request carries
             # the fixed tool set alone.
             tools = [tool for tool in tools if tool["function"]["name"] in allowed]
-        async def channel_nsfw():
-            """Whether the current channel sits behind the Discord 18+ gate,
-            for the payload build and the native provider tools: the channel
-            flag, the flag of the parent channel of a thread, or an
-            age-restricted guild. A direct message of the bot owner counts
-            as gated: the API reports no user age, and the owner operates
-            the bot."""
-            if guild_id is None and is_owner:
-                return True
-            getter = self.harness_tools.channel_getter
-            channel = await getter(channel_id) if getter else None
-            parent = getattr(channel, "parent", None)
-            guild = getattr(channel, "guild", None) or getattr(parent, "guild", None)
-            return bool(
-                getattr(channel, "nsfw", False)
-                or getattr(parent, "nsfw", False)
-                or getattr(guild, "nsfw_level", None) == discord.NSFWLevel.age_restricted
-            )
-
-        gated = await channel_nsfw()
         # A vision chat model sees the images of the conversation directly.
         # The resolved request model decides, an override included: a preset
         # name maps to its id first, and the provider's vision_models set

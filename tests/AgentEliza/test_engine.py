@@ -567,7 +567,7 @@ class DecidingApi(FakeApi):
         self.decision = decision
         self.decision_calls: list[str] = []
 
-    async def decide_session_model(self, state_text):
+    async def decide_session_model(self, state_text, nsfw_allowed=False):
         self.decision_calls.append(state_text)
         return self.decision
 

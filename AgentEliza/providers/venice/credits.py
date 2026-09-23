@@ -1,7 +1,7 @@
 # The bundled credit cycle calendar, the guild credit gate, and the routing
-# bands: pure date math over the cycle day.
-# The gate paces the guild media tools against the cycle rest. The bands tier
-# the chat model routing on the balance over the paced cycle rest.
+# floor: pure date math over the cycle day.
+# The gate paces the guild media tools against the cycle rest. The chat
+# model routing reads the credit ratio of the balance over the cycle rest.
 # The balance itself reads from the rate-limits endpoint of the provider.
 # The cycle day lives in Config (`eliza setcycleday`).
 
@@ -62,14 +62,19 @@ def bundled_credit_gate(cycle_day: int, balance: float, now: datetime | None = N
 
 
 def credit_ratio(cycle_day: int, balance: float, now: datetime | None = None) -> float | None:
-    """The balance over the paced allowance of the cycle rest: the buffer reads
-    1.5 right after a refill, and a value under 1.0 names a balance that cannot
-    cover the rest. None when the cycle span breaks."""
+    """The credit health of the balance over the cycle rest: under 1.0 the
+    balance cannot cover the rest of the cycle at the normal rate, at 1.0 it
+    covers it exactly, and above 1.0 each full allowance of surplus adds one.
+    The allowance held unused to the eve of the refill reads just under 2,
+    a fresh double reads 2. None when the cycle span breaks."""
     moment = now if now is not None else datetime.now(timezone.utc)
     remaining = _cycle_rest(cycle_day, moment)
-    if not remaining:
+    if remaining is None:
         return None
-    return float(balance) / (VENICE_CREDIT_ALLOWANCE * remaining)
+    paced = VENICE_CREDIT_ALLOWANCE * remaining
+    if balance < paced:
+        return float(balance) / paced
+    return 1.0 + (float(balance) - paced) / VENICE_CREDIT_ALLOWANCE
 
 
 def routing_tier(cycle_day: int, balance: float, now: datetime | None = None) -> str:

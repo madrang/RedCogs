@@ -37,7 +37,7 @@ from .catalog import (
   , VENICE_ROUTING_TRAIT_AT
 )
 from .credits import bundled_credit_gate, credit_ratio, next_refill, routing_tier
-from .decisions import model_decision_request, preset_for_traits, trait_strengths
+from .decisions import activity_pick, model_decision_request, select_preset, trait_strengths
 from .moderation import _blank_check, _header_flag, _moderation_status, _refusal_error
 from .tools import (
     _search_tool

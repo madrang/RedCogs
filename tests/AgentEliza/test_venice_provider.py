@@ -9,8 +9,8 @@ from aiohttp import ClientConnectionError
 import AgentEliza.providers.venice.audio as audio_flow
 from AgentEliza.llm_chat import ChatError
 from AgentEliza.providers.venice import (
-    VeniceApiProvider, VENICE_CHAT_CAPABILITIES, VENICE_CHAT_PRESETS, VENICE_FIXED_TOOLS, VENICE_ROUTING_LITE_COST, VENICE_ROUTING_TRAIT_AT, _environment_tool
-  , model_decision_request, preset_for_traits, trait_strengths,
+    VeniceApiProvider, VENICE_CHAT_PRESETS, VENICE_FIXED_TOOLS, VENICE_ROUTING_TRAIT_AT, _environment_tool
+  , activity_pick, model_decision_request, select_preset, trait_strengths,
 )
 from tests.AgentEliza.fakes import FakeResponse, FakeSession
 
@@ -401,65 +401,138 @@ async def test_the_retrieve_polls_stop_at_the_time_budget(monkeypatch) -> None:
     assert "time budget" in str(caught.value)
 
 
-def test_model_decision_request_asks_every_capability() -> None:
+def test_model_decision_request_asks_four_questions() -> None:
     body = model_decision_request("Madrang: fix this python bug")
     assert body["model"] == "jev-latest"
     assert body["state"] == "Madrang: fix this python bug"
-    # One noul question per capability, no options and no null answer.
-    assert set(body["questions"]) == set(VENICE_CHAT_CAPABILITIES)
-    assert all(question["type"] == "noul" for question in body["questions"].values())
-    assert all("criteria" not in question for question in body["questions"].values())
+    assert set(body["questions"]) == {"vision", "nsfw", "detail", "activity"}
+    # The binary capabilities ask as noul, no options and no null answer.
+    for trait in ("vision", "nsfw"):
+        assert body["questions"][trait]["type"] == "noul"
+        assert "criteria" not in body["questions"][trait]
+    # The detail axis is one score question: an ordered rubric, concise end first.
+    detail = body["questions"]["detail"]
+    assert detail["type"] == "score"
+    assert len(detail["criteria"]) == 3
+    # The activity is one choice question: an option per activity, other holds no rubric.
+    activity = body["questions"]["activity"]
+    assert activity["type"] == "choice"
+    assert set(activity["criteria"]) == {
+        "coding", "reasoning", "writing", "roleplay", "storytelling", "imagination", "other"
+    }
+    assert activity["criteria"]["other"] is None
 
 
 def test_trait_strengths_reads_and_clamps_the_probabilities() -> None:
     data = {"answers": {
-        "vision": {"probability": 0.9}
-      , "coding": {"noul": 0.6}
-      , "writing": {"value": 1.7}
+        "vision": {"noul": 0.9}
       , "nsfw": {"probability": True}
+      , "writing": {"value": 1.7}
       , "roleplay": {"probability": "high"}
       , "unknown question": {"probability": 0.8}
     }}
-    # The readable fields parse, the values clamp to the 0 to 1 range.
-    assert trait_strengths(data) == {"vision": 0.9, "coding": 0.6, "writing": 1.0}
-    # A boolean, a string, and a question outside the vocabulary stay out.
+    # The readable fields parse, a boolean stays out, and the activities
+    # never parse as noul judgments.
+    assert trait_strengths(data) == {"vision": 0.9}
+    # A boolean, a string, and a question outside the question set stay out.
     assert trait_strengths({}) == {}
     assert trait_strengths({"answers": {"vision": {"probability": None}}}) == {}
 
 
-def test_preset_for_traits_walks_the_catalog_order() -> None:
-    # No trait at the threshold: the first enabled preset answers.
-    assert preset_for_traits({}) == "DeepSeek Lite"
-    assert preset_for_traits({"coding": VENICE_ROUTING_TRAIT_AT - 0.01}) == "DeepSeek Lite"
-    # The first carrier of one trait wins the walk.
-    assert preset_for_traits({"vision": 0.9}) == "Gemma"
-    assert preset_for_traits({"coding": 0.8}) == "DeepSeek Pro"
-    # The imagination carriers sit in the Google pair, before the Aion storytellers.
-    assert preset_for_traits({"imagination": 0.9}) == "Gemma"
-    assert preset_for_traits({"imagination": 0.9, "coding": 0.8}) == "Gemini"
-    # A combination names the first preset that carries every trait.
-    assert preset_for_traits({"vision": 0.9, "thorough answers": 0.8}) == "Kimi"
-    # The lite ceiling keeps the walk at the cheap presets.
-    assert preset_for_traits({"vision": 0.9}, lite=True) == "Gemma"
-    assert preset_for_traits({"coding": 0.8}, lite=True) == "GLM Vision"
-    # No cheap preset carries roleplay: the configured model answers.
-    assert preset_for_traits({"roleplay": 0.9}, lite=True) is None
+def test_activity_pick_reads_the_choice_answer() -> None:
+    def pick(answer):
+        return activity_pick({"answers": {"activity": answer}})
+    # The live field and the drift guard both read.
+    assert pick({"choice": "coding"}) == "coding"
+    assert pick({"pick": "roleplay"}) == "roleplay"
+    # The other option, a word outside the list, and a missing judgment name no activity.
+    assert pick({"choice": "other"}) is None
+    assert pick({"choice": "long context"}) is None
+    assert pick({"probability": {"coding": 0.9}}) is None
+    assert activity_pick({}) is None
+
+
+def test_trait_strengths_names_the_activity_at_its_probability() -> None:
+    data = {"answers": {"activity": {
+        "choice": "coding"
+      , "probability": {"coding": 0.8, "other": 0.2}
+    }}}
+    # The picked activity rides the strengths at its own option probability.
+    assert trait_strengths(data) == {"coding": 0.8}
+    # A drifted map field keeps the activity out of the pairs, the pick still filters.
+    drifted = {"answers": {"activity": {"choice": "coding", "weights": {"coding": 0.7}}}}
+    assert trait_strengths(drifted) == {}
+    assert activity_pick(drifted) == "coding"
+
+
+def test_trait_strengths_reads_the_detail_axis_as_one_side() -> None:
+    def detail_answer(answer):
+        return trait_strengths({"answers": {"detail": answer}})
+    # Each end names its side at the distance from the rubric middle.
+    assert detail_answer({"score": 0.4}) == {"concise answers": pytest.approx(0.6)}
+    assert detail_answer({"score": 1.9}) == {"thorough answers": pytest.approx(0.9)}
+    # A score past the rubric clamps onto its end.
+    assert detail_answer({"score": 5}) == {"thorough answers": 1.0}
+    assert detail_answer({"score": -1}) == {"concise answers": 1.0}
+    # A score near the middle names a side under the threshold: the walk keeps the size open.
+    assert detail_answer({"score": 1.27}) == {"thorough answers": 0.27}
+    # One axis answers with one side, never both ends at once.
+    for score in (0.0, 0.7, 1.0, 1.3, 2.0):
+        sides = set(detail_answer({"score": score})) & {"concise answers", "thorough answers"}
+        assert len(sides) == 1
+    # The drift guard reads the value field, the unreadable answers stay out.
+    assert detail_answer({"value": 0.2}) == {"concise answers": 0.8}
+    assert detail_answer({"score": "low"}) == {}
+    assert detail_answer({"probability": 0.9}) == {}
+
+
+def test_select_preset_filters_then_scores_the_survivors() -> None:
+    # No trait at the threshold: every enabled preset survives, the score
+    # picks the richest cheap one.
+    assert select_preset({}) == "Gemini"
+    assert select_preset({"vision": VENICE_ROUTING_TRAIT_AT - 0.01}) == "Gemini"
+    # A needed trait removes the presets that miss it, the score ranks the rest.
+    assert select_preset({"vision": 0.9}) == "Gemini"
+    assert select_preset({}, activity="coding") == "Gemini"
+    # The roleplay carriers alone survive the activity, the richer one wins.
+    assert select_preset({}, activity="roleplay") == "Aion"
+    # A tight balance raises the cost pressure: the cheaper carrier wins.
+    assert select_preset({}, activity="roleplay", ratio=1.0) == "Aion Mini"
+    assert select_preset({"thorough answers": 0.9}) == "Aion"
+    assert select_preset({"thorough answers": 0.9}, ratio=1.0) == "DeepSeek Pro"
+    # The nsfw need dies unless the session allows it.
+    assert select_preset({"nsfw": 0.9}, nsfw_allowed=True) == "Aion"
+    assert select_preset({"nsfw": 0.9}) == "Gemini"
+    # The picked activity filters at any strength: the choice question has
+    # no threshold of its own.
+    assert select_preset({}, activity="reasoning") == "Aion"
+    # No enabled preset carries vision and storytelling together.
+    assert select_preset({"vision": 0.9}, activity="storytelling") is None
+    # The same extra count breaks to the cheaper preset.
+    assert select_preset({"vision": 0.9, "reasoning": 0.9, "concise answers": 0.9}) == "Qwen Lite"
 
 
 async def test_decide_model_posts_and_selects_the_preset() -> None:
     provider = VeniceApiProvider()
-    answer = {"answers": {"vision": {"probability": 0.91}, "coding": {"probability": 0.05}}}
+    answer = {"answers": {
+        "vision": {"probability": 0.91}
+      , "activity": {"choice": "coding", "probability": {"coding": 0.3, "other": 0.7}}
+    }}
     session = FakeSession(FakeResponse(200, answer))
-    assert await provider.decide_model(session, "test-key", "Madrang: hi") == "Gemma"
+    # The weak option probability still filters: the choice pick carries no threshold.
+    assert await provider.decide_model(session, "test-key", "Madrang: hi") == "Gemini"
     url, kwargs = session.calls[0]
     assert url == "https://api.venice.ai/api/v1/decisions"
     assert kwargs["headers"]["Authorization"] == "Bearer test-key"
     assert kwargs["json"]["model"] == "jev-latest"
     assert kwargs["json"]["state"] == "Madrang: hi"
-    assert set(kwargs["json"]["questions"]) == set(VENICE_CHAT_CAPABILITIES)
-    # The lite flag keeps the selection among the cheap presets.
-    lite = FakeSession(FakeResponse(200, {"answers": {"roleplay": {"probability": 0.9}}}))
-    assert await provider.decide_model(lite, "test-key", "Madrang: hi", lite=True) is None
+    # The questions: two noul, one score, one choice.
+    assert set(kwargs["json"]["questions"]) == {"vision", "nsfw", "detail", "activity"}
+    # The nsfw need dies unless the session allows it.
+    nsfw = FakeSession(FakeResponse(200, {"answers": {"nsfw": {"probability": 0.9}}}))
+    assert await provider.decide_model(nsfw, "test-key", "Madrang: hi") == "Gemini"
+    allowed = FakeSession(FakeResponse(200, {"answers": {"nsfw": {"probability": 0.9}}}))
+    assert await provider.decide_model(allowed, "test-key", "Madrang: hi", nsfw_allowed=True) == "Aion"
 
 
 async def test_decide_model_answers_none_on_failures() -> None:
@@ -470,9 +543,9 @@ async def test_decide_model_answers_none_on_failures() -> None:
     # An answer with no readable judgment keeps the configured model.
     empty = FakeSession(FakeResponse(200, {"answers": {}}))
     assert await provider.decide_model(empty, "k", "hi") is None
-    # A low answer across the vocabulary routes to the first preset.
-    low = FakeSession(FakeResponse(200, {"answers": {"coding": {"probability": 0.1}}}))
-    assert await provider.decide_model(low, "k", "hi") == "DeepSeek Lite"
+    # A low answer on the noul questions routes like a plain conversation.
+    low = FakeSession(FakeResponse(200, {"answers": {"vision": {"probability": 0.1}, "nsfw": {"probability": 0.1}}}))
+    assert await provider.decide_model(low, "k", "hi") == "Gemini"
 
 
 def test_tool_filter_names_the_fixed_tool_presets() -> None:

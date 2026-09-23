@@ -11,7 +11,7 @@ import aiohttp
 
 from ..base import Provider, analyze_image_tool
 from .catalog import JEV_MODEL_ID, VENICE_CREDIT_ALLOWANCE, VENICE_CHAT_PRESETS, VENICE_LIMIT_NAMES, VENICE_ROUTING_TRAIT_AT
-from .decisions import model_decision_request, preset_for_traits, trait_strengths
+from .decisions import activity_pick, model_decision_request, select_preset, trait_strengths
 from .tools import (
     _background_remove_tool
   , _edit_tool
@@ -258,13 +258,14 @@ class VeniceApiProvider(Provider):
             return None
         return float(usd) * 100
 
-    async def decide_model(self, session: aiohttp.ClientSession, api_key: str, state_text: str, lite: bool = False) -> str | None:
+    async def decide_model(self, session: aiohttp.ClientSession, api_key: str, state_text: str, ratio: float | None = None, nsfw_allowed: bool = False) -> str | None:
         """The chat preset the decision flow routes a new conversation to (POST /decisions,
-           one noul question per capability). The judgments name the trait strengths,
-           the selection walks the catalog in code: the first enabled preset that
-           covers the needed traits, the lite cost ceiling when lite holds.
-           None when the call fails or no judgment reads: the caller keeps the
-           configured model."""
+           a noul question per binary capability, one score question on the answer
+           detail axis, and one choice question on the activity). The judgments name the trait
+           strengths, the selection filters and scores the catalog in code. ratio scales
+           the cost pressure of the tiebreak (the balance over the paced cycle rest,
+           None when unreadable), nsfw_allowed gates the nsfw need. None when the call
+           fails or no judgment reads: the caller keeps the configured model."""
         body = model_decision_request(state_text)
         try:
             async with session.post(
@@ -285,6 +286,7 @@ class VeniceApiProvider(Provider):
             log.warning("The decision call failed: %s: %s", type(e).__name__, e)
             return None
         strengths = trait_strengths(data)
+        activity = activity_pick(data)
         # The answer rides the log as name: value pairs: the judgment fields
         # of the protocol stay out, the debugging reads the strengths alone.
         answered_model = data.get("model") if isinstance(data, dict) else None
@@ -293,13 +295,17 @@ class VeniceApiProvider(Provider):
             "The decision endpoint answered (%s): %s."
             , answered_model or JEV_MODEL_ID, pairs or "no readable judgment",
         )
-        if not strengths:
+        if not strengths and activity is None:
             # No judgment read: a drifted or broken answer, not a conversation
             # clear of every capability.
             return None
-        needed = sorted(trait for trait, strength in strengths.items() if strength >= VENICE_ROUTING_TRAIT_AT)
-        log.info("The decision traits at or above %.2f: %s.", VENICE_ROUTING_TRAIT_AT, ", ".join(needed) or "none")
-        return preset_for_traits(strengths, lite)
+        needed = {trait for trait, strength in strengths.items() if strength >= VENICE_ROUTING_TRAIT_AT}
+        if activity is not None:
+            needed.add(activity)
+        if not nsfw_allowed:
+            needed.discard("nsfw")
+        log.info("The decision traits at or above %.2f: %s.", VENICE_ROUTING_TRAIT_AT, ", ".join(sorted(needed)) or "none")
+        return select_preset(strengths, activity, nsfw_allowed, ratio)
 
     def parse_usage(self, data: dict) -> list:
         payload = data.get("data") if isinstance(data.get("data"), dict) else {}

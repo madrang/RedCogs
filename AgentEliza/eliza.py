@@ -25,7 +25,7 @@ from .pages import paginate
 from .polls import PollManager
 from .providers import DEFAULT_PROVIDER, PROVIDERS, provider_for, provider_named
 from .providers.venice import (
-    bundled_credit_gate, credit_ratio, next_refill, routing_tier
+    bundled_credit_gate, credit_ratio, next_refill
   , VENICE_CREDIT_ROUTING_FLOOR,
 )
 from .providers.venice.audio import queue_song, retrieve_song
@@ -369,14 +369,15 @@ class Eliza(commands.Cog):
         cycle rest. A guild hides the tools that carry the credit flag while this reads true."""
         return await self.bundled_credit_low()
 
-    async def decide_session_model(self, state_text: str) -> str | None:
+    async def decide_session_model(self, state_text: str, nsfw_allowed: bool = False) -> str | None:
         """The chat preset the decision model of the active provider picks for a new
            conversation (the Venice Jev router, POST /decisions).
            None when the provider ships no routing, the key is unset, or a model
            is fixed through `setmodel`: the fixed model answers every session.
-           The credit ratio tiers the options: the full set at the gate buffer,
-           the lite tier above the routing floor, and no routing under it, so the
-           default lite preset of the catalog answers a tight balance."""
+           The credit ratio scales the cost pressure of the selection (the
+           balance over the paced cycle rest), and under the routing floor the
+           routing stops: the configured model answers a balance that cannot
+           cover the rest."""
         provider = provider_for(await self._base_url())
         decider = getattr(provider, "decide_model", None)
         if decider is None:
@@ -388,22 +389,20 @@ class Eliza(commands.Cog):
             # A model fixed by the operator answers every session. The
             # environment tool still switches a conversation on its own.
             return None
-        lite = False
+        ratio = None
         cycle_day = await self.config.credit_cycle_day()
         balance = await self.bundled_credits()
         if cycle_day and balance is not None:
-            tier = routing_tier(cycle_day, balance)
-            if tier == "none":
-                ratio = credit_ratio(cycle_day, balance)
+            ratio = credit_ratio(cycle_day, balance)
+            if ratio is not None and ratio < VENICE_CREDIT_ROUTING_FLOOR:
                 log.info(
                     "The chat model routing skipped: the bundled balance %.0f credits reads the ratio %.2f, under the routing floor %.2f."
                     , balance, ratio, VENICE_CREDIT_ROUTING_FLOOR,
                 )
                 return None
-            lite = tier == "lite"
         if self.session is None or self.session.closed:
             self.session = self._new_session()
-        return await decider(self.session, api_key, state_text, lite)
+        return await decider(self.session, api_key, state_text, ratio, nsfw_allowed)
 
     async def _usage_rows(self):
         """The provider usage rows, cached. None when the check fails: never block on a failure."""
