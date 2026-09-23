@@ -472,3 +472,37 @@ VENICE_CHAT_PRESETS = {
       , "disabled": True # Spaz outs and repeat in loops the same 3 words. Broken!
     }
 }
+# The output token ceiling of each curated chat model (maxCompletionTokens of the live model list, read 2026-09-23).
+# The request carries it as max_tokens: an absent cap lets the backend reserve an output default that can exceed
+# the context of the model (minimax-m3-preview reserved 512000 of its 524288), so a small prompt already trips
+# the context check. The cap equals the true ceiling of the model, so it cuts no generation short.
+# An id missing here sends no cap and keeps the backend default.
+VENICE_CHAT_COMPLETION_TOKENS = {
+    "deepseek-v4-flash-0731": 32768
+  , "deepseek-v4-pro": 32768
+  , "google-gemma-4-31b-it": 8192
+  , "gemma-4-uncensored": 8192
+  , "gemini-3-8-flash": 65536
+  , "z-ai-glm-5-3-flash": 131072
+  , "z-ai-glm-5-3": 131072
+  , "inkling": 65536
+  , "kimi-k3": 131072
+  , "qwen-3-8-flash": 131072
+  , "qwen-3-8-27b": 65536
+  , "qwen-3-8-2-4t-a95b": 65536
+  , "aion-labs-aion-3-0-mini": 32768
+  , "aion-labs-aion-3-0": 32768
+  , "llama-3.2-3b": 4096
+  , "llama-3.3-70b": 4096
+  , "zai-org-glm-4.7-flash": 16384
+  , "olafangensan-glm-4.7-flash-heretic": 24000
+  , "venice-uncensored-1-2": 8192
+  , "grok-4-7": 200000
+  , "minimax-m3-preview": 65536
+  , "xiaomi-mimo-v2-5": 65536
+  , "mercury-2-5": 65536
+  , "seed-2-1-turbo": 65536
+  , "mistral-small-3-2-24b-instruct": 16384
+  , "nvidia-nemotron-3-nano-30b-a3b": 16384
+  , "nvidia-nemotron-3-ultra-550b-a55b": 32768
+}

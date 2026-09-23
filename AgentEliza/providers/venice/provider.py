@@ -10,7 +10,7 @@ import logging
 import aiohttp
 
 from ..base import Provider, analyze_image_tool
-from .catalog import JEV_MODEL_ID, VENICE_CREDIT_ALLOWANCE, VENICE_CHAT_PRESETS, VENICE_LIMIT_NAMES, VENICE_ROUTING_TRAIT_AT
+from .catalog import JEV_MODEL_ID, VENICE_CHAT_COMPLETION_TOKENS, VENICE_CREDIT_ALLOWANCE, VENICE_CHAT_PRESETS, VENICE_LIMIT_NAMES, VENICE_ROUTING_TRAIT_AT
 from .decisions import activity_pick, model_decision_request, select_preset, trait_strengths
 from .tools import (
     _background_remove_tool
@@ -226,7 +226,11 @@ class VeniceApiProvider(Provider):
           , "prompt_cache_key": str(session_id)
         }
         if model:
-            payload["model"] = self.request_model(model, nsfw)
+            resolved = self.request_model(model, nsfw)
+            payload["model"] = resolved
+            cap = VENICE_CHAT_COMPLETION_TOKENS.get(resolved)
+            if cap is not None:
+                payload["max_tokens"] = cap
         return payload
 
     def preset_menu(self) -> list:

@@ -550,8 +550,10 @@ class ChatEngine:
             if preset is not None:
                 # The provider payload extras ride this call too, not only the
                 # reply: Venice needs venice_parameters on every call, or its
-                # default system prompt joins the vision answer.
-                tool_payload.update(preset.extra_payload(session_id))
+                # default system prompt joins the vision answer. The model of
+                # the tool payload rides along: a raw id passes through the
+                # provider untouched, and the output cap of the model applies.
+                tool_payload.update(preset.extra_payload(session_id, tool_payload.get("model", "")))
             return await self.api.chat_request(api_key, tool_payload)
 
         async def fetch_url(url):

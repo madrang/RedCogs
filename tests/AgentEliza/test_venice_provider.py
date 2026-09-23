@@ -512,6 +512,27 @@ def test_select_preset_filters_then_scores_the_survivors() -> None:
     assert select_preset({"vision": 0.9, "reasoning": 0.9, "concise answers": 0.9}) == "Qwen Lite"
 
 
+def test_extra_payload_caps_the_output_tokens_of_a_known_model() -> None:
+    provider = VeniceApiProvider()
+    # A preset name resolves to its id and carries the ceiling of the live list.
+    payload = provider.extra_payload(7, "MiniMax")
+    assert payload["model"] == "minimax-m3-preview"
+    assert payload["max_tokens"] == 65536
+    # A raw id passes through and takes its own ceiling.
+    payload = provider.extra_payload(7, "kimi-k3")
+    assert payload["model"] == "kimi-k3"
+    assert payload["max_tokens"] == 131072
+    # The 18+ variant carries the ceiling of its own id.
+    payload = provider.extra_payload(7, "GLM Lite", nsfw=True)
+    assert payload["model"] == "olafangensan-glm-4.7-flash-heretic"
+    assert payload["max_tokens"] == 24000
+    # An unknown model sends no cap: the backend default holds.
+    payload = provider.extra_payload(7, "no-such-model")
+    assert "max_tokens" not in payload
+    # No model at all leaves the payload model alone.
+    assert "model" not in provider.extra_payload(7)
+
+
 async def test_decide_model_posts_and_selects_the_preset() -> None:
     provider = VeniceApiProvider()
     answer = {"answers": {
