@@ -196,15 +196,22 @@ def _model_property(catalog: dict) -> dict:
     return {"type": "string", "enum": list(catalog), "default": next(iter(catalog)), "description": description}
 
 
-def _image_tool() -> dict:
+def _image_tool(ceiling: float | None = None) -> dict:
     """The image generation endpoint as a native tool: one image, posted to the conversation.
        The endpoint answers in base64 JSON (return_binary stays false): the binary mode does not fit provider_post.
        The agent controls the prompt, the model, the aspect ratio, the negative prompt, and the cfg scale.
        The resolution, the quality, the watermark, the exif metadata, and the seed are preset here; safe_mode drops only on an age-restricted channel.
+       The credit ratio bounds the offered models at the context start: the priciest entries leave the descriptors first as the balance runs down, and the list stays frozen for the context lifetime so the prompt cache holds.
+       The handler checks the live ceiling at call time: a preset over it answers that it still exists but sits temporarily disabled for the low credit allowance, and a remembered preset outside the frozen list resolves through the full catalog.
        The tool result appends the moderation flags of the answer as a [venice] status line, and only a flag that reads yes appears: a clean answer carries no line.
        A refusal needs both marks, a blank image and the violation flag: only then the tool answers with an error and posts nothing.
        Without the flag, a small image posts as content.
     """
+    # The ceiling of the credit ratio bounds the catalog: the entries over
+    # it leave the enum and the handler walk. None serves the full catalog.
+    catalog = VENICE_IMAGE_MODELS
+    if ceiling is not None:
+        catalog = {name: entry for name, entry in VENICE_IMAGE_MODELS.items() if entry["cost"] <= ceiling}
 
     async def handler(arguments, engine):
         prompt = str(arguments.get("prompt") or "").strip()
@@ -212,21 +219,38 @@ def _image_tool() -> dict:
             return "Error: the prompt must be a non-empty string."
         asked = str(arguments.get("model") or "").strip()
         matched = None
-        for preset_name, entry in VENICE_IMAGE_MODELS.items():
+        for preset_name, entry in catalog.items():
             # The preset name is the only handle, in any casing; a blank
             # ask takes the first entry (the default).
             if not asked or preset_name.lower() == asked.lower():
                 matched = (preset_name, entry)
                 break
+        if matched is None and asked:
+            # A remembered preset may sit outside the frozen descriptors:
+            # the full catalog resolves it, the live ceiling decides.
+            for preset_name, entry in VENICE_IMAGE_MODELS.items():
+                if preset_name.lower() == asked.lower():
+                    matched = (preset_name, entry)
+                    break
         if matched is None:
             # Only the curated catalog, by its preset names: the dialect,
             # the prompt limit, and the cost of an unknown model are all
             # unverified (a raw model id is not a name).
             return (
                 f"Error: unknown image model {asked}. "
-                f"Valid models: {', '.join(VENICE_IMAGE_MODELS)}."
+                f"Valid models: {', '.join(catalog)}."
             )
         preset_name, entry = matched
+        # The live ceiling disables a preset without touching the frozen
+        # descriptors: the prompt cache holds, the refusal carries the news.
+        getter = getattr(engine, "media_ceiling", None)
+        live = await getter("image") if getter is not None else None
+        if live is not None and entry["cost"] > live:
+            allowed = ", ".join(name for name, other in VENICE_IMAGE_MODELS.items() if other["cost"] <= live)
+            return (
+                f"Error: the image preset {preset_name} still exists but sits temporarily disabled: "
+                f"the bundled credit allowance runs low. Valid models: {allowed}."
+            )
         model = entry["model"]
         prompt_limit = VENICE_IMAGE_PROMPT_LIMITS.get(model, VENICE_PROMPT_MAX_CHARS)
         if len(prompt) > prompt_limit:
@@ -315,7 +339,7 @@ def _image_tool() -> dict:
             "type": "object"
             , "properties": {
                 "prompt": {"type": "string", "description": "What to draw."}
-                , "model": _model_property(VENICE_IMAGE_MODELS)
+                , "model": _model_property(catalog)
                 , "aspect_ratio": {"type": "string", "description": "The aspect ratio of the image, for example 1:1, 16:9, or 9:16. The tool maps it to pixels for a pixel model."}
                 , "negative_prompt": {"type": "string", "description": "What to keep out of the image."}
                 , "cfg_scale": {"type": "number", "description": "How strictly a pixel model follows the prompt. A number over 0 and at most 20. Omit it for the endpoint default."}
@@ -326,7 +350,7 @@ def _image_tool() -> dict:
     }
 
 
-def _edit_tool() -> dict:
+def _edit_tool(ceiling: float | None = None) -> dict:
     """The image edit endpoints as a native tool: one edited image, posted to the conversation.
        The endpoints always answer in binary (the JSON mode of generate does not exist here),
        so the call rides provider_post with binary=True and the answer format names the file extension.
@@ -335,9 +359,15 @@ def _edit_tool() -> dict:
        One input image rides /image/edit. Extra images ride /image/multi-edit: the first image stays the base, the rest work as layers or masks.
        The multi-edit endpoint names its model field modelId, and only a compositing model takes extra images (the catalog max_images key).
        The agent controls the image, the extra images, the prompt, the model, and the aspect ratio.
+       The credit ratio bounds the offered models at the context start like generate_image, the handler checks the live ceiling at call time.
        safe_mode drops only on an age-restricted channel.
        The moderation flags report like generate_image: only a flag that reads yes appears, and a blank refusal needs both marks.
     """
+    # The ceiling of the credit ratio bounds the catalog: the entries over
+    # it leave the enum and the handler walk. None serves the full catalog.
+    catalog = VENICE_EDIT_MODELS
+    if ceiling is not None:
+        catalog = {name: entry for name, entry in VENICE_EDIT_MODELS.items() if entry["cost"] <= ceiling}
 
     async def handler(arguments, engine):
         image = str(arguments.get("image") or "").strip()
@@ -358,28 +388,45 @@ def _edit_tool() -> dict:
             return "Error: the prompt must say what to change."
         asked = str(arguments.get("model") or "").strip()
         matched = None
-        for preset_name, entry in VENICE_EDIT_MODELS.items():
+        for preset_name, entry in catalog.items():
             # The preset name is the only handle, in any casing; a blank
             # ask takes the first entry (the default).
             if not asked or preset_name.lower() == asked.lower():
                 matched = (preset_name, entry)
                 break
+        if matched is None and asked:
+            # A remembered preset may sit outside the frozen descriptors:
+            # the full catalog resolves it, the live ceiling decides.
+            for preset_name, entry in VENICE_EDIT_MODELS.items():
+                if preset_name.lower() == asked.lower():
+                    matched = (preset_name, entry)
+                    break
         if matched is None:
             # Only the curated catalog, by its preset names: a generate
             # model here edits through an untested path at an unknown
             # price (a raw model id is not a name).
             return (
                 f"Error: unknown edit model {asked}. "
-                f"Valid models: {', '.join(VENICE_EDIT_MODELS)}."
+                f"Valid models: {', '.join(catalog)}."
             )
         preset_name, entry = matched
+        # The live ceiling disables a preset without touching the frozen
+        # descriptors: the prompt cache holds, the refusal carries the news.
+        getter = getattr(engine, "media_ceiling", None)
+        live = await getter("edit") if getter is not None else None
+        if live is not None and entry["cost"] > live:
+            allowed = ", ".join(name for name, other in VENICE_EDIT_MODELS.items() if other["cost"] <= live)
+            return (
+                f"Error: the edit preset {preset_name} still exists but sits temporarily disabled: "
+                f"the bundled credit allowance runs low. Valid models: {allowed}."
+            )
         model = entry["model"]
         prompt_limit = VENICE_IMAGE_PROMPT_LIMITS.get(model, VENICE_PROMPT_MAX_CHARS)
         if len(prompt) > prompt_limit:
             return f"Error: the prompt is over the {prompt_limit}-character limit of the model {preset_name}."
         if extras:
             if "max_images" not in entry:
-                compositing = ", ".join(name for name, other in VENICE_EDIT_MODELS.items() if "max_images" in other)
+                compositing = ", ".join(name for name, other in catalog.items() if "max_images" in other)
                 return (
                     f"Error: the model {preset_name} composites no extra image. "
                     f"Models that composite: {compositing}."
@@ -481,7 +528,7 @@ def _edit_tool() -> dict:
                   , "description": "More http(s) URLs the model composites with the base picture, as layers or masks. The model property names the models that take them."
                 }
                 , "prompt": {"type": "string", "description": "What to change in the picture."}
-                , "model": _model_property(VENICE_EDIT_MODELS)
+                , "model": _model_property(catalog)
                 , "aspect_ratio": {
                     "type": "string"
                     , "default": "auto"

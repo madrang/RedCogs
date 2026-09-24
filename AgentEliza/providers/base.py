@@ -188,13 +188,18 @@ class Provider:
         native tool payloads set their own model."""
         return {}
 
-    def native_tools(self) -> list:
+    def native_tools(self, ceilings: dict | None = None) -> list:
         """Tool definitions the provider implements itself, live while it is active.
 
         Each entry: {"name", "description", "parameters", "handler"}. The
         handler is an async callable (arguments, engine) returning text.
         engine is the ToolContext of the reply (llm_chat): the engine
         builds one per reply, and a new capability is a field on it.
+        ceilings names the render price ceilings of the credit ratio (the
+        "image" and "edit" floats, None for no ceiling), frozen at the
+        context start so the tool list stays prompt-cache stable: a media
+        catalog tool offers only the entries at or under its ceiling, and
+        its handler checks the live ceiling at call time instead.
         call_api posts one chat-completions payload to the provider.
         fetch_url downloads one URL to (bytes, content_type), or None on
         failure. api_post sends one POST to a REST path of the provider,

@@ -636,6 +636,40 @@ async def test_a_fresh_session_opens_from_the_compaction_exchange() -> None:
     assert messages[-1]["content"].endswith("Madrang <@7>: hi")
 
 
+class CeilingApi(FakeApi):
+    """The cog stand-in with media ceilings for the render descriptors."""
+
+    def __init__(self, *args, ceilings=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.ceiling_answers = list(ceilings or [])
+        self.ceiling_reads = 0
+
+    async def media_ceilings(self):
+        self.ceiling_reads += 1
+        if len(self.ceiling_answers) > 1:
+            return self.ceiling_answers.pop(0)
+        return self.ceiling_answers[0] if self.ceiling_answers else {"image": None, "edit": None}
+
+
+async def test_the_render_descriptors_freeze_for_the_context() -> None:
+    native = [{
+        "name": "generate_image", "description": "d", "parameters": {"type": "object", "properties": {}}
+      , "media": "images", "handler": None
+    }]
+    preset = FakePreset(native=native)
+    tight = {"image": 0.01, "edit": 0.02}
+    open_ = {"image": None, "edit": None}
+    api = CeilingApi([close("Hello."), close("Done.")], preset=preset, ceilings=[tight, open_])
+    engine = build_engine(api)
+    assert await drain(engine, "hi") == ["Hello."]
+    assert preset.native_ceilings[0] is tight
+    assert await drain(engine, "more") == ["Done."]
+    # The second reply reuses the frozen ceilings: the descriptors and the
+    # prompt cache hold, and the cog read the ceilings once.
+    assert preset.native_ceilings[1] is tight
+    assert api.ceiling_reads == 1
+
+
 async def test_a_session_without_the_router_skips_the_decision_call() -> None:
     # The plain stand-in carries no decide_session_model: a provider without
     # the capability never sees a call.

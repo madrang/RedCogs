@@ -3,6 +3,7 @@ rides the engine context (the ToolContext fields)."""
 
 from types import SimpleNamespace
 
+from AgentEliza.providers import PROVIDERS
 from AgentEliza.providers.kimi_api import KimiApiProvider
 from AgentEliza.providers.kimi_code import KimiCodeProvider
 from AgentEliza.providers.zai import ZaiApiProvider, ZaiCodeProvider
@@ -31,6 +32,14 @@ def context_with(*, vision_chat=False, fetch=None, shown=False):
         , vision_chat=vision_chat, show_image=show_image
     )
     return engine, calls, offers
+
+
+def test_every_provider_native_tools_accepts_the_ceilings_argument() -> None:
+    # The engine passes the render ceilings to every provider's
+    # native_tools: a provider without a media catalog takes the argument
+    # and leaves it unused.
+    for provider in PROVIDERS:
+        provider.native_tools(None)
 
 
 async def test_every_provider_answers_analyze_image_through_the_context() -> None:

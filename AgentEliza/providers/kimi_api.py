@@ -17,8 +17,9 @@ class KimiApiProvider(Provider):
     # to a resolved model in this set.
     vision_models = {"kimi-k3"}
 
-    def native_tools(self) -> list:
-        """The vision tool: image analysis, only with a Kimi provider."""
+    def native_tools(self, ceilings: dict | None = None) -> list:
+        """The vision tool: image analysis, only with a Kimi provider.
+        The ceilings argument goes unused: this provider carries no media catalog."""
         return [analyze_image_tool(self.vision_model)]
 
     def extra_payload(self, session_id: int, model: str = "", nsfw: bool = False) -> dict:

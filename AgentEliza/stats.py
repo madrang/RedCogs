@@ -34,6 +34,21 @@ def media_windows(ratio: float | None) -> dict | None:
       , "channel": 1 + round(part * (MEDIA_RATE_CHANNEL - 1))
     }
 
+
+def cost_ceiling(ratio: float | None, low: float, high: float) -> float | None:
+    """The price ceiling of a media catalog at a credit ratio: None (no
+    ceiling) at and above the top band or on an unread ratio, a linear slide
+    from high to low between the top band and the floor band, and low under
+    it. The bands mirror media_windows: the same ratio loosens or tightens
+    both."""
+    if ratio is None or ratio >= MEDIA_LIMIT_AT:
+        return None
+    if ratio < MEDIA_LIMIT_FLOOR:
+        return low
+    part = (ratio - MEDIA_LIMIT_FLOOR) / (MEDIA_LIMIT_AT - MEDIA_LIMIT_FLOOR)
+    return low + (high - low) * part
+
+
 # Default counters registered at each scope.
 _STATS_DEFAULT = {
       "messages": 0

@@ -125,7 +125,7 @@ class ToolContext:
     handler receives it beside the arguments, and a new capability is a
     field here, not a new argument of every handler."""
 
-    def __init__(self, *, call_api, fetch_url, api_post, send_file, channel_nsfw, set_conversation_model, vision_chat, show_image, request_song=None):
+    def __init__(self, *, call_api, fetch_url, api_post, send_file, channel_nsfw, set_conversation_model, vision_chat, show_image, request_song=None, media_ceiling=None):
         self.call_api = call_api
         self.fetch_url = fetch_url
         self.api_post = api_post
@@ -135,6 +135,7 @@ class ToolContext:
         self.vision_chat = vision_chat
         self.show_image = show_image
         self.request_song = request_song
+        self.media_ceiling = media_ceiling
 
 
 class ChatEngine:
@@ -506,7 +507,16 @@ class ChatEngine:
                 # provider without the policy keeps the full constants.
                 media_windows = await self.api.media_limits() or {}
                 guild_gate = guild_id is not None and not media_windows
-            for entry in preset.native_tools():
+            ceilings = None
+            if hasattr(self.api, "media_ceilings"):
+                # The render descriptors freeze at the context start: the
+                # tool list stays stable inside a context, so the prompt
+                # cache holds. The handlers check the live ceiling at call
+                # time and answer the temporary-disable error.
+                if expired or session.render_ceilings is None:
+                    session.render_ceilings = await self.api.media_ceilings()
+                ceilings = session.render_ceilings
+            for entry in preset.native_tools(ceilings):
                 if allowed is not None and entry["name"] not in allowed:
                     # The filter keeps the fixed tool set alone.
                     continue
@@ -662,13 +672,23 @@ class ChatEngine:
             request = dict(request, requester_id=user_id, requester_name=speaker)
             return await api_request_song(session_id, channel_id, request)
 
+        async def media_ceiling(kind: str):
+            """The live render price ceiling of the credit ratio for a media
+            catalog ("image" or "edit"), None when no ceiling holds. A model
+            over it answers the temporary-disable error at call time, long
+            after the descriptors froze their list at the context start."""
+            if not hasattr(self.api, "media_ceilings"):
+                return None
+            ceilings = await self.api.media_ceilings()
+            return ceilings.get(kind) if isinstance(ceilings, dict) else None
+
         # The surface the native provider tools of this reply run on.
         tool_context = ToolContext(
             call_api=call_api, fetch_url=fetch_url, api_post=api_post
             , send_file=send_file, channel_nsfw=channel_nsfw
             , set_conversation_model=set_conversation_model
             , vision_chat=vision_chat, show_image=show_image
-            , request_song=request_song
+            , request_song=request_song, media_ceiling=media_ceiling
         )
 
         # The user turn of this message. On a vision chat model the images

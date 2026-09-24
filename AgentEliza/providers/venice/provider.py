@@ -111,19 +111,20 @@ class VeniceApiProvider(Provider):
         form.add_field("model", self.speech_model)
         return "/audio/transcriptions", form
 
-    def native_tools(self) -> list:
+    def native_tools(self, ceilings: dict | None = None) -> list:
         """The provider tools: the vision tool, the augment set, the image generation and edit, the background removal, the song generation, and the environment tool.
            web_search takes the harness name, so the Venice search replaces the DuckDuckGo default while this provider is active.
            web_scrape, parse_document, generate_image, edit_image, remove_background, generate_song, and configure_environment join as additions;
            the harness web_fetch keeps its place, it reads the Discord file hosts with the bot token.
+           ceilings bounds the render catalogs of the image tools by the credit ratio.
         """
         return [
             analyze_image_tool(self.vision_model)
           , _search_tool()
           , _scrape_tool()
           , _parse_tool()
-          , _image_tool()
-          , _edit_tool()
+          , _image_tool((ceilings or {}).get("image"))
+          , _edit_tool((ceilings or {}).get("edit"))
           , _background_remove_tool()
           , _music_tool()
           , _environment_tool()

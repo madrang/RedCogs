@@ -1,6 +1,8 @@
 """The media windows of the credit ratio: the bands and the lerped slide."""
 
-from AgentEliza.stats import MEDIA_RATE_CHANNEL, MEDIA_RATE_USER, media_windows
+import pytest
+
+from AgentEliza.stats import MEDIA_RATE_CHANNEL, MEDIA_RATE_USER, cost_ceiling, media_windows
 
 
 def test_the_full_windows_hold_at_and_above_the_top_band() -> None:
@@ -28,3 +30,14 @@ def test_one_generation_per_hour_holds_above_the_disable_band() -> None:
 def test_the_disable_band_closes_the_media_tools() -> None:
     assert media_windows(0.74) is None
     assert media_windows(0.0) is None
+
+
+def test_the_cost_ceiling_slides_with_the_same_bands() -> None:
+    # No ceiling on a healthy balance or an unread ratio: the full catalog.
+    assert cost_ceiling(None, 0.01, 0.29) is None
+    assert cost_ceiling(1.25, 0.01, 0.29) is None
+    # The slide covers the price range between the bands.
+    assert cost_ceiling(1.075, 0.01, 0.29) == pytest.approx(0.01 + 0.5 * (0.29 - 0.01))
+    # Under the floor band the cheapest entry alone holds.
+    assert cost_ceiling(0.9, 0.01, 0.29) == 0.01
+    assert cost_ceiling(0.75, 0.01, 0.29) == 0.01

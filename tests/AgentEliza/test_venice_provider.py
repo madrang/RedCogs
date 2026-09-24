@@ -9,10 +9,17 @@ from aiohttp import ClientConnectionError
 import AgentEliza.providers.venice.audio as audio_flow
 from AgentEliza.llm_chat import ChatError
 from AgentEliza.providers.venice import (
-    VeniceApiProvider, VENICE_CHAT_PRESETS, VENICE_FIXED_TOOLS, VENICE_ROUTING_TRAIT_AT, _environment_tool
+    VeniceApiProvider, VENICE_CHAT_PRESETS, VENICE_EDIT_MODELS, VENICE_FIXED_TOOLS, VENICE_IMAGE_MODELS, VENICE_ROUTING_TRAIT_AT, _edit_tool, _environment_tool, _image_tool
   , activity_pick, model_decision_request, select_preset, trait_strengths,
 )
 from tests.AgentEliza.fakes import FakeResponse, FakeSession
+
+def _ceiling_of(ceilings: dict):
+    """An async media_ceiling stand-in answering a fixed dict."""
+    async def getter(kind):
+        return ceilings.get(kind)
+    return getter
+
 
 USAGE_ANSWER = {
     "data": {
@@ -156,6 +163,57 @@ async def test_the_environment_tool_returns_the_failed_restore() -> None:
     engine = SimpleNamespace(channel_nsfw=None, set_conversation_model=refused)
     answer = await entry["handler"]({"capabilities": ["default"]}, engine)
     assert answer == "Error: the condense before the move failed."
+
+
+def test_the_render_catalogs_bound_by_the_cost_ceiling() -> None:
+    # A tight ceiling keeps the cheapest entries alone: the 0.01 tier of
+    # generate, the cheapest edit alone.
+    generate = _image_tool(0.01)
+    enum = generate["parameters"]["properties"]["model"]["enum"]
+    assert set(enum) == {"Lustify", "Chroma", "Z Turbo", "Venice SD", "WAI Illustrious"}
+    edit = _edit_tool(0.02)
+    assert edit["parameters"]["properties"]["model"]["enum"] == ["Muse"]
+    # No ceiling serves the full catalogs.
+    assert len(_image_tool(None)["parameters"]["properties"]["model"]["enum"]) == len(VENICE_IMAGE_MODELS)
+    assert len(_edit_tool(None)["parameters"]["properties"]["model"]["enum"]) == len(VENICE_EDIT_MODELS)
+
+
+async def test_the_render_tools_refuse_a_preset_over_the_live_ceiling() -> None:
+    # The descriptors hold the full catalog: only the live ceiling disables.
+    engine = SimpleNamespace(media_ceiling=_ceiling_of({"image": 0.02, "edit": 0.02}))
+    generate = _image_tool()
+    answer = await generate["handler"]({"prompt": "a cat", "model": "Nano Banana"}, engine)
+    assert answer.startswith(
+        "Error: the image preset Nano Banana still exists but sits temporarily disabled: the bundled credit allowance runs low."
+    )
+    assert "Valid models: Muse" in answer
+    edit = _edit_tool()
+    answer = await edit["handler"]({"image": "https://x/y.png", "prompt": "a hat", "model": "GPT Image"}, engine)
+    assert answer.startswith(
+        "Error: the edit preset GPT Image still exists but sits temporarily disabled: the bundled credit allowance runs low."
+    )
+    # A model outside the catalog entirely stays an unknown model.
+    answer = await generate["handler"]({"prompt": "a cat", "model": "no-such-model"}, engine)
+    assert answer.startswith("Error: unknown image model no-such-model.")
+
+
+async def test_a_remembered_preset_resolves_and_runs_under_no_live_ceiling() -> None:
+    # The descriptors froze tight, the agent remembers a pricier preset,
+    # and the live ceiling reads None: the remembered preset runs.
+    posts: list = []
+
+    async def api_post(path, *, json_body=None, data=None, binary=False, timeout=120):
+        posts.append(json_body)
+        return {"images": [base64.b64encode(b"png").decode()]}, {}
+
+    async def send_file(name, raw):
+        return f"posted {name}"
+
+    engine = SimpleNamespace(media_ceiling=None, api_post=api_post, send_file=send_file, channel_nsfw=None)
+    generate = _image_tool(0.01)
+    answer = await generate["handler"]({"prompt": "a cat", "model": "Muse"}, engine)
+    assert not answer.startswith("Error")
+    assert posts[0]["model"] == "muse-image"
 
 
 async def test_the_edit_tool_sends_the_2k_preset_and_no_quality() -> None:

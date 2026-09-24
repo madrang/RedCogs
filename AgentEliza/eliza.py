@@ -26,10 +26,10 @@ from .polls import PollManager
 from .providers import DEFAULT_PROVIDER, PROVIDERS, provider_for, provider_named
 from .providers.venice import (
     credit_ratio, next_refill
-  , VENICE_CREDIT_ROUTING_FLOOR,
+  , VENICE_CREDIT_ROUTING_FLOOR, VENICE_EDIT_MODELS, VENICE_IMAGE_MODELS,
 )
 from .providers.venice.audio import queue_song, retrieve_song
-from .stats import MEDIA_DISABLE_AT, MEDIA_LIMIT_AT, MEDIA_LIMIT_FLOOR, ScopeStats, media_windows, month_key
+from .stats import MEDIA_DISABLE_AT, MEDIA_LIMIT_AT, MEDIA_LIMIT_FLOOR, ScopeStats, cost_ceiling, media_windows, month_key
 from .tools import HarnessOptions, HarnessTools, MESSAGE_TIME_FORMAT
 from .tools.base import TRANSCRIBE_MAX_BYTES, is_audio_attachment, speech_embed
 from .tools.files import channel_post_count
@@ -367,6 +367,20 @@ class Eliza(commands.Cog):
         A missing cycle day or an unread balance keeps the full windows:
         an unknown ratio never blocks the media tools."""
         return media_windows(await self.credit_ratio_now())
+
+    async def media_ceilings(self):
+        """The render price ceilings of the bundled credit ratio: the image
+        and the edit catalog each slide from their priciest entry to their
+        cheapest between the top band and the floor band of the ratio, and
+        hold the cheapest under it. None names no ceiling: a healthy balance
+        or an unread ratio."""
+        ratio = await self.credit_ratio_now()
+
+        def ceiling(catalog: dict):
+            costs = [entry["cost"] for entry in catalog.values()]
+            return cost_ceiling(ratio, min(costs), max(costs))
+
+        return {"image": ceiling(VENICE_IMAGE_MODELS), "edit": ceiling(VENICE_EDIT_MODELS)}
 
     async def decide_session_model(self, state_text: str, nsfw_allowed: bool = False) -> str | None:
         """The chat preset the decision model of the active provider picks for a new

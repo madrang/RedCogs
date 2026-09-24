@@ -146,6 +146,11 @@ class Session:
         # native provider tool. None answers with the configured model. The
         # override survives a context restart and dies with the session.
         self.model_override = None
+        # The render price ceilings the media tool descriptors froze at the
+        # context start, None before the first freeze. The descriptors hold
+        # them for the context lifetime, so the tool list stays stable and
+        # the prompt cache holds. The handlers check the live ceiling.
+        self.render_ceilings = None
 
     def acquire(self):
         """The session lock with a timeout on the wait.

@@ -154,8 +154,12 @@ class FakePreset:
         self.fallback = fallback
         self._tool_filter = tool_filter
         self._mcp = mcp
+        # The ceilings argument of every native_tools call, for the freeze
+        # assertions of the render descriptors.
+        self.native_ceilings: list = []
 
-    def native_tools(self):
+    def native_tools(self, ceilings=None):
+        self.native_ceilings.append(ceilings)
         return self._native
 
     def resolve_model(self, model):

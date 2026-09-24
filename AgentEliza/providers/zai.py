@@ -32,8 +32,9 @@ class ZaiProvider(Provider):
         "glm-5.3": 1_000_000
       , "glm-5.2": 1_000_000
     }
-    def native_tools(self) -> list:
-        """The vision tool: image analysis, only with a Z.AI provider."""
+    def native_tools(self, ceilings: dict | None = None) -> list:
+        """The vision tool: image analysis, only with a Z.AI provider.
+        The ceilings argument goes unused: this provider carries no media catalog."""
         return [analyze_image_tool(self.vision_model, validate=_validate_image)]
 
     def mcp_servers(self, api_key: str) -> dict:
