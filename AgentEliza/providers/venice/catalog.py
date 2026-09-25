@@ -207,7 +207,7 @@ VENICE_MUSIC_MODELS = {
   , "Lyria": {"model": "lyria-3-pro", "traits": [], "cost": 0.10}  # released May 21, 2026
   , "MiniMax": {"model": "minimax-music-v26", "traits": ["lyrics"], "cost": 0.18}  # released Apr 11, 2026
   , "ACE-Step": {"model": "ace-step-15", "traits": ["lyrics", "uncensored"], "cost": 0.03}  # released Feb 22, 2026
-  , "ElevenLabs": {"model": "elevenlabs-music", "traits": ["instrumental", "uncensored"], "cost": 0.69}  # released Feb 21, 2026
+  , "ElevenLabs": {"model": "elevenlabs-music-v2-5", "traits": ["instrumental"], "cost": 0.69}  # released Sep 14, 2026
 }
 # The request dials and text limits of each curated music model (model_spec of the live list).
 # Keys per model id:
@@ -222,7 +222,7 @@ VENICE_MUSIC_CONSTRAINTS = {
   , "lyria-3-pro": {"prompt": 5000}
   , "minimax-music-v26": {"prompt": 300, "lyrics": 1000, "instrumental": True}
   , "ace-step-15": {"prompt": 512, "lyrics": 4096, "duration": (60, 210, 60)}
-  , "elevenlabs-music": {"prompt": 4096, "duration": (3, 600, 60), "instrumental": True}
+  , "elevenlabs-music-v2-5": {"prompt": 4096, "duration": (3, 600, 60), "instrumental": True}
 }
 # The answer formats of the retrieve endpoint, mapped to file extensions.
 VENICE_MUSIC_FORMATS = {"audio/mpeg": "mp3", "audio/mp3": "mp3", "audio/wav": "wav", "audio/flac": "flac", "audio/mp4": "m4a", "audio/x-m4a": "m4a"}
@@ -241,11 +241,12 @@ VENICE_ROUTING_LITE_COST = 0.10
 # The strength a capability must read before the chat routing counts it as needed.
 VENICE_ROUTING_TRAIT_AT = 0.5
 # The cost pressure of the selection tiebreak: the pressure names the cost
-# step one extra preset trait must stay under. A healthy balance reads the
-# min, the routing floor reads the max, and the ratio between them scales
-# linearly.
-VENICE_ROUTING_PRESSURE_MIN = 1.0
-VENICE_ROUTING_PRESSURE_MAX = 8.0
+# step in USD per 1M output tokens one extra preset trait must stay under.
+# A healthy balance reads the min, where one trait outweighs the whole span
+# of the enabled presets. The routing floor reads eight times the min, and
+# the ratio between them scales linearly.
+VENICE_ROUTING_PRESSURE_MIN = 0.05
+VENICE_ROUTING_PRESSURE_MAX = 0.4
 # The decision model of the chat routing: a fresh session asks it which chat
 # preset fits its opening message. Source: the live decision list
 # (GET /models?type=decision, read 2026-09-20), the only id it publishes.
@@ -274,8 +275,8 @@ VENICE_FIXED_TOOLS = (
 )
 # Chat presets: a short display name for the agent and the user, the model id behind it, an optional NSFW variant id for conversations behind the 18+ gate, the capability names the preset provides, and the cost of the preset.
 # The variant carries the same capabilities as the normal id: a model whose capabilities differ joins the catalog under its own preset.
-# Cost: the operating price of the model on a 0..1 scale. The operating price is 10x the input price plus 1x the output and cache-read prices, each per 1M tokens (the operating_usd_per_m column of scripts/list_models.py).
-# The scale anchors DeepSeek Lite at 0 and the priciest catalog model at 1. A negative cost marks a preset cheaper than the default.
+# Cost: the output price of the preset model in USD per 1M output tokens (the output_usd_per_m column of scripts/list_models.py, read 2026-09-25).
+# The decision routing and the overload fallback rank the presets by this price.
 # The catalog order is preference order: the first preset that satisfies a request wins. The short names are the only model handle the agent ever sees.
 # An entry may carry disabled True: the environment tool and the overload fallback skip it, so the agent cannot reach it, while the user commands (setmodel, the providers menu) keep it.
 # An entry may carry tool_filter, the names of the only tools its models may carry: the engine drops every other tool, the MCP set included.
@@ -285,15 +286,15 @@ VENICE_CHAT_PRESETS = {
     "DeepSeek Lite": {
         # No coding trait (the operator's call): a coding request upgrades to DeepSeek Pro, the next preset that carries it.
         "normal": "deepseek-v4-flash-0731"  # released Jul 31, 2026
-        # "normal": "deepseek-v4-1-flash" # Sep 9, 2026 - cost: 0.06
+        # "normal": "deepseek-v4-1-flash" # Sep 9, 2026 - cost: 1.5
       , "traits": ["long context", "concise answers"]
-      , "cost": 0.0
+      , "cost": 0.35
     }
   , "DeepSeek Pro": {
         "normal": "deepseek-v4-pro"  # released Apr 24, 2026
-        # "normal": "deepseek-v4-pro-0813" # Aug 13, 2026 - cost: 0.36
+        # "normal": "deepseek-v4-pro-0813" # Aug 13, 2026 - cost: 4.95
       , "traits": ["long context", "coding", "thorough answers", "writing"]
-      , "cost": 0.33
+      , "cost": 3.301
     }
 
     # Google
@@ -301,14 +302,14 @@ VENICE_CHAT_PRESETS = {
         # The fixed tool list stays under the model cap of 20 tool definitions.
         "normal": "google-gemma-4-31b-it"  # released Apr 3, 2026
       , "traits": ["vision", "reasoning", "nsfw", "imagination"]
-      , "cost": -0.01
+      , "cost": 0.36
       , "nsfw": "gemma-4-uncensored"  # released Apr 13, 2026
       , "tool_filter": VENICE_FIXED_TOOLS
     }
     , "Gemini": {
         "normal": "gemini-3-8-flash"  # released Sep 2, 2026
       , "traits": ["vision", "coding", "long context", "imagination", "concise answers"]
-      , "cost": 0.22
+      , "cost": 4.6875
       , "mcp": False
     }
 
@@ -317,50 +318,50 @@ VENICE_CHAT_PRESETS = {
         # Disabled, untested - 128K Ctx.
         "normal": "llama-3.2-3b"  # released Oct 3, 2024
       , "traits": ["concise answers"]
-      , "cost": 0.0
+      , "cost": 0.6
       , "disabled": True
     }
   , "Llama": {
         # Disabled, untested - 128K Ctx.
         "normal": "llama-3.3-70b"  # released Apr 6, 2025
       , "traits": ["thorough answers"]
-      , "cost": 0.14
+      , "cost": 2.8
       , "disabled": True
     }
 
     # Z.AI
   , "GLM Lite": {
         # Disabled for the agent: Low quality output.
-        # The negative-cost preset stays a manual choice of the operator.
+        # The cheap preset stays a manual choice of the operator.
         "normal": "zai-org-glm-4.7-flash"  # released Jan 29, 2026
       , "traits": ["concise answers"]
-      , "cost": -0.02
+      , "cost": 0.4
       , "nsfw": "olafangensan-glm-4.7-flash-heretic"  # released Feb 4, 2026
       , "disabled": True
     }
   , "GLM Vision": {
         "normal": "z-ai-glm-5-3-flash"  # released Aug 21, 2026
       , "traits": ["long context", "vision", "coding"]
-      , "cost": 0.0
+      , "cost": 0.5
     }
   , "GLM 1M": {
         "normal": "z-ai-glm-5-3"  # released Aug 18, 2026
       , "traits": ["long context", "coding", "thorough answers"]
-      , "cost": 0.39
+      , "cost": 5.5
     }
 
     # Thinking Machines
   , "Inkling": {
         "normal": "inkling"  # released Jul 16, 2026
       , "traits": ["vision", "concise answers"]
-      , "cost": 0.29
+      , "cost": 5.0625
     }
 
     # MoonshotAI
   , "Kimi": {
         "normal": "kimi-k3"  # released Jul 16, 2026
       , "traits": ["long context", "vision", "coding", "thorough answers", "writing"]
-      , "cost": 1.0
+      , "cost": 18.75
     }
 
     # Alibaba
@@ -368,20 +369,20 @@ VENICE_CHAT_PRESETS = {
         # No coding trait (the operator's call): a coding request upgrades to Qwen Max.
         "normal": "qwen-3-8-flash"  # 1M Ctx, released Sep 9, 2026
       , "traits": ["long context", "vision", "reasoning", "concise answers"]
-      , "cost": 0.0
+      , "cost": 0.49
       , "tool_filter": VENICE_FIXED_TOOLS
     }
   , "Qwen": {
         # No coding trait (the operator's call): a coding request upgrades to Qwen Max.
         "normal": "qwen-3-8-27b"  # 262K Ctx, released Aug 17, 2026
       , "traits": ["vision", "nsfw", "reasoning", "concise answers"]
-      , "cost": 0.10
+      , "cost": 3.2
       , "tool_filter": VENICE_FIXED_TOOLS
     }
   , "Qwen Max": {
         "normal": "qwen-3-8-2-4t-a95b"  # 262K Ctx, released Aug 12, 2026
       , "traits": ["coding", "nsfw", "reasoning", "thorough answers"]
-      , "cost": 0.56
+      , "cost": 7.5
       , "tool_filter": VENICE_FIXED_TOOLS
     }
 
@@ -390,7 +391,7 @@ VENICE_CHAT_PRESETS = {
         # Disabled, untested - 500K Ctx.
         "normal": "grok-4-7"  # released Sep 15, 2026
       , "traits": ["vision", "coding", "reasoning"]
-      , "cost": 0.51
+      , "cost": 6.8
       , "disabled": True
     }
 
@@ -399,7 +400,7 @@ VENICE_CHAT_PRESETS = {
         # Disabled, untested - 512K Ctx.
         "normal": "minimax-m3-preview"  # released Jun 11, 2026
       , "traits": ["vision", "coding", "reasoning"]
-      , "cost": 0.04
+      , "cost": 1.2
       , "disabled": True
     }
 
@@ -408,7 +409,7 @@ VENICE_CHAT_PRESETS = {
         # Disabled, untested - 1M Ctx.
         "normal": "xiaomi-mimo-v2-5"  # released Jun 10, 2026
       , "traits": ["long context", "vision", "coding", "reasoning"]
-      , "cost": 0.07
+      , "cost": 2.0
       , "disabled": True
     }
 
@@ -417,7 +418,7 @@ VENICE_CHAT_PRESETS = {
         # Disabled, untested - 260K Ctx.
         "normal": "mercury-2-5"  # released Sep 7, 2026
       , "traits": ["reasoning"]
-      , "cost": -0.03
+      , "cost": 0.1875
       , "disabled": True
     }
 
@@ -426,7 +427,7 @@ VENICE_CHAT_PRESETS = {
         # Disabled, untested - 256K Ctx.
         "normal": "seed-2-1-turbo"  # released Jun 27, 2026
       , "traits": ["vision", "coding", "reasoning"]
-      , "cost": 0.14
+      , "cost": 3.125
       , "disabled": True
     }
 
@@ -435,7 +436,7 @@ VENICE_CHAT_PRESETS = {
         # Disabled, untested - 256K Ctx.
         "normal": "mistral-small-3-2-24b-instruct"  # released Jan 14, 2026
       , "traits": ["vision"]
-      , "cost": -0.02
+      , "cost": 0.25
       , "disabled": True
     }
 
@@ -444,34 +445,34 @@ VENICE_CHAT_PRESETS = {
         # Disabled, untested - 128K Ctx.
         "normal": "nvidia-nemotron-3-nano-30b-a3b"  # released Jan 26, 2026
       , "traits": []
-      , "cost": -0.02
+      , "cost": 0.3
       , "disabled": True
     }
   , "Nemotron Ultra": {
         # Disabled, untested - 256K Ctx.
         "normal": "nvidia-nemotron-3-ultra-550b-a55b"  # released Jun 3, 2026
       , "traits": ["reasoning"]
-      , "cost": 0.14
+      , "cost": 3.125
       , "disabled": True
     }
 
   , "Aion Mini": {
-        # Model based on DeepSeek
-        "normal": "aion-labs-aion-3-0-mini"  # released Jul 8, 2026
+        # Model based on the GLM family (the 3.0 mini rode DeepSeek)
+        "normal": "aion-labs-aion-3-5-mini"  # released Sep 22, 2026
       , "traits": ["nsfw", "roleplay", "storytelling", "concise answers"]
-      , "cost": 0.16
+      , "cost": 1.75
     }
   , "Aion": {
-        # Model based on GLM-5.1
-        "normal": "aion-labs-aion-3-0"  # released Jul 8, 2026
+        # Model based on the GLM family
+        "normal": "aion-labs-aion-3-5"  # released Sep 22, 2026
       , "traits": ["nsfw", "reasoning", "roleplay", "storytelling", "thorough answers"]
-      , "cost": 0.80
+      , "cost": 7.5
     }
 
   , "Venice Uncensored": {
         "normal": "venice-uncensored-1-2"  # released Apr 1, 2026
       , "traits": ["vision", "nsfw", "roleplay"]
-      , "cost": 0.01
+      , "cost": 0.9
       , "disabled": True # Spaz outs and repeat in loops the same 3 words. Broken!
     }
 }
@@ -480,6 +481,8 @@ VENICE_CHAT_PRESETS = {
 # the context of the model (minimax-m3-preview reserved 512000 of its 524288), so a small prompt already trips
 # the context check. The cap equals the true ceiling of the model, so it cuts no generation short.
 # An id missing here sends no cap and keeps the backend default.
+# The live list publishes no constraints for the text models at the 2026-09-25
+# read, so the Aion 3.5 entries carry the cap of the 3.0 pair they replace.
 VENICE_CHAT_COMPLETION_TOKENS = {
     "deepseek-v4-flash-0731": 32768
   , "deepseek-v4-pro": 32768
@@ -493,8 +496,8 @@ VENICE_CHAT_COMPLETION_TOKENS = {
   , "qwen-3-8-flash": 131072
   , "qwen-3-8-27b": 65536
   , "qwen-3-8-2-4t-a95b": 65536
-  , "aion-labs-aion-3-0-mini": 32768
-  , "aion-labs-aion-3-0": 32768
+  , "aion-labs-aion-3-5-mini": 32768
+  , "aion-labs-aion-3-5": 32768
   , "llama-3.2-3b": 4096
   , "llama-3.3-70b": 4096
   , "zai-org-glm-4.7-flash": 16384

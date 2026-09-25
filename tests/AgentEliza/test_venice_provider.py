@@ -136,10 +136,11 @@ async def test_bundled_credits_answers_none_on_failures() -> None:
 
 def test_preset_fallback_steps_onto_a_smaller_window() -> None:
     # The ladder ranks cost alone: the move from GLM 1M (a 1M window) steps
-    # up to Qwen Max (262K), and the switch condenses the session at the move.
-    assert VeniceApiProvider().preset_fallback("z-ai-glm-5-3") == "Qwen Max"
+    # up to Aion (262K — the cost tie with Qwen Max leaves the name to
+    # decide), and the switch condenses the session at the move.
+    assert VeniceApiProvider().preset_fallback("z-ai-glm-5-3") == "Aion"
     # The ceiling cycles to the cheapest enabled preset.
-    assert VeniceApiProvider().preset_fallback("kimi-k3") == "Gemma"
+    assert VeniceApiProvider().preset_fallback("kimi-k3") == "DeepSeek Lite"
 
 
 async def test_the_environment_tool_names_a_failed_switch() -> None:
@@ -414,15 +415,15 @@ async def test_the_music_tool_prices_and_hands_off_the_request() -> None:
     # The blank model takes the default preset (Sonilo) with its 90 s duration default.
     answer = await entry["handler"]({"prompt": "a happy tune"}, engine)
     assert answer.startswith("The song request 'Sonilo'")
-    assert quotes[0] == ("/audio/quote", {"model": "sonilo-v1-1-music", "prompt": "a happy tune", "duration_seconds": 90})
+    # The quote carries the model and the duration alone: the prompt and the
+    # other dials left the quote schema.
+    assert quotes[0] == ("/audio/quote", {"model": "sonilo-v1-1-music", "duration_seconds": 90})
     assert hands[0]["preset"] == "Sonilo"
     assert hands[0]["cost"] == 0.26
-    assert hands[0]["body"] == quotes[0][1]
-    # The dials ride the body only where the model takes them.
+    assert hands[0]["body"] == {"model": "sonilo-v1-1-music", "prompt": "a happy tune", "duration_seconds": 90}
+    # The dials ride the queue body only where the model takes them.
     await entry["handler"]({"prompt": "a sad song", "model": "MiniMax", "lyrics": "oh no", "instrumental": True}, engine)
-    assert quotes[1][1] == {
-        "model": "minimax-music-v26", "prompt": "a sad song", "lyrics_prompt": "oh no", "force_instrumental": True
-    }
+    assert quotes[1][1] == {"model": "minimax-music-v26"}
 
 
 async def test_the_music_tool_refuses_the_dials_a_model_lacks() -> None:

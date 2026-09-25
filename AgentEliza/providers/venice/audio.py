@@ -16,8 +16,11 @@ MUSIC_POLL_MAX_SECONDS = 30
 
 
 async def quote_song(api_post, body: dict) -> float:
-    """The live USD price of one queue body (POST /audio/quote, its answers round to cents)."""
-    data, _headers = await api_post("/audio/quote", json_body=body)
+    """The live USD price of one queue body (POST /audio/quote, its answers round to cents).
+       The quote endpoint takes the model and the duration alone: the prompt
+       and the other dials left its schema, so they stay out of the call."""
+    quote_body = {key: body[key] for key in ("model", "duration_seconds") if key in body}
+    data, _headers = await api_post("/audio/quote", json_body=quote_body)
     quote = data.get("quote") if isinstance(data, dict) else None
     if not isinstance(quote, (int, float)) or quote < 0:
         raise ChatError("http", f"The quote endpoint returned no price: {str(data)[:200]}")

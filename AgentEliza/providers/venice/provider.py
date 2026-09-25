@@ -44,12 +44,12 @@ class VeniceApiProvider(Provider):
       , "qwen-3-8-max"
       , "z-ai-glm-5-3-flash"
       , "gemini-3-5-flash"
-      , "aion-labs-aion-3-0"
+      , "aion-labs-aion-3-5"
       , "inkling"
       , "deepseek-v4-pro"
       , "google-gemma-4-31b-it"
       , "gemma-4-uncensored"
-      , "aion-labs-aion-3-0-mini"
+      , "aion-labs-aion-3-5-mini"
       , "qwen-3-8-2-4t-a95b"
       , "qwen-3-8-27b"
     ]
@@ -61,13 +61,13 @@ class VeniceApiProvider(Provider):
       , "z-ai-glm-5-3-flash": 1_048_576
       , "zai-org-glm-4.7-flash": 128_000
       , "gemini-3-5-flash": 1_000_000
-      , "aion-labs-aion-3-0": 128_000
+      , "aion-labs-aion-3-5": 262_144
       , "inkling": 524_288
       , "deepseek-v4-flash-0731": 1_000_000
       , "deepseek-v4-pro": 1_000_000
       , "google-gemma-4-31b-it": 256_000
       , "gemma-4-uncensored": 256_000
-      , "aion-labs-aion-3-0-mini": 128_000
+      , "aion-labs-aion-3-5-mini": 262_144
       , "qwen-3-8-2-4t-a95b": 262_144
       , "qwen-3-8-27b": 262_144
       , "gemini-3-8-flash": 1_000_000
