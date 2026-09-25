@@ -1,8 +1,12 @@
-"""The media windows of the credit ratio: the bands and the lerped slide."""
+"""The media windows of the credit ratio: the bands and the lerped slide,
+and the cost writes of the scope stats."""
 
 import pytest
 
-from AgentEliza.stats import MEDIA_RATE_CHANNEL, MEDIA_RATE_USER, cost_ceiling, media_windows
+from AgentEliza.stats import (
+    MEDIA_RATE_CHANNEL, MEDIA_RATE_USER, Scope, ScopeStats, cost_ceiling, media_windows, month_key,
+)
+from tests.AgentEliza.fakes import FakeStatsConfig
 
 
 def test_the_full_windows_hold_at_and_above_the_top_band() -> None:
@@ -41,3 +45,27 @@ def test_the_cost_ceiling_slides_with_the_same_bands() -> None:
     # Under the floor band the cheapest entry alone holds.
     assert cost_ceiling(0.9, 0.01, 0.29) == 0.01
     assert cost_ceiling(0.75, 0.01, 0.29) == 0.01
+
+
+async def test_record_cost_adds_the_price_without_an_interaction() -> None:
+    stats = ScopeStats(FakeStatsConfig())
+    await stats.record_cost(Scope(channel_id=5, guild_id=9, user_id=7), 0.03)
+    for key in ("guild:9", "channel:5", "user:7"):
+        scope = stats.config.groups[key].stores["stats"]
+        assert scope["cost"] == pytest.approx(0.03)
+        assert scope["cost_months"] == {month_key(): pytest.approx(0.03)}
+        assert scope["messages"] == 0
+
+
+async def test_record_buckets_the_cost_of_an_interaction() -> None:
+    stats = ScopeStats(FakeStatsConfig())
+    await stats.record(
+        Scope(channel_id=5, guild_id=9, user_id=7)
+        , {"cost": 0.29, "images": 1, "tool_calls": 2}
+    )
+    scope = stats.config.groups["guild:9"].stores["stats"]
+    assert scope["messages"] == 1
+    assert scope["images"] == 1
+    assert scope["tool_calls"] == 2
+    assert scope["cost"] == pytest.approx(0.29)
+    assert scope["cost_months"] == {month_key(): pytest.approx(0.29)}

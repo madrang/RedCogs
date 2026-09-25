@@ -73,6 +73,20 @@ def month_key() -> str:
     return time.strftime("%Y-%m", time.gmtime())
 
 
+def _add_cost(stats: dict, cost: float) -> None:
+    """Add one provider cost to a scope stats dict: the total and the
+    bucket of the current UTC month, the oldest buckets beyond the kept
+    count dropped."""
+    stats["cost"] = stats.get("cost", 0.0) + cost
+    months = dict(stats.get("cost_months") or {})
+    month = month_key()
+    months[month] = months.get(month, 0.0) + cost
+    if len(months) > COST_MONTHS_KEPT:
+        for old in sorted(months)[: len(months) - COST_MONTHS_KEPT]:
+            months.pop(old)
+    stats["cost_months"] = months
+
+
 class Scope:
     """Where one interaction happened: a guild channel, or a direct
     message. guild_id None names a direct message, where no guild window
@@ -148,14 +162,20 @@ class ScopeStats:
                 ):
                     stats[key] = stats.get(key, 0) + (usage.get(key) or 0)
                 if cost:
-                    stats["cost"] = stats.get("cost", 0.0) + cost
-                    months = dict(stats.get("cost_months") or {})
-                    month = month_key()
-                    months[month] = months.get(month, 0.0) + cost
-                    if len(months) > COST_MONTHS_KEPT:
-                        for old in sorted(months)[: len(months) - COST_MONTHS_KEPT]:
-                            months.pop(old)
-                    stats["cost_months"] = months
+                    _add_cost(stats, cost)
+
+    async def record_cost(self, scope: Scope, cost: float) -> None:
+        """Add one provider cost without an interaction: a paid media
+        generation that ran outside a reply (an approved song). The cost
+        lands in the scope totals and the UTC month buckets, no counter
+        moves."""
+        ids = {"guild": scope.guild_id, "channel": scope.channel_id, "user": scope.user_id}
+        for name, scope_id in ids.items():
+            if scope_id is None:
+                continue
+            group = self._group(name, scope_id)
+            async with group.stats() as stats:
+                _add_cost(stats, float(cost or 0))
 
     async def check_and_count(self, scope: Scope, limits: dict) -> str | None:
         """Count one interaction against the per-scope limits.

@@ -125,7 +125,7 @@ class ToolContext:
     handler receives it beside the arguments, and a new capability is a
     field here, not a new argument of every handler."""
 
-    def __init__(self, *, call_api, fetch_url, api_post, send_file, channel_nsfw, set_conversation_model, vision_chat, show_image, request_song=None, media_ceiling=None):
+    def __init__(self, *, call_api, fetch_url, api_post, send_file, channel_nsfw, set_conversation_model, vision_chat, show_image, request_song=None, media_ceiling=None, add_media_cost=None):
         self.call_api = call_api
         self.fetch_url = fetch_url
         self.api_post = api_post
@@ -136,6 +136,7 @@ class ToolContext:
         self.show_image = show_image
         self.request_song = request_song
         self.media_ceiling = media_ceiling
+        self.add_media_cost = add_media_cost
 
 
 class ChatEngine:
@@ -682,6 +683,12 @@ class ChatEngine:
             ceilings = await self.api.media_ceilings()
             return ceilings.get(kind) if isinstance(ceilings, dict) else None
 
+        async def add_media_cost(amount: float):
+            """The render price a media tool reports at its answered request
+            joins the cost total of the reply: a refusal bills the same, and
+            the stats record the sum with the turn."""
+            usage["cost"] += float(amount or 0)
+
         # The surface the native provider tools of this reply run on.
         tool_context = ToolContext(
             call_api=call_api, fetch_url=fetch_url, api_post=api_post
@@ -689,6 +696,7 @@ class ChatEngine:
             , set_conversation_model=set_conversation_model
             , vision_chat=vision_chat, show_image=show_image
             , request_song=request_song, media_ceiling=media_ceiling
+            , add_media_cost=add_media_cost
         )
 
         # The user turn of this message. On a vision chat model the images

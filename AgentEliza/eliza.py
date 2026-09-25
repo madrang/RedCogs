@@ -29,7 +29,7 @@ from .providers.venice import (
   , VENICE_CREDIT_ROUTING_FLOOR, VENICE_EDIT_MODELS, VENICE_IMAGE_MODELS,
 )
 from .providers.venice.audio import queue_song, retrieve_song
-from .stats import MEDIA_DISABLE_AT, MEDIA_LIMIT_AT, MEDIA_LIMIT_FLOOR, ScopeStats, cost_ceiling, media_windows, month_key
+from .stats import MEDIA_DISABLE_AT, MEDIA_LIMIT_AT, MEDIA_LIMIT_FLOOR, Scope, ScopeStats, cost_ceiling, media_windows, month_key
 from .tools import HarnessOptions, HarnessTools, MESSAGE_TIME_FORMAT
 from .tools.base import TRANSCRIBE_MAX_BYTES, is_audio_attachment, speech_embed
 from .tools.files import channel_post_count
@@ -179,6 +179,8 @@ class Eliza(commands.Cog):
         # The generation flow of the Venice audio API rides the cog provider surface.
         self.music.queuer = lambda body: queue_song(song_api_post, body)
         self.music.retriever = lambda model, queue_id: retrieve_song(song_api_post, model, queue_id)
+        # A paid song joins the scope stats cost totals.
+        self.music.cost_recorder = self._record_song_cost
 
     async def _poll_participants(self, session_id: int):
         """The active users of a poll session: the speakers of the current context."""
@@ -350,6 +352,14 @@ class Eliza(commands.Cog):
     async def request_song(self, session_id: int, channel_id: int, request: dict) -> str:
         """Post one song request of a native tool for approval, through the song manager."""
         return await self.music.request(session_id, channel_id, request)
+
+    async def _record_song_cost(self, channel, user_id: int | None, cost: float) -> None:
+        """Add the quoted price of one paid song generation to the scope
+        stats of its conversation: the record carries no interaction, the
+        request ran on a vote."""
+        guild = getattr(channel, "guild", None)
+        scope = Scope(channel_id=channel.id, guild_id=guild.id if guild is not None else None, user_id=user_id)
+        await self.scope_stats.record_cost(scope, cost)
 
     async def credit_ratio_now(self):
         """The credit ratio of the bundled balance over the cycle rest:

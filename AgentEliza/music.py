@@ -80,6 +80,9 @@ class SongManager:
         # queuer(body) -> (model, queue_id), retriever(model, queue_id) -> (name, bytes).
         self.queuer = None
         self.retriever = None
+        # Async callable (channel, requester id, quoted price): the scope
+        # stats record a paid generation. Wired by the cog.
+        self.cost_recorder = None
         self.active: dict = {}
 
     def _embed(self, state: dict, status: str | None = None) -> discord.Embed:
@@ -381,7 +384,8 @@ class SongManager:
     async def _finish(self, session_id: int, state: dict) -> None:
         """The tail of a generation: the retrieve polls, the audio post, the outcome.
 
-        The resumed generation of a reload enters here with its queue id."""
+        The resumed generation of a reload enters here with its queue id.
+        A posted song reports its quoted price to the cost recorder."""
         request = state["request"]
         try:
             name, data = await self.retriever(*state["queue"])
@@ -404,6 +408,11 @@ class SongManager:
                 , "The song request close"
             )
         await self._save()
+        if self.cost_recorder is not None:
+            try:
+                await self.cost_recorder(state["channel"], request.get("requester_id"), request["cost"])
+            except Exception:
+                log.exception("The song cost record failed for session %s.", await session_log_label(self.label_getter, session_id))
         await self._fire(
             session_id
             , f"The song request {request['preset']!r} was approved and the song has been posted to the conversation. {result}"

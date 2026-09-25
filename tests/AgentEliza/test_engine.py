@@ -670,6 +670,25 @@ async def test_the_render_descriptors_freeze_for_the_context() -> None:
     assert api.ceiling_reads == 1
 
 
+async def test_a_reported_render_price_joins_the_recorded_cost() -> None:
+    async def handler(arguments, engine):
+        await engine.add_media_cost(0.29)
+        return "posted"
+
+    native = [{
+        "name": "generate_image", "description": "d", "parameters": {"type": "object", "properties": {}}
+      , "media": "images", "handler": handler
+    }]
+    api = FakeApi([call("generate_image"), close("Done.")], preset=FakePreset(native=native))
+    stats = FakeScopeStats()
+    engine = build_engine(api, stats=stats)
+    assert await drain(engine, "hi") == ["Done."]
+    # The render price rode the usage of the reply into the stats, beside
+    # the generation count.
+    assert stats.records[0]["images"] == 1
+    assert stats.records[0]["cost"] == 0.29
+
+
 async def test_a_session_without_the_router_skips_the_decision_call() -> None:
     # The plain stand-in carries no decide_session_model: a provider without
     # the capability never sees a call.

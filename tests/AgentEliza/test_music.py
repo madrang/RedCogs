@@ -105,6 +105,11 @@ def build_manager(channel, *, participants=(), retriever=None):
         runs.append(("queue", body))
         return "sonilo-v1-1-music", "q1"
 
+    billed: list = []
+
+    async def cost_recorder(channel, user_id, cost):
+        billed.append((channel.id, user_id, cost))
+
     manager.on_event = on_event
     manager.participants_getter = participants_getter
     if retriever is None:
@@ -119,7 +124,8 @@ def build_manager(channel, *, participants=(), retriever=None):
 
         manager.retriever = wrapped
     manager.queuer = queuer
-    return manager, fired, runs
+    manager.cost_recorder = cost_recorder
+    return manager, fired, runs, billed
 
 
 async def settle() -> None:
@@ -143,7 +149,7 @@ def a_request() -> dict:
 
 async def test_a_direct_message_closes_on_the_first_click_and_generates() -> None:
     channel = FakeChannel(100)
-    manager, fired, runs = build_manager(channel)
+    manager, fired, runs, billed = build_manager(channel)
     answer = await manager.request(100, 100, a_request())
     assert answer.startswith("The song request 'Sonilo' has been posted for approval at $0.26.")
     # The embed carries the parameters, the cost sits in the footer.
@@ -164,9 +170,19 @@ async def test_a_direct_message_closes_on_the_first_click_and_generates() -> Non
     assert 100 not in manager.active
 
 
+async def test_a_paid_generation_records_its_quoted_price() -> None:
+    channel = FakeChannel(100, guild=FakeGuild())
+    manager, fired, runs, billed = build_manager(channel)
+    await manager.request(100, 100, a_request())
+    await manager.vote(100, FakeInteraction(FakeUser(7, "Owner")), "approve")
+    await settle()
+    # The quoted price of the request lands in the scope stats at the post.
+    assert billed == [(100, 7, 0.26)]
+
+
 async def test_a_guild_vote_closes_at_sixty_percent() -> None:
     channel = FakeChannel(100, guild=FakeGuild())
-    manager, fired, runs = build_manager(channel, participants={1, 2, 3, 4, 5})
+    manager, fired, runs, billed = build_manager(channel, participants={1, 2, 3, 4, 5})
     await manager.request(100, 100, a_request())
     # Two of five approve: 10 of 15 stays open, the tally edits the embed.
     first = FakeInteraction(FakeUser(1, "A"))
@@ -185,19 +201,20 @@ async def test_a_guild_vote_closes_at_sixty_percent() -> None:
 
 async def test_a_reject_majority_bills_nothing() -> None:
     channel = FakeChannel(100, guild=FakeGuild())
-    manager, fired, runs = build_manager(channel, participants={1, 2})
+    manager, fired, runs, billed = build_manager(channel, participants={1, 2})
     await manager.request(100, 100, a_request())
     await manager.vote(100, FakeInteraction(FakeUser(1, "A")), "reject")
     await manager.vote(100, FakeInteraction(FakeUser(2, "B")), "reject")
     await settle()
     assert runs == []
     assert fired and "was rejected by the vote" in fired[0]
+    assert billed == []
     assert 100 not in manager.active
 
 
 async def test_a_newer_request_replaces_the_open_one_without_a_wake() -> None:
     channel = FakeChannel(100, guild=FakeGuild())
-    manager, fired, runs = build_manager(channel, participants={1, 2})
+    manager, fired, runs, billed = build_manager(channel, participants={1, 2})
     await manager.request(100, 100, a_request())
     second = dict(a_request(), preset="Lyria")
     await manager.request(100, 100, second)
@@ -209,7 +226,7 @@ async def test_a_newer_request_replaces_the_open_one_without_a_wake() -> None:
 async def test_an_idle_request_expires_unbilled(monkeypatch) -> None:
     monkeypatch.setattr(music_module, "MUSIC_REQUEST_IDLE", 0.01)
     channel = FakeChannel(100, guild=FakeGuild())
-    manager, fired, runs = build_manager(channel, participants={1, 2})
+    manager, fired, runs, billed = build_manager(channel, participants={1, 2})
     await manager.request(100, 100, a_request())
     await settle()
     assert runs == []
@@ -223,21 +240,23 @@ async def test_a_failed_generation_reports_the_error() -> None:
     async def broken(model, queue_id):
         raise ChatError("http", "The provider endpoint /audio/retrieve returned an error (HTTP 500): boom")
 
-    manager, fired, runs = build_manager(channel, retriever=broken)
+    manager, fired, runs, billed = build_manager(channel, retriever=broken)
     await manager.request(100, 100, a_request())
     await manager.vote(100, FakeInteraction(FakeUser(7, "Owner")), "approve")
     await settle()
     assert fired and "was approved but the generation failed" in fired[0]
     assert "boom" in fired[0]
+    assert billed == []
 
 
 async def test_an_unpostable_song_reports_the_post_error() -> None:
     guild = FakeGuild()
     guild.filesize_limit = 4
     channel = FakeChannel(100, guild=guild)
-    manager, fired, runs = build_manager(channel)
+    manager, fired, runs, billed = build_manager(channel)
     await manager.request(100, 100, a_request())
     await manager.vote(100, FakeInteraction(FakeUser(7, "Owner")), "approve")
     await settle()
     assert fired and "was approved but the generation failed" in fired[0]
     assert "over the Discord upload limit" in fired[0]
+    assert billed == []

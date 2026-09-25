@@ -26,6 +26,7 @@ from .catalog import (
   , VENICE_RENDER_TIMEOUT
   , VENICE_PIXEL_RATIOS
   , VENICE_SEED_MAX
+  , VENICE_BACKGROUND_COST
   , VENICE_EDIT_MODELS
   , VENICE_EDIT_TIER_MODELS
   , VENICE_EDIT_MODEL_RESOLUTIONS
@@ -170,6 +171,15 @@ def _parse_tool() -> dict:
     }
 
 
+async def _report_cost(engine, cost: float) -> None:
+    """Report one render price to the engine cost counter of the reply, when
+    the context carries the reporter (a stand-in engine may lack it). The
+    report rides every answered render: a refusal bills the same."""
+    reporter = getattr(engine, "add_media_cost", None)
+    if reporter is not None:
+        await reporter(cost)
+
+
 def _model_property(catalog: dict) -> dict:
     """The model parameter of an image tool: the enum of the preset names (the fixed set of accepted values, the JSON Schema way — the handler
        refuses anything outside it) and a description that names the dialect groups and the trait groups of the catalog.
@@ -203,6 +213,7 @@ def _image_tool(ceiling: float | None = None) -> dict:
        The resolution, the quality, the watermark, the exif metadata, and the seed are preset here; safe_mode drops only on an age-restricted channel.
        The credit ratio bounds the offered models at the context start: the priciest entries leave the descriptors first as the balance runs down, and the list stays frozen for the context lifetime so the prompt cache holds.
        The handler checks the live ceiling at call time: a preset over it answers that it still exists but sits temporarily disabled for the low credit allowance, and a remembered preset outside the frozen list resolves through the full catalog.
+       Every answered render reports the catalog price of its preset into the cost total of the reply: a refusal bills the same, an HTTP failure bills nothing.
        The tool result appends the moderation flags of the answer as a [venice] status line, and only a flag that reads yes appears: a clean answer carries no line.
        A refusal needs both marks, a blank image and the violation flag: only then the tool answers with an error and posts nothing.
        Without the flag, a small image posts as content.
@@ -299,6 +310,10 @@ def _image_tool(ceiling: float | None = None) -> dict:
             data, headers = await engine.api_post("/image/generate", json_body=body, timeout=VENICE_RENDER_TIMEOUT)
         except ChatError as e:
             return f"Error: the image generation failed: {e}"
+        # The endpoint answered, so the render billed the catalog price of
+        # its preset: a refusal bills the same, the report precedes every
+        # check of the answer.
+        await _report_cost(engine, entry["cost"])
         # The moderation signals of the endpoint: a content violation is the
         # documented face of the silent refusal (a blank image with no error).
         violation, status = _moderation_status(headers)
@@ -360,6 +375,7 @@ def _edit_tool(ceiling: float | None = None) -> dict:
        The multi-edit endpoint names its model field modelId, and only a compositing model takes extra images (the catalog max_images key).
        The agent controls the image, the extra images, the prompt, the model, and the aspect ratio.
        The credit ratio bounds the offered models at the context start like generate_image, the handler checks the live ceiling at call time.
+       Every answered edit reports the catalog price of its preset into the cost total of the reply like generate_image: the extra images of a multi-edit bill beyond the price.
        safe_mode drops only on an age-restricted channel.
        The moderation flags report like generate_image: only a flag that reads yes appears, and a blank refusal needs both marks.
     """
@@ -485,6 +501,10 @@ def _edit_tool(ceiling: float | None = None) -> dict:
             data, headers = await engine.api_post(path, json_body=body, binary=True, timeout=VENICE_RENDER_TIMEOUT)
         except ChatError as e:
             return f"Error: the image edit failed: {e}"
+        # The endpoint answered, so the edit billed the catalog price of its
+        # preset: a refusal bills the same. The extra images of a multi-edit
+        # bill beyond the catalog price, the report carries the base alone.
+        await _report_cost(engine, entry["cost"])
         if not isinstance(data, (bytes, bytearray)) or not data:
             return "Error: the image edit returned no image."
         violation, status = _moderation_status(headers)
@@ -545,7 +565,7 @@ def _background_remove_tool() -> dict:
     """The background removal endpoint as a native tool: one image in, a PNG with a transparent background out, posted to the conversation.
        The endpoint takes no model and no other dial (additionalProperties false): a foreign URL rides the body as image_url, a Discord download as base64 in image.
        The binary answer posts as a file.
-       The call bills $0.03 an image (the flat generation price of bria-bg-remover, the entry the live image list carries behind the endpoint, released Feb 25, 2026).
+       The call bills the flat price of bria-bg-remover (VENICE_BACKGROUND_COST, the entry the live image list carries behind the endpoint, released Feb 25, 2026), and every answered removal reports it into the cost total of the reply.
        The endpoint takes no model, so no catalog entry rides the tool.
     """
 
@@ -569,6 +589,9 @@ def _background_remove_tool() -> dict:
             data, headers = await engine.api_post("/image/background-remove", json_body=body, binary=True)
         except ChatError as e:
             return f"Error: the background removal failed: {e}"
+        # The endpoint answered, so the removal billed its flat price: a
+        # refusal bills the same.
+        await _report_cost(engine, VENICE_BACKGROUND_COST)
         if not isinstance(data, (bytes, bytearray)) or not data:
             return "Error: the background removal returned no image."
         violation, status = _moderation_status(headers)

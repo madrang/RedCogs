@@ -128,6 +128,9 @@ VENICE_PIXEL_RATIOS = {
 }
 # The seed range of the endpoint.
 VENICE_SEED_MAX = 999_999_999
+# The flat price of one background removal (bria-bg-remover, the entry the
+# live image list carries behind the endpoint, released Feb 25, 2026).
+VENICE_BACKGROUND_COST = 0.03
 # The curated edit models of /image/edit.
 # Order and keys mirror the generate catalog: release date, the most recent first, the first entry the default model, preset-name keys the agent sees.
 # Source: the live list under the inpaint type (GET /models?type=inpaint, which needs no key). The edit models are inpaint models.

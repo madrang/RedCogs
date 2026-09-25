@@ -9,7 +9,7 @@ from aiohttp import ClientConnectionError
 import AgentEliza.providers.venice.audio as audio_flow
 from AgentEliza.llm_chat import ChatError
 from AgentEliza.providers.venice import (
-    VeniceApiProvider, VENICE_CHAT_PRESETS, VENICE_EDIT_MODELS, VENICE_FIXED_TOOLS, VENICE_IMAGE_MODELS, VENICE_ROUTING_TRAIT_AT, _edit_tool, _environment_tool, _image_tool
+    VeniceApiProvider, VENICE_BACKGROUND_COST, VENICE_CHAT_PRESETS, VENICE_EDIT_MODELS, VENICE_FIXED_TOOLS, VENICE_IMAGE_MODELS, VENICE_ROUTING_TRAIT_AT, _background_remove_tool, _edit_tool, _environment_tool, _image_tool
   , activity_pick, model_decision_request, select_preset, trait_strengths,
 )
 from tests.AgentEliza.fakes import FakeResponse, FakeSession
@@ -214,6 +214,49 @@ async def test_a_remembered_preset_resolves_and_runs_under_no_live_ceiling() -> 
     answer = await generate["handler"]({"prompt": "a cat", "model": "Muse"}, engine)
     assert not answer.startswith("Error")
     assert posts[0]["model"] == "muse-image"
+
+
+async def test_the_render_tools_report_their_price_on_every_answer() -> None:
+    # The price rides every answered render: a refusal bills the same, so
+    # the report sits ahead of every check of the answer. An HTTP failure
+    # bills nothing.
+    billed: list = []
+
+    async def api_post(path, *, json_body=None, data=None, binary=False, timeout=120):
+        if binary:
+            return b"png", {"content-type": "image/png"}
+        return {"images": [base64.b64encode(b"png").decode()]}, {}
+
+    async def add_media_cost(amount):
+        billed.append(amount)
+
+    async def send_file(name, raw):
+        return f"posted {name}"
+
+    engine = SimpleNamespace(api_post=api_post, send_file=send_file, channel_nsfw=None, add_media_cost=add_media_cost)
+    generate = _image_tool()
+    answer = await generate["handler"]({"prompt": "a cat", "model": "Recraft"}, engine)
+    assert not answer.startswith("Error")
+    assert billed == [VENICE_IMAGE_MODELS["Recraft"]["cost"]]
+    billed.clear()
+    edit = _edit_tool()
+    answer = await edit["handler"]({"image": "https://x/y.png", "prompt": "a hat", "model": "GPT Image"}, engine)
+    assert not answer.startswith("Error")
+    assert billed == [VENICE_EDIT_MODELS["GPT Image"]["cost"]]
+    billed.clear()
+    removal = _background_remove_tool()
+    answer = await removal["handler"]({"image": "https://x/y.png"}, engine)
+    assert not answer.startswith("Error")
+    assert billed == [VENICE_BACKGROUND_COST]
+    billed.clear()
+
+    async def failing_post(path, **kwargs):
+        raise ChatError("http", "The provider endpoint returned an error (HTTP 500): boom")
+
+    engine = SimpleNamespace(api_post=failing_post, send_file=send_file, channel_nsfw=None, add_media_cost=add_media_cost)
+    answer = await generate["handler"]({"prompt": "a cat", "model": "Recraft"}, engine)
+    assert answer.startswith("Error")
+    assert billed == []
 
 
 async def test_the_edit_tool_sends_the_2k_preset_and_no_quality() -> None:

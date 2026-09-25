@@ -250,6 +250,70 @@ class FakeScopeStats:
         self.records.append(usage)
 
 
+class FakeStatsGroup:
+    """One scope group of the stats Config stand-in: plain dicts behind
+    async context managers."""
+
+    def __init__(self, defaults: dict):
+        self.stores = {name: dict(value) for name, value in defaults.items()}
+
+    def _edit(self, name: str):
+        group = self
+
+        class _Edit:
+            async def __aenter__(self):
+                return group.stores[name]
+
+            async def __aexit__(self, *exc_info):
+                return False
+
+        return _Edit()
+
+    def stats(self):
+        return self._edit("stats")
+
+    def rate(self):
+        return self._edit("rate")
+
+    def media_rate(self):
+        return self._edit("media_rate")
+
+
+class FakeStatsConfig:
+    """The Config stand-in of ScopeStats: one group per scope id, the
+    registered defaults inside each."""
+
+    def __init__(self):
+        self.groups: dict = {}
+        self.defaults: dict = {}
+
+    def _register(self, **defaults):
+        self.defaults.update(defaults)
+
+    def register_guild(self, **defaults):
+        self._register(**defaults)
+
+    def register_channel(self, **defaults):
+        self._register(**defaults)
+
+    def register_user(self, **defaults):
+        self._register(**defaults)
+
+    def _group_for(self, key: str):
+        if key not in self.groups:
+            self.groups[key] = FakeStatsGroup(self.defaults)
+        return self.groups[key]
+
+    def guild_from_id(self, guild_id: int):
+        return self._group_for(f"guild:{guild_id}")
+
+    def channel_from_id(self, channel_id: int):
+        return self._group_for(f"channel:{channel_id}")
+
+    def user_from_id(self, user_id: int):
+        return self._group_for(f"user:{user_id}")
+
+
 class FakeCompactor:
     """The compactor stand-in: a scripted compaction answer, every call recorded.
 
