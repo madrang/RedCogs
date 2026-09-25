@@ -119,6 +119,9 @@ class Eliza(commands.Cog):
             # guild song gate stays off. Set with `eliza setcycleday`.
             , credit_cycle_day=0
             , dm_rules=DEFAULT_DM_RULES
+            # The guilds whose members may talk to the agent in direct
+            # messages, set with `eliza dmguilds`. Empty: the owner alone.
+            , dm_guilds=[]
             , polls={}
             , music={}
         )
@@ -900,6 +903,17 @@ class Eliza(commands.Cog):
             for a in message.attachments if a.id not in transcribed
         ]
 
+    async def _dm_allowed(self, user) -> bool:
+        """Whether a direct message author may reach the agent: a member of
+        at least one guild of the enabled list. The owner needs no guild, the
+        caller holds that bypass. The member lookup reads the guild caches,
+        which hold the members through the startup chunking of Red."""
+        for guild_id in await self.config.dm_guilds() or ():
+            guild = self.bot.get_guild(int(guild_id))
+            if guild is not None and guild.get_member(user.id) is not None:
+                return True
+        return False
+
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message) -> None:
         if self.bot.user is not None and message.author.id == self.bot.user.id:
@@ -927,6 +941,23 @@ class Eliza(commands.Cog):
         # get_context knows whether a command name follows the prefix.
         ctx = await self.bot.get_context(message)
         if ctx.valid:
+            return
+        is_owner = await self.bot.is_owner(message.author)
+        if is_dm and not is_owner and not await self._dm_allowed(message.author):
+            # A direct message of a stranger never reaches the agent: the
+            # reply says so, the log names the reason.
+            log.info(
+                "The direct message of %s was refused: no enabled guild holds the user."
+                , message.author.display_name
+            )
+            await self._discord_call(
+                lambda: message.reply(
+                    "🔒 I only talk in direct messages with the members of a server my owner enabled. "
+                    "Speak to me in a server instead."
+                    , mention_author=False, allowed_mentions=discord.AllowedMentions.none(),
+                )
+                , "The direct message gate notice",
+            )
             return
         if self._closed:
             # Closed for maintenance: the messages the agent would answer get
@@ -980,7 +1011,6 @@ class Eliza(commands.Cog):
             else session_label("user", message.author.id, user_name=message.author.display_name)
         )
         log.info("on_message -> %s in %s: %s", message.author.display_name, label, _log_snippet(content))
-        is_owner = await self.bot.is_owner(message.author)
         incoming = IncomingMessage(
             channel_id=message.channel.id
             , content=content
@@ -1471,6 +1501,65 @@ class Eliza(commands.Cog):
             f"The bundled credit cycle restarts on day {cycle_day} of each month. "
             f"The next reset lands <t:{refill}:F> (<t:{refill}:R>)."
         )
+
+    @eliza_group.group(name="dmguilds")
+    @commands.is_owner()
+    async def dmguilds_group(self, ctx: commands.Context) -> None:
+        """Manage the guilds whose members may talk to the agent in direct messages."""
+        await ctx.send_help()
+
+    @dmguilds_group.command(name="add")
+    async def dmguilds_add(self, ctx: commands.Context, guild_id: int | None = None) -> None:
+        """Enable direct message access for the members of one guild.
+           Run the command inside the guild, or pass the guild id anywhere."""
+        target = self.bot.get_guild(guild_id) if guild_id is not None else ctx.guild
+        if target is None:
+            await ctx.send("The bot joined no guild with that id. Run the command in the guild, or pass the id of a joined guild.")
+            return
+        guilds = list(await self.config.dm_guilds())
+        if target.id in guilds:
+            await ctx.send(f"The members of {target.name} already talk to the agent in direct messages.")
+            return
+        guilds.append(target.id)
+        await self.config.dm_guilds.set(guilds)
+        await ctx.send(f"The members of {target.name} may now talk to the agent in direct messages.")
+
+    @dmguilds_group.command(name="remove")
+    async def dmguilds_remove(self, ctx: commands.Context, guild_id: int | None = None) -> None:
+        """Disable direct message access for one guild.
+           Run the command inside the guild, or pass the guild id anywhere."""
+        target_id = guild_id if guild_id is not None else (ctx.guild.id if ctx.guild is not None else None)
+        if target_id is None:
+            await ctx.send("Run the command in a guild, or pass the guild id.")
+            return
+        guilds = list(await self.config.dm_guilds())
+        if target_id not in guilds:
+            await ctx.send(f"The guild {target_id} carries no direct message access.")
+            return
+        guilds.remove(target_id)
+        await self.config.dm_guilds.set(guilds)
+        guild = self.bot.get_guild(target_id)
+        name = guild.name if guild is not None else str(target_id)
+        await ctx.send(f"The members of {name} no longer talk to the agent in direct messages.")
+
+    @dmguilds_group.command(name="clear")
+    async def dmguilds_clear(self, ctx: commands.Context) -> None:
+        """Empty the list: only the owner talks to the agent in direct messages."""
+        await self.config.dm_guilds.set([])
+        await ctx.send("The direct message guild list is empty. Only the owner talks to the agent in direct messages.")
+
+    @dmguilds_group.command(name="list")
+    async def dmguilds_list(self, ctx: commands.Context) -> None:
+        """Show the guilds whose members may talk to the agent in direct messages."""
+        guilds = list(await self.config.dm_guilds())
+        if not guilds:
+            await ctx.send("No guild is enabled. Only the owner talks to the agent in direct messages.")
+            return
+        lines = []
+        for gid in guilds:
+            guild = self.bot.get_guild(int(gid))
+            lines.append(f"- {guild.name} (`{gid}`)" if guild is not None else f"- `{gid}` (the bot left this guild)")
+        await ctx.send("The members of these guilds may talk to the agent in direct messages:\n" + "\n".join(lines))
 
     @eliza_group.command(name="forgetme")
     async def eliza_forgetme(self, ctx: commands.Context) -> None:
