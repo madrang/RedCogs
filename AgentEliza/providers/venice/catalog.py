@@ -273,7 +273,7 @@ VENICE_CHAT_CAPABILITIES = (
 # of the Config and every other harness or provider tool stay off these
 # presets.
 VENICE_FIXED_TOOLS = (
-    "propose_choices", "configure_environment"
+    "propose_choices", "set_activity"
   , "generate_image", "edit_image", "remove_background", "generate_song"
 )
 # Chat presets: a short display name for the agent and the user, the model id behind it, an optional NSFW variant id for conversations behind the 18+ gate, the capability names the preset provides, and the cost of the preset.

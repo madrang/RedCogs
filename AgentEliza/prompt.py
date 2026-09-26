@@ -35,7 +35,7 @@ SYSTEM_PROMPT = (
     "- One answer can hold many tool calls. Search, validate what you find, and explore what your tools can do.\n"
     "- After 10 tool calls in one answer, finish the answer in text without tools.\n"
     "- Before a task that needs coding, long context, vision, roleplay, storytelling, or nsfw content, "
-    "call the configure_environment tool with the needed capabilities.\n"
+    "call the set_activity tool with the activity name and the needed capabilities.\n"
     "- The concise answers and the thorough answers capabilities pick between a tight reply and a complete one. Match the need of the moment.\n"
     "\n"
     "Discord renders your answers. You can use markdown: **bold**, *italics*, __underline__, ~~strikethrough~~, `code`, code blocks, quotes, lists, and # headers.\n"

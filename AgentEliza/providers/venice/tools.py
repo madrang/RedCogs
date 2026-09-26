@@ -14,6 +14,7 @@ import aiohttp
 from ...llm_chat import ChatError
 from ...tools.base import DISCORD_FILE_HOSTS, _cap
 from .audio import quote_song
+from .decisions import select_preset
 from .resources import EDITS_URI, IMAGES_URI, MUSIC_URI
 from .catalog import (
     VENICE_QUERY_MAX_CHARS
@@ -38,6 +39,8 @@ from .catalog import (
   , VENICE_MUSIC_CONSTRAINTS
   , VENICE_CHAT_CAPABILITIES
   , VENICE_CHAT_PRESETS
+  , VENICE_CREDIT_ROUTING_FLOOR
+  , VENICE_ROUTING_TRAIT_AT
 )
 from .moderation import _moderation_status, _refusal_error
 
@@ -768,15 +771,24 @@ def _music_tool() -> dict:
     }
 
 
-def _environment_tool() -> dict:
-    """The environment tool: the agent states the capabilities the current task needs, the tool picks the chat preset that provides them and switches the conversation to it.
-       A task that asks for the uncensored capability loads the NSFW variant of the preset, and only in a conversation behind the 18+ gate.
-       The agent never sees a model id: the short preset name is its only handle.
+def _activity_tool() -> dict:
+    """The activity report as a native tool: the agent names what the
+       conversation is doing and the capabilities the work needs. The
+       activity label rides the session into the Discord presence of the
+       bot. The capabilities resolve through the routing selection: the
+       same set that already runs keeps everything in place, and a
+       smaller carrier can take the work when it covers the needs — the
+       tool never stores the traits that activated a preset, it resolves
+       the requested set against the catalog each call. The answer names
+       the active preset only on a move, the description tells the agent
+       of the presence and the tool optimisation alone. The nsfw
+       capability needs a conversation behind the 18+ gate.
     """
 
     async def handler(arguments, engine):
-        if engine.set_conversation_model is None:
-            return "Error: the environment configuration is not available here."
+        activity = str(arguments.get("activity") or "").strip()
+        if not activity:
+            return "Error: the activity must be a non-empty string."
         raw = arguments.get("capabilities")
         items = [raw] if isinstance(raw, str) else list(raw) if isinstance(raw, list) else []
         requested = []
@@ -784,99 +796,81 @@ def _environment_tool() -> dict:
             text = str(item).strip().lower()
             if text and text not in requested:
                 requested.append(text)
-        if not requested:
-            return 'Error: state at least one capability, or "default" to restore the default environment.'
-        if "default" in requested:
-            if len(requested) > 1:
-                return 'Error: "default" accepts no other capability.'
-            error = await engine.set_conversation_model(None)
-            if error:
-                return error
-            return "The environment is back to the default configuration. The change answers the next message."
         unknown = [item for item in requested if item not in VENICE_CHAT_CAPABILITIES]
         if unknown:
             return (
                 f"Error: unknown capability: {', '.join(unknown)}. "
                 f"Known capabilities: {', '.join(VENICE_CHAT_CAPABILITIES)}."
             )
+        if not requested:
+            return "Error: state at least one capability."
+        if engine.set_conversation_model is None:
+            return "Error: the environment configuration is not available here."
+        if engine.set_activity is not None:
+            await engine.set_activity(activity)
         gated = "nsfw" in requested
         if gated and (engine.channel_nsfw is None or not await engine.channel_nsfw()):
             return "Error: the nsfw capability needs a conversation behind the 18+ gate."
-        refused = []
-        for name, preset in VENICE_CHAT_PRESETS.items():
-            if preset.get("disabled"):
-                # A disabled preset stays invisible to the agent.
-                continue
-            remaining = [trait for trait in requested if trait != "nsfw"]
-            if gated:
-                # The 18+ variant shares the trait list of the preset: a
-                # variant joins a preset only when it carries the same
-                # capabilities. A preset without a variant can still be
-                # uncensored by itself, its normal id is the uncensored
-                # build. The stored value is the preset name: the
-                # request-time resolution picks the variant by the gate of
-                # the moment.
-                variant = preset.get("nsfw")
-                if variant is not None and all(trait in preset["traits"] for trait in remaining):
-                    error = await engine.set_conversation_model(name)
-                    if error:
-                        # The condense before the switch failed: the next
-                        # candidate gets the turn.
-                        refused.append(name)
-                        continue
-                    granted = ", ".join(sorted(requested))
-                    return (
-                        f"The environment now provides: {granted}. Active preset: {name} (18+ variant). "
-                        "The change answers the next message."
-                    )
-                if variant is None and "nsfw" in preset.get("traits", ()) and all(trait in preset["traits"] for trait in remaining):
-                    error = await engine.set_conversation_model(name)
-                    if error:
-                        refused.append(name)
-                        continue
-                    granted = ", ".join(sorted(requested))
-                    return (
-                        f"The environment now provides: {granted}. Active preset: {name}. "
-                        "The change answers the next message."
-                    )
-            else:
-                traits = preset.get("traits", ())
-                if all(trait in traits for trait in requested):
-                    error = await engine.set_conversation_model(name)
-                    if error:
-                        refused.append(name)
-                        continue
-                    granted = ", ".join(sorted(requested))
-                    return (
-                        f"The environment now provides: {granted}. Active preset: {name}. "
-                        "The change answers the next message."
-                    )
-        menu = "; ".join(
-            preset_menu_line(name, preset)
-            for name, preset in VENICE_CHAT_PRESETS.items()
-            if not preset.get("disabled")
+        ratio_getter = getattr(engine, "credit_ratio", None)
+        ratio = await ratio_getter() if ratio_getter is not None else None
+        if ratio is not None and ratio < VENICE_CREDIT_ROUTING_FLOOR:
+            # The floor of the session-start routing: the balance cannot
+            # cover the cycle rest, every switch stays closed. The report
+            # alone lands — the presence is free.
+            return (
+                f"The activity is {activity!r}. The bundled balance runs low, "
+                "the environment stays as it is."
+            )
+        resolved = select_preset(
+            {trait: VENICE_ROUTING_TRAIT_AT for trait in requested if trait != "nsfw"}
+          , nsfw_allowed=gated
+          , ratio=ratio
         )
-        detail = f" Switch refused (the condense before it failed): {', '.join(refused)}." if refused else ""
-        return f"Error: no environment preset provides: {', '.join(sorted(requested))}.{detail} Available: {menu}."
+        if resolved is None:
+            menu = "; ".join(
+                preset_menu_line(name, preset)
+                for name, preset in VENICE_CHAT_PRESETS.items()
+                if not preset.get("disabled")
+            )
+            return f"Error: no environment preset provides: {', '.join(sorted(requested))}. Available: {menu}."
+        current = await engine.conversation_preset() if engine.conversation_preset is not None else None
+        if resolved == current:
+            # The requested set resolves onto the running preset: nothing
+            # moves, the report alone lands.
+            return f"The activity is {activity!r}. The current environment already provides: {', '.join(sorted(requested))}."
+        error = await engine.set_conversation_model(resolved)
+        if error:
+            return f"Error: the switch to {resolved} was refused: {error}"
+        granted = ", ".join(sorted(requested))
+        suffix = " (18+ variant)" if gated else ""
+        return (
+            f"The activity is {activity!r}. Active preset: {resolved}{suffix}. "
+            "The change answers the next message."
+        )
 
     return {
-        "name": "configure_environment"
+        "name": "set_activity"
         , "description": (
-            "Configure the environment of this conversation for the current task. "
-            "State the capabilities the task needs. The change answers the next message. "
-            f"Capabilities: {', '.join(VENICE_CHAT_CAPABILITIES)}, and \"default\" to restore the default environment. "
-            "The nsfw capability needs a conversation behind the 18+ gate."
+            "Report the current activity of this conversation. Call it once each time a new activity starts. "
+            "It drives the presence status of the bot and the tool optimisation of the conversation."
         )
         , "parameters": {
             "type": "object"
             , "properties": {
-                "capabilities": {
+                "activity": {
+                    "type": "string"
+                  , "description": "A short name of what you are doing, for example 'debugging a script' or 'telling a story'."
+                }
+                , "capabilities": {
                     "type": "array"
-                    , "items": {"type": "string", "enum": ["default", *VENICE_CHAT_CAPABILITIES]}
-                    , "description": "The capabilities the current task needs."
+                  , "items": {"type": "string", "enum": list(VENICE_CHAT_CAPABILITIES)}
+                  , "description": (
+                        f"The capabilities the activity needs. Values: {', '.join(VENICE_CHAT_CAPABILITIES)}. "
+                        "The nsfw capability needs a conversation behind the 18+ gate."
+                    )
                 }
             }
-            , "required": ["capabilities"]
+            , "required": ["activity", "capabilities"]
         }
         , "handler": handler
     }

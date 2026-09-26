@@ -97,6 +97,27 @@ async def session_log_label(getter, session_id: int) -> str:
         return str(session_id)
 
 
+def clip_fields(fields: list, budget: int) -> list:
+    """The fields cut to share one character budget fairly: fields of an
+    equal length read the equal share (the budget over their count, the
+    128 of a presence over six fields lands near 21 a field), and a field
+    shorter than its share hands the rest to the longer ones. A set that
+    fits the budget returns unchanged."""
+    if sum(len(field) for field in fields) <= budget:
+        return list(fields)
+    kept = [None] * len(fields)
+    remaining = max(budget, 0)
+    order = sorted(range(len(fields)), key=lambda index: len(fields[index]))
+    pending = len(order)
+    for index in order:
+        fair = remaining // pending if pending else 0
+        take = min(len(fields[index]), fair)
+        kept[index] = fields[index][:take]
+        remaining -= take
+        pending -= 1
+    return kept
+
+
 class Session:
     """One conversation context: a guild session, or the DM session of a user.
 
@@ -146,6 +167,10 @@ class Session:
         # native provider tool. None answers with the configured model. The
         # override survives a context restart and dies with the session.
         self.model_override = None
+        # The activity name the agent reports through the set_activity
+        # tool, None before the first report. The Discord presence names it
+        # beside the session label.
+        self.activity = None
         # The render price ceilings the media tool descriptors froze at the
         # context start, None before the first freeze. The descriptors hold
         # them for the context lifetime, so the tool list stays stable and

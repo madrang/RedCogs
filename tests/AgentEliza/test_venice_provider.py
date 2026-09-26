@@ -9,7 +9,7 @@ from aiohttp import ClientConnectionError
 import AgentEliza.providers.venice.audio as audio_flow
 from AgentEliza.llm_chat import ChatError
 from AgentEliza.providers.venice import (
-    VeniceApiProvider, VENICE_BACKGROUND_COST, VENICE_CHAT_PRESETS, VENICE_EDIT_MODELS, VENICE_FIXED_TOOLS, VENICE_IMAGE_MODELS, VENICE_ROUTING_QUIRK_MALUS, VENICE_ROUTING_TRAIT_AT, _background_remove_tool, _edit_tool, _environment_tool, _image_tool
+    VeniceApiProvider, VENICE_BACKGROUND_COST, VENICE_CHAT_PRESETS, VENICE_EDIT_MODELS, VENICE_FIXED_TOOLS, VENICE_IMAGE_MODELS, VENICE_ROUTING_QUIRK_MALUS, VENICE_ROUTING_TRAIT_AT, _activity_tool, _background_remove_tool, _edit_tool, _image_tool
   , activity_pick, model_decision_request, select_preset, trait_strengths,
 )
 from tests.AgentEliza.fakes import FakeResponse, FakeSession
@@ -143,27 +143,116 @@ def test_preset_fallback_steps_onto_a_smaller_window() -> None:
     assert VeniceApiProvider().preset_fallback("kimi-k3") == "DeepSeek Lite"
 
 
-async def test_the_environment_tool_names_a_failed_switch() -> None:
-    entry = _environment_tool()
+async def test_the_activity_tool_moves_only_on_a_different_set() -> None:
+    # The report stores the activity and resolves the requested traits: the
+    # running preset answers unchanged, a different carrier moves once.
+    switches: list = []
+    activities: list = []
+    current = ["Aion"]
 
-    async def refused(model_id):
+    async def switch(model_id):
+        switches.append(model_id)
+        return None
+
+    async def set_activity(name):
+        activities.append(name)
+
+    async def conversation_preset():
+        return current[0]
+
+    engine = SimpleNamespace(
+        channel_nsfw=None, set_conversation_model=switch, set_activity=set_activity
+      , conversation_preset=conversation_preset,
+    )
+    entry = _activity_tool()
+    # The set that already runs keeps everything in place.
+    answer = await entry["handler"]({"activity": "a dark story", "capabilities": ["roleplay"]}, engine)
+    assert answer.startswith("The activity is 'a dark story'. The current environment already provides")
+    assert switches == []
+    assert activities == ["a dark story"]
+    # A report without capabilities names the rule: the traits never stay
+    # unspecified.
+    answer = await entry["handler"]({"activity": "chatting"}, engine)
+    assert answer == "Error: state at least one capability."
+    assert switches == []
+    # A different set moves the conversation onto the routed carrier.
+    answer = await entry["handler"]({"activity": "debugging", "capabilities": ["coding"]}, engine)
+    assert answer.startswith("The activity is 'debugging'. Active preset: Gemini.")
+    assert switches == ["Gemini"]
+    current[0] = "Gemini"
+
+
+async def test_the_activity_tool_rides_the_credit_ratio() -> None:
+    # The tool follows the session-start routing: the floor closes every
+    # switch, and a tight balance scales the pressure onto the cheaper
+    # carrier.
+    switches: list = []
+    activities: list = []
+    ratios = [0.8]
+    current = ["Gemini"]
+
+    async def switch(model_id):
+        switches.append(model_id)
+        return None
+
+    async def set_activity(name):
+        activities.append(name)
+
+    async def conversation_preset():
+        return current[0]
+
+    async def credit_ratio():
+        return ratios[0]
+
+    engine = SimpleNamespace(
+        channel_nsfw=None, set_conversation_model=switch, set_activity=set_activity
+      , conversation_preset=conversation_preset, credit_ratio=credit_ratio,
+    )
+    entry = _activity_tool()
+    # Under the routing floor the switch stays closed, the report lands.
+    answer = await entry["handler"]({"activity": "a scene", "capabilities": ["roleplay"]}, engine)
+    assert answer == "The activity is 'a scene'. The bundled balance runs low, the environment stays as it is."
+    assert switches == []
+    assert activities == ["a scene"]
+    # At the floor pressure the cheaper carrier wins: roleplay moves onto
+    # Aion Mini, not Aion.
+    ratios[0] = 1.0
+    answer = await entry["handler"]({"activity": "a scene", "capabilities": ["roleplay"]}, engine)
+    assert answer.startswith("The activity is 'a scene'. Active preset: Aion Mini.")
+    assert switches == ["Aion Mini"]
+    current[0] = "Aion Mini"
+
+
+async def test_the_activity_tool_validates_and_restores() -> None:
+    switches: list = []
+
+    async def switch(model_id):
+        switches.append(model_id)
         return "Error: the condense before the move failed."
 
-    engine = SimpleNamespace(channel_nsfw=None, set_conversation_model=refused)
-    answer = await entry["handler"]({"capabilities": ["roleplay"]}, engine)
-    assert answer.startswith("Error: no environment preset provides: roleplay.")
-    assert "Switch refused (the condense before it failed): Aion Mini, Aion." in answer
+    async def set_activity(name):
+        return None
 
+    async def conversation_preset():
+        return "DeepSeek Lite"
 
-async def test_the_environment_tool_returns_the_failed_restore() -> None:
-    entry = _environment_tool()
-
-    async def refused(model_id):
-        return "Error: the condense before the move failed."
-
-    engine = SimpleNamespace(channel_nsfw=None, set_conversation_model=refused)
-    answer = await entry["handler"]({"capabilities": ["default"]}, engine)
-    assert answer == "Error: the condense before the move failed."
+    engine = SimpleNamespace(
+        channel_nsfw=None, set_conversation_model=switch, set_activity=set_activity
+      , conversation_preset=conversation_preset,
+    )
+    entry = _activity_tool()
+    assert (await entry["handler"]({"capabilities": ["roleplay"]}, engine)).startswith("Error: the activity must be")
+    assert (await entry["handler"]({"activity": "x"}, engine)) == "Error: state at least one capability."
+    assert (await entry["handler"]({"activity": "x", "capabilities": ["telepathy"]}, engine)).startswith(
+        "Error: unknown capability: telepathy."
+    )
+    assert (await entry["handler"]({"activity": "x", "capabilities": ["nsfw"]}, engine)).startswith(
+        "Error: the nsfw capability needs a conversation behind the 18+ gate."
+    )
+    # A refused switch names its target.
+    answer = await entry["handler"]({"activity": "art", "capabilities": ["imagination"]}, engine)
+    assert answer.startswith("Error: the switch to")
+    assert "was refused" in answer
 
 
 def test_the_render_catalogs_bound_by_the_cost_ceiling() -> None:
@@ -713,7 +802,7 @@ def test_tool_filter_names_the_fixed_tool_presets() -> None:
 
 def test_the_fixed_tool_list_holds_the_small_answer_tools() -> None:
     assert set(VENICE_FIXED_TOOLS) == {
-        "propose_choices", "configure_environment"
+        "propose_choices", "set_activity"
       , "generate_image", "edit_image", "remove_background", "generate_song"
     }
 

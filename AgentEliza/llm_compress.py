@@ -161,6 +161,9 @@ class Compressor:
     async def sweep(self) -> None:
         """Compact the idle sessions to update their summaries, before the cache goes cold.
 
+        The tick first points the Discord presence of the cog at the live
+        sessions, then compacts.
+
         Compaction triggered by the next message would run after the expiry
         and pay the full prompt price. The idle compaction keeps the tail: a
         user who comes back before the eviction finds a backfill-shaped
@@ -178,6 +181,7 @@ class Compressor:
         one last compaction updates the summary, then the session drops
         either way.
         """
+        await self.api.update_presence()
         api_key = await self.config.api_key()
         if not api_key:
             return

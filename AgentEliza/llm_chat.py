@@ -125,7 +125,7 @@ class ToolContext:
     handler receives it beside the arguments, and a new capability is a
     field here, not a new argument of every handler."""
 
-    def __init__(self, *, call_api, fetch_url, api_post, send_file, channel_nsfw, set_conversation_model, vision_chat, show_image, request_song=None, media_ceiling=None, add_media_cost=None):
+    def __init__(self, *, call_api, fetch_url, api_post, send_file, channel_nsfw, set_conversation_model, vision_chat, show_image, request_song=None, media_ceiling=None, add_media_cost=None, set_activity=None, conversation_preset=None, credit_ratio=None):
         self.call_api = call_api
         self.fetch_url = fetch_url
         self.api_post = api_post
@@ -137,6 +137,9 @@ class ToolContext:
         self.request_song = request_song
         self.media_ceiling = media_ceiling
         self.add_media_cost = add_media_cost
+        self.set_activity = set_activity
+        self.conversation_preset = conversation_preset
+        self.credit_ratio = credit_ratio
 
 
 class ChatEngine:
@@ -689,6 +692,32 @@ class ChatEngine:
             the stats record the sum with the turn."""
             usage["cost"] += float(amount or 0)
 
+        async def set_activity(name):
+            """Store the activity name the agent reports through the
+            set_activity tool: the Discord presence of the bot names it
+            beside the session label."""
+            session.activity = name or None
+            session.touch()
+
+        async def conversation_preset():
+            """The preset name the conversation runs on: the override when
+            one rides the session, else the preset of the configured model.
+            None when the model sits in no preset or no provider runs."""
+            if session.model_override is not None:
+                return session.model_override
+            if preset is None:
+                return None
+            return preset.preset_name(await self.api.model_name())
+
+        async def credit_ratio():
+            """The live credit ratio of the bundled balance over the cycle
+            rest, None while the balance or the cycle day reads unknown.
+            The activity tool rides it like the session-start routing."""
+            getter = getattr(self.api, "credit_ratio_now", None)
+            if getter is None:
+                return None
+            return await getter()
+
         # The surface the native provider tools of this reply run on.
         tool_context = ToolContext(
             call_api=call_api, fetch_url=fetch_url, api_post=api_post
@@ -696,7 +725,8 @@ class ChatEngine:
             , set_conversation_model=set_conversation_model
             , vision_chat=vision_chat, show_image=show_image
             , request_song=request_song, media_ceiling=media_ceiling
-            , add_media_cost=add_media_cost
+            , add_media_cost=add_media_cost, set_activity=set_activity
+            , conversation_preset=conversation_preset, credit_ratio=credit_ratio
         )
 
         # The user turn of this message. On a vision chat model the images

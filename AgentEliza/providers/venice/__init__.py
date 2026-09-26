@@ -49,7 +49,7 @@ from .tools import (
   , _image_tool
   , _edit_tool
   , _background_remove_tool
-  , _environment_tool
+  , _activity_tool
   , preset_menu_line
 )
 from .provider import VeniceApiProvider

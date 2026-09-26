@@ -4,7 +4,7 @@ import asyncio
 import time
 from types import SimpleNamespace
 
-from AgentEliza.history import SUMMARY_NOTE, History, Session, session_label, session_log_label
+from AgentEliza.history import SUMMARY_NOTE, History, Session, clip_fields, session_label, session_log_label
 
 
 class _NoMemory:
@@ -132,3 +132,27 @@ async def test_session_log_label_falls_back_to_the_id() -> None:
     # An empty answer and a broken getter never break the log line.
     assert await session_log_label(empty, 7) == "7"
     assert await session_log_label(broken, 7) == "7"
+
+
+def test_clip_fields_returns_a_set_that_fits_unchanged() -> None:
+    assert clip_fields(["short", "names"], 128) == ["short", "names"]
+    assert clip_fields([], 128) == []
+
+
+def test_clip_fields_cuts_equal_fields_to_the_equal_share() -> None:
+    # Six fields of 30 share a 126 budget as 21 each, the presence shape
+    # of three sessions with a name and an activity.
+    fields = ["x" * 30] * 6
+    assert clip_fields(fields, 126) == ["x" * 21] * 6
+    # One long field alone reads the whole budget.
+    assert clip_fields(["x" * 50], 10) == ["x" * 10]
+
+
+def test_clip_fields_lets_short_fields_feed_the_longer_ones() -> None:
+    # The two 40-character fields split what the 2-character field frees:
+    # 60 minus 2 leaves 58, an equal 29 each.
+    assert clip_fields(["ab", "y" * 40, "z" * 40], 60) == ["ab", "y" * 29, "z" * 29]
+    # A mix: the short field fits whole, the long ones share the rest.
+    out = clip_fields(["five", "a" * 30, "b" * 30, "c" * 30], 69)
+    assert out[0] == "five"
+    assert out[1:] == ["a" * 21, "b" * 22, "c" * 22] or out[1:] == ["a" * 21, "b" * 21, "c" * 23]

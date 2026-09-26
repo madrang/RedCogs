@@ -689,6 +689,22 @@ async def test_a_reported_render_price_joins_the_recorded_cost() -> None:
     assert stats.records[0]["cost"] == 0.29
 
 
+async def test_a_reported_activity_lands_on_the_session() -> None:
+    async def handler(arguments, engine):
+        await engine.set_activity("debugging a script")
+        return "ok"
+
+    native = [{
+        "name": "set_activity", "description": "d", "parameters": {"type": "object", "properties": {}}
+      , "handler": handler
+    }]
+    api = FakeApi([call("set_activity"), close("Done.")], preset=FakePreset(native=native))
+    engine = build_engine(api)
+    assert await drain(engine, "hi") == ["Done."]
+    # The activity label rides the session for the Discord presence.
+    assert engine.history.sessions[7].activity == "debugging a script"
+
+
 async def test_a_session_without_the_router_skips_the_decision_call() -> None:
     # The plain stand-in carries no decide_session_model: a provider without
     # the capability never sees a call.
