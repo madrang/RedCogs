@@ -573,13 +573,15 @@ class DecidingApi(FakeApi):
 
 
 async def test_a_fresh_session_opens_on_the_decision_pick() -> None:
-    api = DecidingApi([close("Hello.")], decision="DeepSeek Pro")
+    api = DecidingApi([close("Hello.")], decision=("DeepSeek Pro", "coding"))
     engine = build_engine(api)
     assert await drain(engine, "fix this python bug") == ["Hello."]
-    # The state carries the opening message, and the pick rides the session override.
+    # The state carries the opening message, the pick rides the session
+    # override, and the reported choice seeds the presence label.
     assert api.decision_calls == ["Madrang: fix this python bug"]
     assert api.requests[0]["model"] == "DeepSeek Pro"
     assert engine.history.sessions[7].model_override == "DeepSeek Pro"
+    assert engine.history.sessions[7].activity == "coding"
     # The next message keeps the pick without a second decision call.
     api.answers.append(close("Done."))
     assert await drain(engine, "thanks") == ["Done."]
@@ -597,7 +599,7 @@ async def test_a_failed_decision_keeps_the_configured_model() -> None:
 
 
 async def test_a_compacted_session_reroutes_on_the_next_message() -> None:
-    api = DecidingApi([close("Hello.")], decision="DeepSeek Pro")
+    api = DecidingApi([close("Hello.")], decision=("DeepSeek Pro", None))
     engine = build_engine(api)
     session = await engine.history.get(7, "user")
     session.start_context("system")

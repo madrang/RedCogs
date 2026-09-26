@@ -757,7 +757,7 @@ async def test_decide_model_posts_and_selects_the_preset() -> None:
     }}
     session = FakeSession(FakeResponse(200, answer))
     # The weak option probability still filters: the choice pick carries no threshold.
-    assert await provider.decide_model(session, "test-key", "Madrang: hi") == "Gemini"
+    assert await provider.decide_model(session, "test-key", "Madrang: hi") == ("Gemini", "coding")
     url, kwargs = session.calls[0]
     assert url == "https://api.venice.ai/api/v1/decisions"
     assert kwargs["headers"]["Authorization"] == "Bearer test-key"
@@ -766,11 +766,12 @@ async def test_decide_model_posts_and_selects_the_preset() -> None:
     # The questions: two noul, one score, one choice.
     assert set(kwargs["json"]["questions"]) == {"vision", "nsfw", "detail", "activity"}
     # The nsfw need dies unless the session allows it: the discard lands on
-    # the generic set, where the quirk malus picked Aion.
+    # the generic set, where the quirk malus picked Aion, and the answer
+    # carries no activity choice.
     nsfw = FakeSession(FakeResponse(200, {"answers": {"nsfw": {"probability": 0.9}}}))
-    assert await provider.decide_model(nsfw, "test-key", "Madrang: hi") == "Aion"
+    assert await provider.decide_model(nsfw, "test-key", "Madrang: hi") == ("Aion", None)
     allowed = FakeSession(FakeResponse(200, {"answers": {"nsfw": {"probability": 0.9}}}))
-    assert await provider.decide_model(allowed, "test-key", "Madrang: hi", nsfw_allowed=True) == "Aion"
+    assert await provider.decide_model(allowed, "test-key", "Madrang: hi", nsfw_allowed=True) == ("Aion", None)
 
 
 async def test_decide_model_answers_none_on_failures() -> None:
@@ -783,7 +784,7 @@ async def test_decide_model_answers_none_on_failures() -> None:
     assert await provider.decide_model(empty, "k", "hi") is None
     # A low answer on the noul questions routes like a plain conversation.
     low = FakeSession(FakeResponse(200, {"answers": {"vision": {"probability": 0.1}, "nsfw": {"probability": 0.1}}}))
-    assert await provider.decide_model(low, "k", "hi") == "Aion"
+    assert await provider.decide_model(low, "k", "hi") == ("Aion", None)
 
 
 def test_tool_filter_names_the_fixed_tool_presets() -> None:

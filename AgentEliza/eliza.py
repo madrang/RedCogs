@@ -455,7 +455,7 @@ class Eliza(commands.Cog):
 
         return {"image": ceiling(VENICE_IMAGE_MODELS), "edit": ceiling(VENICE_EDIT_MODELS)}
 
-    async def decide_session_model(self, state_text: str, nsfw_allowed: bool = False) -> str | None:
+    async def decide_session_model(self, state_text: str, nsfw_allowed: bool = False) -> tuple[str | None, str | None] | None:
         """The chat preset the decision model of the active provider picks for a new
            conversation (the Venice Jev router, POST /decisions).
            None when the provider ships no routing, the key is unset, or a model
@@ -463,7 +463,9 @@ class Eliza(commands.Cog):
            The credit ratio scales the cost pressure of the selection (the
            balance over the paced cycle rest), and under the routing floor the
            routing stops: the configured model answers a balance that cannot
-           cover the rest."""
+           cover the rest. The return is the pair (preset, activity): the pick
+           rides the model override, the reported choice seeds the presence
+           label of the session."""
         provider = provider_for(await self._base_url())
         decider = getattr(provider, "decide_model", None)
         if decider is None:

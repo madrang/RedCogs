@@ -270,13 +270,16 @@ class VeniceApiProvider(Provider):
             return None
         return float(usd) * 100
 
-    async def decide_model(self, session: aiohttp.ClientSession, api_key: str, state_text: str, ratio: float | None = None, nsfw_allowed: bool = False) -> str | None:
+    async def decide_model(self, session: aiohttp.ClientSession, api_key: str, state_text: str, ratio: float | None = None, nsfw_allowed: bool = False) -> tuple[str | None, str | None] | None:
         """The chat preset the decision flow routes a new conversation to (POST /decisions,
            a noul question per binary capability, one score question on the answer
            detail axis, and one choice question on the activity). The judgments name the trait
            strengths, the selection filters and scores the catalog in code. ratio scales
            the cost pressure of the tiebreak (the balance over the paced cycle rest,
-           None when unreadable), nsfw_allowed gates the nsfw need. None when the call
+           None when unreadable), nsfw_allowed gates the nsfw need. The return is the
+           pair (preset, activity): the preset of the selection (None when no enabled
+           preset carries the needed traits) and the activity the choice question
+           picked (None when it names other or nothing). None when the call
            fails or no judgment reads: the caller keeps the configured model."""
         body = model_decision_request(state_text)
         try:
@@ -317,7 +320,7 @@ class VeniceApiProvider(Provider):
         if not nsfw_allowed:
             needed.discard("nsfw")
         log.info("The decision traits at or above %.2f: %s.", VENICE_ROUTING_TRAIT_AT, ", ".join(sorted(needed)) or "none")
-        return select_preset(strengths, activity, nsfw_allowed, ratio)
+        return select_preset(strengths, activity, nsfw_allowed, ratio), activity
 
     def parse_usage(self, data: dict) -> list:
         payload = data.get("data") if isinstance(data.get("data"), dict) else {}

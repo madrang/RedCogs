@@ -410,13 +410,19 @@ class ChatEngine:
                 state = f"{message.speaker}: {message.content}{attachments_text(attachments)}"
                 if session.summary:
                     state = f"Summary of the conversation so far:\n{session.summary}\nNew message: {state}"
-                picked = await decider(state, gated)
-                if picked:
-                    session.model_override = picked
-                    log.info(
-                        "The decision routing picked the preset %s for session %s%s."
-                        , picked, label, "" if not session.messages else " after the compaction",
-                    )
+                verdict = await decider(state, gated)
+                if verdict is not None:
+                    picked, activity = verdict
+                    if picked:
+                        session.model_override = picked
+                        log.info(
+                            "The decision routing picked the preset %s for session %s%s."
+                            , picked, label, "" if not session.messages else " after the compaction",
+                        )
+                    if activity:
+                        # The choice of the decision question seeds the
+                        # presence label until the agent reports its own.
+                        session.activity = activity
         # The conversation's model string, an override included: it decides
         # the compaction budget here and the request model below.
         request_model = session.model_override or await self.api.model_name()
