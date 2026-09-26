@@ -2,6 +2,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import re
 import time
 from contextlib import AsyncExitStack
 from pathlib import Path
@@ -78,6 +79,10 @@ class HarnessResources:
         # by the cog. While None the status resource stays out of the list
         # and the reads.
         self.status_getter = None
+        # Async callable (session_id) -> (provider, context) of the active
+        # provider, wired by the cog. While None the provider resources
+        # stay out of the list and the reads.
+        self.provider_getter = None
 
     def _resolve(self, uri: str) -> Path | None:
         """The confined folder path of one harness uri, or None."""
@@ -126,6 +131,25 @@ class HarnessResources:
             lines.append(line)
         return lines
 
+    async def _provider_entries(self, session_id: int | None) -> list:
+        """The live resource entries of the active provider, or an empty
+        list: no getter, no provider, or a failed lookup reads as none."""
+        if self.provider_getter is None:
+            return []
+        try:
+            answer = await self.provider_getter(session_id)
+        except Exception:
+            log.exception("The provider resource lookup failed.")
+            return []
+        if not answer:
+            return []
+        provider, context = answer
+        try:
+            return list(provider.agent_resources(context) or ())
+        except Exception:
+            log.exception("The provider resource build failed.")
+            return []
+
     async def list(self) -> str:
         """The harness section of list_resources."""
         lines = []
@@ -135,23 +159,53 @@ class HarnessResources:
                 f"- {HARNESS_RESOURCE_SCHEME}{HARNESS_STATUS_URI} — {HARNESS_STATUS_URI}"
                 f" ({self._mime(Path(HARNESS_STATUS_URI))}): {HARNESS_STATUS_DESCRIPTION}"
             )
+        for entry in await self._provider_entries(None):
+            # The provider documents change with the provider, so they list
+            # ahead of the static files.
+            lines.append(
+                f"- {HARNESS_RESOURCE_SCHEME}{entry['uri']} — {entry['name']}"
+                f" ({entry.get('mime', 'text/markdown')}): {entry['description']}"
+            )
         lines.extend(await asyncio.to_thread(self._scan))
         return f"## {HARNESS_SERVER_NAME}\n" + ("\n".join(lines) if lines else "(no resources)")
+
+    @staticmethod
+    def _canonical(uri: str) -> str:
+        """The harness form of one asked uri: a wrong or a missing scheme
+        still reaches the content — the agent writes file:// or drops the
+        scheme. A foreign path stays confined by the folder resolve."""
+        rest = uri
+        scheme = re.match(r"^[A-Za-z][A-Za-z0-9+.\-]*://", rest)
+        if scheme is not None:
+            rest = rest[scheme.end():]
+        return HARNESS_RESOURCE_SCHEME + rest.lstrip("/")
 
     async def read(self, uri: str, session_id: int | None = None) -> str:
         """One harness uri in the read_resource format.
 
         session_id reaches the live status resource only: it reports the
-        context of the session that reads.
+        context of the session that reads. A wrong or a missing scheme
+        still serves: the read canonicalizes the uri first.
         """
-        if not uri.startswith(HARNESS_RESOURCE_SCHEME):
+        if not str(uri or "").strip():
             return f"Error: a harness uri starts with {HARNESS_RESOURCE_SCHEME}."
+        uri = self._canonical(uri)
         if self.status_getter is not None and uri == HARNESS_RESOURCE_SCHEME + HARNESS_STATUS_URI:
             try:
                 text = await self.status_getter(session_id)
             except Exception as e:
                 return f"Error: the status of the harness could not be built: {type(e).__name__}: {e}."
             return _cap(f"# {uri} (text/markdown)\n{text}")
+        for entry in await self._provider_entries(session_id):
+            if uri != HARNESS_RESOURCE_SCHEME + entry["uri"]:
+                continue
+            try:
+                text = entry["build"]()
+                if asyncio.iscoroutine(text):
+                    text = await text
+            except Exception as e:
+                return f"Error: the provider resource {uri} could not be built: {type(e).__name__}: {e}."
+            return _cap(f"# {uri} ({entry.get('mime', 'text/markdown')})\n{text}")
         target = await asyncio.to_thread(self._resolve, uri)
         if target is None or not target.is_file():
             return f"Error: no harness resource at {uri}. Use list_resources to see the uris."

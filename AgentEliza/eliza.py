@@ -130,6 +130,9 @@ class Eliza(commands.Cog):
         self.mcp = MCPManager(self.config)
         # The live status resource of the harness set reads the cog state at call time.
         self.mcp.harness.status_getter = self._harness_status
+        # The provider documents of the harness set: the active provider
+        # answers with its resources, the ratio rides the context.
+        self.mcp.harness.provider_getter = self._provider_resources
         # Long-term memory lives in Config. The harness tools let the agent control it.
         self.memory = Memory(self.config)
         # The interactive votes: a button view first, a native poll after an idle time.
@@ -647,6 +650,14 @@ class Eliza(commands.Cog):
         if not choices:
             return None
         return choices[0].get("message")
+
+    async def _provider_resources(self, session_id: int | None = None):
+        """The active provider and the live context of its resource builds:
+        the credit ratio drives the enable states of the render catalogs."""
+        provider = await self.current_preset()
+        if provider is None:
+            return None
+        return provider, {"ratio": await self.credit_ratio_now()}
 
     async def _harness_status(self, session_id: int | None = None) -> str:
         """The body of the `harness:///status.md` resource: the live harness status.

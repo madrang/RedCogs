@@ -188,6 +188,15 @@ class Provider:
         native tool payloads set their own model."""
         return {}
 
+    def agent_resources(self, context: dict | None = None) -> list:
+        """Live resources the provider serves the agent under the harness
+        scheme. Each entry: uri (the path under harness:///), name,
+        description, mime, and build — a callable that renders the text at
+        read time. context carries the live values of the cog (for example
+        the credit ratio); a provider that needs none ignores it. An empty
+        list: a provider without agent resources."""
+        return []
+
     def native_tools(self, ceilings: dict | None = None) -> list:
         """Tool definitions the provider implements itself, live while it is active.
 

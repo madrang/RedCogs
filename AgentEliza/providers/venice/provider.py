@@ -12,6 +12,7 @@ import aiohttp
 from ..base import Provider, analyze_image_tool
 from .catalog import JEV_MODEL_ID, VENICE_CHAT_COMPLETION_TOKENS, VENICE_CREDIT_ALLOWANCE, VENICE_CHAT_PRESETS, VENICE_LIMIT_NAMES, VENICE_ROUTING_TRAIT_AT
 from .decisions import activity_pick, model_decision_request, select_preset, trait_strengths
+from .resources import venice_agent_resources
 from .tools import (
     _background_remove_tool
   , _edit_tool
@@ -110,6 +111,12 @@ class VeniceApiProvider(Provider):
         form.add_field("file", payload, filename=filename or "audio", content_type=content_type or "application/octet-stream")
         form.add_field("model", self.speech_model)
         return "/audio/transcriptions", form
+
+    def agent_resources(self, context: dict | None = None) -> list:
+        """The live model documents of the provider: the chat presets, the
+        image and edit catalogs with their enable state at the credit ratio
+        of the context, and the song models."""
+        return venice_agent_resources(context)
 
     def native_tools(self, ceilings: dict | None = None) -> list:
         """The provider tools: the vision tool, the augment set, the image generation and edit, the background removal, the song generation, and the environment tool.

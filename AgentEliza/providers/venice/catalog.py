@@ -240,13 +240,16 @@ VENICE_CREDIT_ROUTING_FLOOR = 1.0
 VENICE_ROUTING_LITE_COST = 0.10
 # The strength a capability must read before the chat routing counts it as needed.
 VENICE_ROUTING_TRAIT_AT = 0.5
-# The cost pressure of the selection tiebreak: the pressure names the cost
+# The routing pressure of the selection tiebreak: the pressure names the cost
 # step in USD per 1M output tokens one extra preset trait must stay under.
 # A healthy balance reads the min, where one trait outweighs the whole span
 # of the enabled presets. The routing floor reads eight times the min, and
 # the ratio between them scales linearly.
 VENICE_ROUTING_PRESSURE_MIN = 0.05
 VENICE_ROUTING_PRESSURE_MAX = 0.4
+# The scoring malus of a negative trait in the selection tiebreak: two
+# quirks read like one missing positive trait.
+VENICE_ROUTING_QUIRK_MALUS = 0.5
 # The decision model of the chat routing: a fresh session asks it which chat
 # preset fits its opening message. Source: the live decision list
 # (GET /models?type=decision, read 2026-09-20), the only id it publishes.
@@ -281,6 +284,9 @@ VENICE_FIXED_TOOLS = (
 # An entry may carry disabled True: the environment tool and the overload fallback skip it, so the agent cannot reach it, while the user commands (setmodel, the providers menu) keep it.
 # An entry may carry tool_filter, the names of the only tools its models may carry: the engine drops every other tool, the MCP set included.
 # An entry may carry mcp False: the model takes no MCP server tools, the harness and provider tools stay (the Gemini backend rejects the schema keywords of the user servers).
+# An entry may carry negative_traits, the quirks its models carry: a narrow tool surface, no server tools, stiff prose. The names never join a request
+# (the decision flow and the environment tool ask for capabilities alone). The selection scores them through VENICE_ROUTING_QUIRK_MALUS. They also exist
+# for the agent-facing notes and for the prompt patches that may come to compensate the quirks we want to avoid.
 # The comment on each entry names the release date of its model ids (the created field of the live list).
 VENICE_CHAT_PRESETS = {
     "DeepSeek Lite": {
@@ -303,6 +309,7 @@ VENICE_CHAT_PRESETS = {
         "normal": "google-gemma-4-31b-it"  # released Apr 3, 2026
       , "traits": ["vision", "reasoning", "nsfw", "imagination"]
       , "cost": 0.36
+      , "negative_traits": ["narrow tools"]
       , "nsfw": "gemma-4-uncensored"  # released Apr 13, 2026
       , "tool_filter": VENICE_FIXED_TOOLS
     }
@@ -310,6 +317,7 @@ VENICE_CHAT_PRESETS = {
         "normal": "gemini-3-8-flash"  # released Sep 2, 2026
       , "traits": ["vision", "coding", "long context", "imagination", "concise answers"]
       , "cost": 4.6875
+      , "negative_traits": ["no server tools"]
       , "mcp": False
     }
 
@@ -370,6 +378,7 @@ VENICE_CHAT_PRESETS = {
         "normal": "qwen-3-8-flash"  # 1M Ctx, released Sep 9, 2026
       , "traits": ["long context", "vision", "reasoning", "concise answers"]
       , "cost": 0.49
+      , "negative_traits": ["narrow tools", "stiff prose"]
       , "tool_filter": VENICE_FIXED_TOOLS
     }
   , "Qwen": {
@@ -377,12 +386,14 @@ VENICE_CHAT_PRESETS = {
         "normal": "qwen-3-8-27b"  # 262K Ctx, released Aug 17, 2026
       , "traits": ["vision", "nsfw", "reasoning", "concise answers"]
       , "cost": 3.2
+      , "negative_traits": ["narrow tools", "stiff prose"]
       , "tool_filter": VENICE_FIXED_TOOLS
     }
   , "Qwen Max": {
         "normal": "qwen-3-8-2-4t-a95b"  # 262K Ctx, released Aug 12, 2026
       , "traits": ["coding", "nsfw", "reasoning", "thorough answers"]
       , "cost": 7.5
+      , "negative_traits": ["narrow tools", "stiff prose"]
       , "tool_filter": VENICE_FIXED_TOOLS
     }
 
@@ -473,8 +484,28 @@ VENICE_CHAT_PRESETS = {
         "normal": "venice-uncensored-1-2"  # released Apr 1, 2026
       , "traits": ["vision", "nsfw", "roleplay"]
       , "cost": 0.9
+      , "negative_traits": ["loops"]
       , "disabled": True # Spaz outs and repeat in loops the same 3 words. Broken!
     }
+}
+# The one-line text of each chat trait, positive and negative, for the agent
+# resource of the provider: the document teaches the vocabulary.
+VENICE_CHAT_TRAIT_TEXT = {
+    "vision": "The model reads images."
+  , "nsfw": "The model answers adult content behind the 18+ gate."
+  , "long context": "The model holds a context far over the base class."
+  , "coding": "The model reads and writes code well."
+  , "reasoning": "The model solves hard problems above its class."
+  , "writing": "The model writes prose close to the leaders."
+  , "imagination": "The model brings more original ideas than its class."
+  , "roleplay": "The model stays in character through long scenes."
+  , "storytelling": "The model builds narrative structure and tension."
+  , "concise answers": "The model answers short."
+  , "thorough answers": "The model answers in depth."
+  , "narrow tools": "The model carries a fixed tool list only, the wider tool surface stays off its requests."
+  , "no server tools": "The model takes no MCP server tools, the harness and provider tools stay."
+  , "stiff prose": "The answers read stiff and filtered for creative work."
+  , "loops": "The model repeats the same words in loops."
 }
 # The output token ceiling of each curated chat model (maxCompletionTokens of the live model list, read 2026-09-23).
 # The request carries it as max_tokens: an absent cap lets the backend reserve an output default that can exceed

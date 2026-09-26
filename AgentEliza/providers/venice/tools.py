@@ -14,6 +14,7 @@ import aiohttp
 from ...llm_chat import ChatError
 from ...tools.base import DISCORD_FILE_HOSTS, _cap
 from .audio import quote_song
+from .resources import EDITS_URI, IMAGES_URI, MUSIC_URI
 from .catalog import (
     VENICE_QUERY_MAX_CHARS
   , VENICE_SEARCH_MAX_LIMIT
@@ -249,7 +250,8 @@ def _image_tool(ceiling: float | None = None) -> dict:
             # unverified (a raw model id is not a name).
             return (
                 f"Error: unknown image model {asked}. "
-                f"Valid models: {', '.join(catalog)}."
+                f"Valid models: {', '.join(catalog)}. "
+                f"The price and the live enable state of every model sit in the harness resource {IMAGES_URI} (read_resource, server \"harness\")."
             )
         preset_name, entry = matched
         # The live ceiling disables a preset without touching the frozen
@@ -260,7 +262,8 @@ def _image_tool(ceiling: float | None = None) -> dict:
             allowed = ", ".join(name for name, other in VENICE_IMAGE_MODELS.items() if other["cost"] <= live)
             return (
                 f"Error: the image preset {preset_name} still exists but sits temporarily disabled: "
-                f"the bundled credit allowance runs low. Valid models: {allowed}."
+                f"the bundled credit allowance runs low. Valid models: {allowed}. "
+                f"The live ceiling and the price of every model sit in the harness resource {IMAGES_URI} (read_resource, server \"harness\")."
             )
         model = entry["model"]
         prompt_limit = VENICE_IMAGE_PROMPT_LIMITS.get(model, VENICE_PROMPT_MAX_CHARS)
@@ -423,7 +426,8 @@ def _edit_tool(ceiling: float | None = None) -> dict:
             # price (a raw model id is not a name).
             return (
                 f"Error: unknown edit model {asked}. "
-                f"Valid models: {', '.join(catalog)}."
+                f"Valid models: {', '.join(catalog)}. "
+                f"The price and the live enable state of every model sit in the harness resource {EDITS_URI} (read_resource, server \"harness\")."
             )
         preset_name, entry = matched
         # The live ceiling disables a preset without touching the frozen
@@ -434,7 +438,8 @@ def _edit_tool(ceiling: float | None = None) -> dict:
             allowed = ", ".join(name for name, other in VENICE_EDIT_MODELS.items() if other["cost"] <= live)
             return (
                 f"Error: the edit preset {preset_name} still exists but sits temporarily disabled: "
-                f"the bundled credit allowance runs low. Valid models: {allowed}."
+                f"the bundled credit allowance runs low. Valid models: {allowed}. "
+                f"The live ceiling and the price of every model sit in the harness resource {EDITS_URI} (read_resource, server \"harness\")."
             )
         model = entry["model"]
         prompt_limit = VENICE_IMAGE_PROMPT_LIMITS.get(model, VENICE_PROMPT_MAX_CHARS)
@@ -674,7 +679,8 @@ def _music_tool() -> dict:
             # Only the curated catalog, by its preset names (a raw model id is not a name).
             return (
                 f"Error: unknown song model {asked}. "
-                f"Valid models: {', '.join(VENICE_MUSIC_MODELS)}."
+                f"Valid models: {', '.join(VENICE_MUSIC_MODELS)}. "
+                f"The price and the dials of every model sit in the harness resource {MUSIC_URI} (read_resource, server \"harness\")."
             )
         preset_name, entry = matched
         model = entry["model"]

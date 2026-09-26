@@ -35,6 +35,7 @@ from .catalog import (
   , VENICE_CREDIT_ROUTING_FLOOR
   , VENICE_FIXED_TOOLS
   , VENICE_ROUTING_LITE_COST
+  , VENICE_ROUTING_QUIRK_MALUS
   , VENICE_ROUTING_TRAIT_AT
 )
 from .credits import credit_ratio, next_refill, routing_tier

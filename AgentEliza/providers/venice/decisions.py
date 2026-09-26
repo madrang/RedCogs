@@ -5,7 +5,7 @@
 from .catalog import (
   JEV_MODEL_ID, VENICE_CHAT_PRESETS
   , VENICE_CREDIT_GATE_BUFFER, VENICE_CREDIT_ROUTING_FLOOR
-  , VENICE_ROUTING_PRESSURE_MAX, VENICE_ROUTING_PRESSURE_MIN, VENICE_ROUTING_TRAIT_AT,
+  , VENICE_ROUTING_PRESSURE_MAX, VENICE_ROUTING_PRESSURE_MIN, VENICE_ROUTING_QUIRK_MALUS, VENICE_ROUTING_TRAIT_AT,
 )
 
 # The answer fields a noul judgment may carry its probability under: the live
@@ -162,7 +162,8 @@ def select_preset(strengths: dict, activity: str | None = None, nsfw_allowed: bo
        them, and an nsfw need dies unless the session allows it. The stages
        remove the presets that miss a needed trait: nsfw first, the activity,
        the detail side, then vision. The survivors score by extra traits minus
-       the cost pressure: for the same traits the cheaper preset wins, and a
+       the cost pressure and the quirk malus (two quirks read like one
+       missing trait): for the same traits the cheaper preset wins, and a
        costlier preset wins only through the traits it adds. Equal scores
        keep the catalog order. None when no enabled preset carries every
        needed trait: the caller keeps the configured model.
@@ -181,7 +182,11 @@ def select_preset(strengths: dict, activity: str | None = None, nsfw_allowed: bo
         traits = set(preset.get("traits", ()))
         if not needed <= traits:
             continue
-        score = len(traits - needed) - pressure * preset.get("cost", 0.0)
+        score = (
+            len(traits - needed)
+            - pressure * preset.get("cost", 0.0)
+            - VENICE_ROUTING_QUIRK_MALUS * len(preset.get("negative_traits", ()))
+        )
         if best_score is None or score > best_score:
             best_name = name
             best_score = score

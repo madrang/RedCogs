@@ -9,7 +9,7 @@ from aiohttp import ClientConnectionError
 import AgentEliza.providers.venice.audio as audio_flow
 from AgentEliza.llm_chat import ChatError
 from AgentEliza.providers.venice import (
-    VeniceApiProvider, VENICE_BACKGROUND_COST, VENICE_CHAT_PRESETS, VENICE_EDIT_MODELS, VENICE_FIXED_TOOLS, VENICE_IMAGE_MODELS, VENICE_ROUTING_TRAIT_AT, _background_remove_tool, _edit_tool, _environment_tool, _image_tool
+    VeniceApiProvider, VENICE_BACKGROUND_COST, VENICE_CHAT_PRESETS, VENICE_EDIT_MODELS, VENICE_FIXED_TOOLS, VENICE_IMAGE_MODELS, VENICE_ROUTING_QUIRK_MALUS, VENICE_ROUTING_TRAIT_AT, _background_remove_tool, _edit_tool, _environment_tool, _image_tool
   , activity_pick, model_decision_request, select_preset, trait_strengths,
 )
 from tests.AgentEliza.fakes import FakeResponse, FakeSession
@@ -188,14 +188,19 @@ async def test_the_render_tools_refuse_a_preset_over_the_live_ceiling() -> None:
         "Error: the image preset Nano Banana still exists but sits temporarily disabled: the bundled credit allowance runs low."
     )
     assert "Valid models: Muse" in answer
+    # The refusal names the harness document of the catalog.
+    assert "harness:///provider/images.md" in answer
     edit = _edit_tool()
     answer = await edit["handler"]({"image": "https://x/y.png", "prompt": "a hat", "model": "GPT Image"}, engine)
     assert answer.startswith(
         "Error: the edit preset GPT Image still exists but sits temporarily disabled: the bundled credit allowance runs low."
     )
-    # A model outside the catalog entirely stays an unknown model.
+    assert "harness:///provider/edits.md" in answer
+    # A model outside the catalog entirely stays an unknown model, the
+    # answer names the document too.
     answer = await generate["handler"]({"prompt": "a cat", "model": "no-such-model"}, engine)
     assert answer.startswith("Error: unknown image model no-such-model.")
+    assert "harness:///provider/images.md" in answer
 
 
 async def test_a_remembered_preset_resolves_and_runs_under_no_live_ceiling() -> None:
@@ -437,6 +442,7 @@ async def test_the_music_tool_refuses_the_dials_a_model_lacks() -> None:
     assert (await entry["handler"]({"prompt": "x", "model": "Seed Audio", "duration_seconds": 60}, engine)).startswith("Error: the model Seed Audio takes no duration dial.")
     assert (await entry["handler"]({"prompt": "x", "model": "ACE-Step", "instrumental": True}, engine)).startswith("Error: the model ACE-Step takes no force_instrumental dial.")
     assert (await entry["handler"]({"prompt": "x", "model": "nope"}, engine)).startswith("Error: unknown song model nope.")
+    assert "harness:///provider/music.md" in await entry["handler"]({"prompt": "x", "model": "nope"}, engine)
     assert (await entry["handler"]({"prompt": "x" * 5001, "model": "Lyria"}, engine)).startswith("Error: the prompt is over the 5000-character limit")
     assert (await entry["handler"]({"prompt": "x", "model": "Sonilo", "duration_seconds": 900}, engine)).startswith("Error: the duration_seconds of Sonilo")
 
@@ -591,11 +597,17 @@ def test_trait_strengths_reads_the_detail_axis_as_one_side() -> None:
 
 def test_select_preset_filters_then_scores_the_survivors() -> None:
     # No trait at the threshold: every enabled preset survives, the score
-    # picks the richest cheap one.
-    assert select_preset({}) == "Gemini"
-    assert select_preset({"vision": VENICE_ROUTING_TRAIT_AT - 0.01}) == "Gemini"
-    # A needed trait removes the presets that miss it, the score ranks the rest.
+    # picks the richest cheap one. The quirk malus moves the generic pick
+    # from Gemini (one quirk) to Aion: two quirks read like one missing
+    # trait, so one quirk beats the 0.14 raw lead of Gemini.
+    assert select_preset({}) == "Aion"
+    assert select_preset({"vision": VENICE_ROUTING_TRAIT_AT - 0.01}) == "Aion"
+    # A needed trait removes the presets that miss it (Aion carries no
+    # vision): Gemini keeps the vision pick, the clean alternative Kimi
+    # costs more than the malus.
     assert select_preset({"vision": 0.9}) == "Gemini"
+    # A real capability gap outweighs the quirk: Gemini keeps the coding
+    # pick over the clean carriers (one quirk never beats two extra traits).
     assert select_preset({}, activity="coding") == "Gemini"
     # The roleplay carriers alone survive the activity, the richer one wins.
     assert select_preset({}, activity="roleplay") == "Aion"
@@ -603,9 +615,10 @@ def test_select_preset_filters_then_scores_the_survivors() -> None:
     assert select_preset({}, activity="roleplay", ratio=1.0) == "Aion Mini"
     assert select_preset({"thorough answers": 0.9}) == "Aion"
     assert select_preset({"thorough answers": 0.9}, ratio=1.0) == "DeepSeek Pro"
-    # The nsfw need dies unless the session allows it.
+    # The nsfw need dies unless the session allows it: the discard lands on
+    # the generic set, where the malus already picked Aion.
     assert select_preset({"nsfw": 0.9}, nsfw_allowed=True) == "Aion"
-    assert select_preset({"nsfw": 0.9}) == "Gemini"
+    assert select_preset({"nsfw": 0.9}) == "Aion"
     # The picked activity filters at any strength: the choice question has
     # no threshold of its own.
     assert select_preset({}, activity="reasoning") == "Aion"
@@ -613,6 +626,17 @@ def test_select_preset_filters_then_scores_the_survivors() -> None:
     assert select_preset({"vision": 0.9}, activity="storytelling") is None
     # The same extra count breaks to the cheaper preset.
     assert select_preset({"vision": 0.9, "reasoning": 0.9, "concise answers": 0.9}) == "Qwen Lite"
+
+
+def test_the_quirk_malus_costs_a_preset_like_half_a_trait() -> None:
+    # The rule: two quirks read like one missing positive trait.
+    assert VENICE_ROUTING_QUIRK_MALUS == 0.5
+    # The clean preset of an equal trait count wins the generic set (Aion
+    # over Gemini and its one quirk).
+    assert select_preset({}) == "Aion"
+    # A tight balance leans the other way: the cost pressure outweighs the
+    # malus, the cheap quirk carrier (Gemma) beats the clean costly ones.
+    assert select_preset({}, ratio=1.0) == "Gemma"
 
 
 def test_extra_payload_caps_the_output_tokens_of_a_known_model() -> None:
@@ -652,9 +676,10 @@ async def test_decide_model_posts_and_selects_the_preset() -> None:
     assert kwargs["json"]["state"] == "Madrang: hi"
     # The questions: two noul, one score, one choice.
     assert set(kwargs["json"]["questions"]) == {"vision", "nsfw", "detail", "activity"}
-    # The nsfw need dies unless the session allows it.
+    # The nsfw need dies unless the session allows it: the discard lands on
+    # the generic set, where the quirk malus picked Aion.
     nsfw = FakeSession(FakeResponse(200, {"answers": {"nsfw": {"probability": 0.9}}}))
-    assert await provider.decide_model(nsfw, "test-key", "Madrang: hi") == "Gemini"
+    assert await provider.decide_model(nsfw, "test-key", "Madrang: hi") == "Aion"
     allowed = FakeSession(FakeResponse(200, {"answers": {"nsfw": {"probability": 0.9}}}))
     assert await provider.decide_model(allowed, "test-key", "Madrang: hi", nsfw_allowed=True) == "Aion"
 
@@ -669,7 +694,7 @@ async def test_decide_model_answers_none_on_failures() -> None:
     assert await provider.decide_model(empty, "k", "hi") is None
     # A low answer on the noul questions routes like a plain conversation.
     low = FakeSession(FakeResponse(200, {"answers": {"vision": {"probability": 0.1}, "nsfw": {"probability": 0.1}}}))
-    assert await provider.decide_model(low, "k", "hi") == "Gemini"
+    assert await provider.decide_model(low, "k", "hi") == "Aion"
 
 
 def test_tool_filter_names_the_fixed_tool_presets() -> None:
