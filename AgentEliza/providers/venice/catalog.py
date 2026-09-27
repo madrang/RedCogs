@@ -251,6 +251,11 @@ VENICE_ROUTING_PRESSURE_MAX = 0.65
 # The scoring malus of a negative trait in the selection tiebreak: two
 # quirks read like one missing positive trait.
 VENICE_ROUTING_QUIRK_MALUS = 0.5
+# The weight of the intelligence index in the selection tiebreak: the span
+# between the highest and the lowest enabled score reads this many traits.
+# An entry without an intelligence_index score reads the mean of the
+# enabled scores.
+VENICE_ROUTING_INTELLIGENCE_SPAN = 1.0
 # The costly-preset bar of the chat routing: a preset priced over the bar
 # stays out of the selection. The bar reads VENICE_ROUTING_COST_BAR at the
 # gate band, slides down to the cheapest enabled preset at the routing
@@ -296,6 +301,9 @@ VENICE_FIXED_TOOLS = (
 # An entry may carry negative_traits, the quirks its models carry: a narrow tool surface, no server tools, stiff prose. The names never join a request
 # (the decision flow and the environment tool ask for capabilities alone). The selection scores them through VENICE_ROUTING_QUIRK_MALUS. They also exist
 # for the agent-facing notes and for the prompt patches that may come to compensate the quirks we want to avoid.
+# An entry may carry intelligence_index, the Artificial Analysis Intelligence Index score of its model (v4.3.2, read 2026-09-27). An entry without the key
+# reads the mean of the enabled scores at selection: the relay products and the unlisted builds sit outside the index. The selection weighs the score
+# through VENICE_ROUTING_INTELLIGENCE_SPAN.
 # The comment on each entry names the release date of its model ids (the created field of the live list).
 VENICE_CHAT_PRESETS = {
     "DeepSeek Lite": {
@@ -304,12 +312,14 @@ VENICE_CHAT_PRESETS = {
         # "normal": "deepseek-v4-1-flash" # Sep 9, 2026 - cost: 1.5
       , "traits": ["long context", "concise answers", "writing"]
       , "cost": 0.35
+      , "intelligence_index": 34
     }
   , "DeepSeek Pro": {
         "normal": "deepseek-v4-pro"  # released Apr 24, 2026
         # "normal": "deepseek-v4-pro-0813" # Aug 13, 2026 - cost: 4.95
       , "traits": ["long context", "coding", "thorough answers", "writing"]
       , "cost": 3.301
+      , "intelligence_index": 36  # the score of the 0813 build, the only one the index lists
     }
 
     # Google
@@ -318,6 +328,7 @@ VENICE_CHAT_PRESETS = {
         "normal": "google-gemma-4-31b-it"  # released Apr 3, 2026
       , "traits": ["vision", "reasoning", "nsfw", "imagination"]
       , "cost": 0.36
+      , "intelligence_index": 19  # an estimated score, the site marks it pending its own evaluation
       , "negative_traits": ["narrow tools"]
       , "nsfw": "gemma-4-uncensored"  # released Apr 13, 2026
       , "tool_filter": VENICE_FIXED_TOOLS
@@ -326,6 +337,7 @@ VENICE_CHAT_PRESETS = {
         "normal": "gemini-3-8-flash"  # released Sep 2, 2026
       , "traits": ["vision", "coding", "long context", "imagination", "concise answers"]
       , "cost": 4.6875
+      , "intelligence_index": 41
       , "negative_traits": ["no server tools"]
       , "mcp": False
     }
@@ -336,6 +348,7 @@ VENICE_CHAT_PRESETS = {
         "normal": "llama-3.2-3b"  # released Oct 3, 2024
       , "traits": ["concise answers"]
       , "cost": 0.6
+      , "intelligence_index": 6  # an estimated score
       , "disabled": True
     }
   , "Llama": {
@@ -343,6 +356,7 @@ VENICE_CHAT_PRESETS = {
         "normal": "llama-3.3-70b"  # released Apr 6, 2025
       , "traits": ["thorough answers"]
       , "cost": 2.8
+      , "intelligence_index": 8  # an estimated score
       , "disabled": True
     }
 
@@ -353,6 +367,7 @@ VENICE_CHAT_PRESETS = {
         "normal": "zai-org-glm-4.7-flash"  # released Jan 29, 2026
       , "traits": ["concise answers"]
       , "cost": 0.4
+      , "intelligence_index": 15  # an estimated score
       , "nsfw": "olafangensan-glm-4.7-flash-heretic"  # released Feb 4, 2026
       , "disabled": True
     }
@@ -360,11 +375,13 @@ VENICE_CHAT_PRESETS = {
         "normal": "z-ai-glm-5-3-flash"  # released Aug 21, 2026
       , "traits": ["long context", "vision", "coding"]
       , "cost": 0.5
+      , "intelligence_index": 42
     }
   , "GLM 1M": {
         "normal": "z-ai-glm-5-3"  # released Aug 18, 2026
       , "traits": ["long context", "coding", "thorough answers"]
       , "cost": 5.5
+      , "intelligence_index": 45
     }
 
     # Thinking Machines
@@ -372,6 +389,7 @@ VENICE_CHAT_PRESETS = {
         "normal": "inkling"  # released Jul 16, 2026
       , "traits": ["vision", "concise answers"]
       , "cost": 5.0625
+      , "intelligence_index": 25
     }
 
     # MoonshotAI
@@ -379,6 +397,7 @@ VENICE_CHAT_PRESETS = {
         "normal": "kimi-k3"  # released Jul 16, 2026
       , "traits": ["long context", "vision", "coding", "thorough answers", "writing"]
       , "cost": 18.75
+      , "intelligence_index": 44
     }
 
     # Alibaba
@@ -387,6 +406,7 @@ VENICE_CHAT_PRESETS = {
         "normal": "qwen-3-8-flash"  # 1M Ctx, released Sep 9, 2026
       , "traits": ["long context", "vision", "reasoning", "concise answers"]
       , "cost": 0.49
+      , "intelligence_index": 40  # the score of the Flash-Next build, the index lists no plain 3.8 Flash
       , "negative_traits": ["narrow tools", "stiff prose"]
       , "tool_filter": VENICE_FIXED_TOOLS
     }
@@ -395,6 +415,7 @@ VENICE_CHAT_PRESETS = {
         "normal": "qwen-3-8-27b"  # 262K Ctx, released Aug 17, 2026
       , "traits": ["vision", "nsfw", "reasoning", "concise answers"]
       , "cost": 3.2
+      , "intelligence_index": 34
       , "negative_traits": ["narrow tools", "stiff prose"]
       , "tool_filter": VENICE_FIXED_TOOLS
     }
@@ -402,6 +423,7 @@ VENICE_CHAT_PRESETS = {
         "normal": "qwen-3-8-2-4t-a95b"  # 262K Ctx, released Aug 12, 2026
       , "traits": ["coding", "nsfw", "reasoning", "thorough answers"]
       , "cost": 7.5
+      , "intelligence_index": 45
       , "negative_traits": ["narrow tools", "stiff prose"]
       , "tool_filter": VENICE_FIXED_TOOLS
     }
@@ -411,6 +433,7 @@ VENICE_CHAT_PRESETS = {
         "normal": "grok-4-7"  # released Sep 15, 2026
       , "traits": ["vision", "coding", "reasoning"]
       , "cost": 6.8
+      , "intelligence_index": 46
     }
 
     # MiniMaxAI
@@ -419,6 +442,7 @@ VENICE_CHAT_PRESETS = {
         "normal": "minimax-m3-preview"  # released Jun 11, 2026
       , "traits": ["vision", "coding", "reasoning"]
       , "cost": 1.2
+      , "intelligence_index": 29
       , "disabled": True
     }
 
@@ -428,6 +452,7 @@ VENICE_CHAT_PRESETS = {
         "normal": "xiaomi-mimo-v2-5"  # released Jun 10, 2026
       , "traits": ["long context", "vision", "coding", "reasoning"]
       , "cost": 2.0
+      , "intelligence_index": 26  # the score of the V2.5 Pro build, the index lists no plain V2.5
       , "disabled": True
     }
 
@@ -437,6 +462,7 @@ VENICE_CHAT_PRESETS = {
         "normal": "mercury-2-5"  # released Sep 7, 2026
       , "traits": ["reasoning"]
       , "cost": 0.1875
+      , "intelligence_index": 12
       , "disabled": True
     }
 
@@ -455,6 +481,7 @@ VENICE_CHAT_PRESETS = {
         "normal": "mistral-small-3-2-24b-instruct"  # released Jan 14, 2026
       , "traits": ["vision"]
       , "cost": 0.25
+      , "intelligence_index": 8  # an estimated score
       , "disabled": True
     }
 
@@ -463,11 +490,13 @@ VENICE_CHAT_PRESETS = {
         "normal": "nvidia-nemotron-3-nano-30b-a3b"  # released Jan 26, 2026
       , "traits": []
       , "cost": 0.3
+      , "intelligence_index": 9  # the reasoning variant reads 9, the plain build 7
     }
   , "Nemotron Ultra": {
         "normal": "nvidia-nemotron-3-ultra-550b-a55b"  # released Jun 3, 2026
       , "traits": ["reasoning"]
       , "cost": 3.125
+      , "intelligence_index": 23
     }
 
   , "Aion Mini": {

@@ -9,7 +9,7 @@ from aiohttp import ClientConnectionError
 import AgentEliza.providers.venice.audio as audio_flow
 from AgentEliza.llm_chat import ChatError
 from AgentEliza.providers.venice import (
-    VeniceApiProvider, VENICE_BACKGROUND_COST, VENICE_CHAT_PRESETS, VENICE_EDIT_MODELS, VENICE_FIXED_TOOLS, VENICE_IMAGE_MODELS, VENICE_ROUTING_QUIRK_MALUS, VENICE_ROUTING_TRAIT_AT, _activity_tool, _background_remove_tool, _edit_tool, _image_tool
+    VeniceApiProvider, VENICE_BACKGROUND_COST, VENICE_CHAT_PRESETS, VENICE_EDIT_MODELS, VENICE_FIXED_TOOLS, VENICE_IMAGE_MODELS, VENICE_ROUTING_INTELLIGENCE_SPAN, VENICE_ROUTING_QUIRK_MALUS, VENICE_ROUTING_TRAIT_AT, _activity_tool, _background_remove_tool, _edit_tool, _image_tool
   , activity_pick, model_decision_request, select_preset, selectable_presets, trait_strengths,
 )
 from tests.AgentEliza.fakes import FakeResponse, FakeSession
@@ -727,9 +727,23 @@ def test_the_quirk_malus_costs_a_preset_like_half_a_trait() -> None:
     # The clean preset of an equal trait count wins the generic set (Aion
     # over Gemini and its one quirk).
     assert select_preset({}) == "Aion"
-    # A tight balance leans the other way: the cost pressure outweighs the
-    # malus, the cheap quirk carrier (Gemma) beats the clean costly ones.
-    assert select_preset({}, ratio=1.0) == "Gemma"
+    # The floor band keeps the cheap quirk carrier: the cost bar holds the
+    # clean carriers out, and Gemma beats what stays under it.
+    assert select_preset({}, ratio=0.90) == "Gemma"
+
+
+def test_the_intelligence_index_tips_the_drawn_band() -> None:
+    # The span of the enabled scores reads one trait, and an unlisted
+    # preset reads the mean: the relay pair keeps the healthy generic pick.
+    assert VENICE_ROUTING_INTELLIGENCE_SPAN == 1.0
+    assert select_preset({}) == "Aion"
+    # The drawn band prefers the smarter cheap carrier: GLM Vision (42 at
+    # $0.50) takes the generic and vision sets from Gemma (19 at $0.36).
+    assert select_preset({}, ratio=1.0) == "GLM Vision"
+    assert select_preset({"vision": 0.9}, ratio=1.0) == "GLM Vision"
+    # The healthy band keeps the trait picks: the index tips only the
+    # contests the traits leave open.
+    assert select_preset({"vision": 0.9}) == "Gemini"
 
 
 def test_selectable_presets_names_the_live_reach_of_the_routing() -> None:
