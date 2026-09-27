@@ -60,6 +60,10 @@ PRESENCE_TEXT_MAX = 128
 # The activity word of a session that never reported one: the presence
 # line names it beside the session label.
 PRESENCE_DEFAULT_ACTIVITY = "Chatting"
+# The session separator of the custom status: the Discord client renders
+# a status single-line (a newline collapses), the bullet splits the
+# sessions on that one line.
+PRESENCE_SEPARATOR = " • "
 # An extremely long answer must not flood the channel: past
 # LONG_REPLY_MAX_PAGES inline pages the rest of the text rides in a file
 # on a closing message.
@@ -293,14 +297,16 @@ class Eliza(commands.Cog):
         return session_label("user", session_id, user_name=name) if name else str(session_id)
 
     async def update_presence(self) -> None:
-        """Point the Discord presence at the live sessions: one line each,
-        the session label with the reported activity beside it. The fields
-        share the 128 characters of a custom status fairly — an equal set
-        of six fields reads about 21 a field, and a short field hands its
-        rest to the longer ones (`clip_fields`). The status turns to
-        do-not-disturb once every session slot runs. The send fires only
-        when the desired presence differs from the last one this cog set
-        and a minute passed since that send, under the gateway presence
+        """Point the Discord presence at the live sessions: the custom
+        status renders one line, the sessions split by a bullet, each with
+        its label, a colon, and its activity (a session that never
+        reported one reads the default word). The fields share the 128
+        characters of a custom status fairly — an equal set of six fields
+        reads about 21 a field, and a short field hands its rest to the
+        longer ones (`clip_fields`). The status turns to do-not-disturb
+        once every session slot runs. The send fires only when the
+        desired presence differs from the last one this cog set and a
+        minute passed since that send, under the gateway presence
         limit."""
         cache_ttl = DEFAULT_CACHE_TTL
         preset = await self.current_preset()
@@ -312,19 +318,19 @@ class Eliza(commands.Cog):
         ]
         status = discord.Status.dnd if len(live) >= MAX_SESSIONS else discord.Status.online
         labels = await asyncio.gather(*(self.session_label_of(session_id) for session_id, _session in live))
-        # One line a session: the label with the activity behind a colon.
-        # A session that never reported one reads the default word. The
-        # fields share the text budget with the separators removed first.
+        # One bullet-split entry a session: the label with the activity
+        # behind a colon. The fields share the text budget with the
+        # separators removed first.
         fields = []
         layout = []
         for label, (_session_id, session) in zip(labels, live):
             layout.append((len(fields), len(fields) + 1))
             fields.append(label)
             fields.append(session.activity or PRESENCE_DEFAULT_ACTIVITY)
-        overhead = 2 * len(layout) + max(len(layout) - 1, 0)
+        overhead = 2 * len(layout) + len(PRESENCE_SEPARATOR) * max(len(layout) - 1, 0)
         clipped = clip_fields(fields, PRESENCE_TEXT_MAX - overhead)
         lines = [f"{clipped[name]}: {clipped[activity]}" for name, activity in layout]
-        names = "\n".join(lines)
+        names = PRESENCE_SEPARATOR.join(lines)
         if time.monotonic() - self._presence_at < PRESENCE_MIN_SECONDS:
             return
         if self._presence_state == (status, names):
