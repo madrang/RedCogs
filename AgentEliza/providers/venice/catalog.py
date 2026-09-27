@@ -408,11 +408,9 @@ VENICE_CHAT_PRESETS = {
 
     # xAI
   , "Grok": {
-        # Disabled, untested - 500K Ctx.
         "normal": "grok-4-7"  # released Sep 15, 2026
       , "traits": ["vision", "coding", "reasoning"]
       , "cost": 6.8
-      , "disabled": True
     }
 
     # MiniMaxAI
@@ -462,18 +460,14 @@ VENICE_CHAT_PRESETS = {
 
     # NVIDIA
   , "Nemotron Nano": {
-        # Disabled, untested - 128K Ctx.
         "normal": "nvidia-nemotron-3-nano-30b-a3b"  # released Jan 26, 2026
       , "traits": []
       , "cost": 0.3
-      , "disabled": True
     }
   , "Nemotron Ultra": {
-        # Disabled, untested - 256K Ctx.
         "normal": "nvidia-nemotron-3-ultra-550b-a55b"  # released Jun 3, 2026
       , "traits": ["reasoning"]
       , "cost": 3.125
-      , "disabled": True
     }
 
   , "Aion Mini": {

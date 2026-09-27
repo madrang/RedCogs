@@ -136,11 +136,10 @@ async def test_bundled_credits_answers_none_on_failures() -> None:
 
 def test_preset_fallback_steps_onto_a_smaller_window() -> None:
     # The ladder ranks cost alone: the move from GLM 1M (a 1M window) steps
-    # up to Aion (262K — the cost tie with Qwen Max leaves the name to
-    # decide), and the switch condenses the session at the move.
-    assert VeniceApiProvider().preset_fallback("z-ai-glm-5-3") == "Aion"
+    # up to Grok, and the switch condenses the session at the move.
+    assert VeniceApiProvider().preset_fallback("z-ai-glm-5-3") == "Grok"
     # The ceiling cycles to the cheapest enabled preset.
-    assert VeniceApiProvider().preset_fallback("kimi-k3") == "DeepSeek Lite"
+    assert VeniceApiProvider().preset_fallback("kimi-k3") == "Nemotron Nano"
 
 
 async def test_the_activity_tool_moves_only_on_a_different_set() -> None:
@@ -214,9 +213,9 @@ async def test_the_activity_tool_rides_the_credit_ratio() -> None:
     assert answer == "The activity is 'a scene'. The bundled balance runs low, the environment stays as it is."
     assert switches == []
     assert activities == ["a scene"]
-    # At the floor pressure the cheaper carrier wins: roleplay moves onto
-    # Aion Mini, not Aion.
-    ratios[0] = 1.0
+    # A drawn balance keeps the costly carriers out and the cheaper Aion
+    # Mini takes the roleplay switch.
+    ratios[0] = 1.05
     answer = await entry["handler"]({"activity": "a scene", "capabilities": ["roleplay"]}, engine)
     assert answer.startswith("The activity is 'a scene'. Active preset: Aion Mini.")
     assert switches == ["Aion Mini"]
@@ -701,7 +700,7 @@ def test_select_preset_filters_then_scores_the_survivors() -> None:
     # The roleplay carriers alone survive the activity, the richer one wins.
     assert select_preset({}, activity="roleplay") == "Aion"
     # A tight balance raises the cost pressure: the cheaper carrier wins.
-    assert select_preset({}, activity="roleplay", ratio=1.0) == "Aion Mini"
+    assert select_preset({}, activity="roleplay", ratio=1.05) == "Aion Mini"
     assert select_preset({"thorough answers": 0.9}) == "Aion"
     assert select_preset({"thorough answers": 0.9}, ratio=1.2) == "DeepSeek Pro"
     # The sliding cost bar: Kimi alone carries vision with writing, the bar
@@ -740,7 +739,7 @@ def test_selectable_presets_names_the_live_reach_of_the_routing() -> None:
     # carriers of a trait pair stay reachable (Kimi alone carries vision
     # and writing together).
     healthy = selectable_presets(None)
-    assert {"Aion", "Aion Mini", "DeepSeek Lite", "Gemma", "Gemini", "Kimi", "Qwen", "Qwen Lite", "Qwen Max"} <= healthy
+    assert {"Aion", "Aion Mini", "DeepSeek Lite", "Gemma", "Gemini", "Grok", "Kimi", "Qwen", "Qwen Lite", "Qwen Max"} <= healthy
     # DeepSeek Lite sole-carries concise answers with writing, so it holds
     # its reach at every open ratio.
     assert "DeepSeek Lite" in selectable_presets(1.4)
@@ -750,7 +749,7 @@ def test_selectable_presets_names_the_live_reach_of_the_routing() -> None:
     assert "DeepSeek Pro" not in healthy
     assert "DeepSeek Pro" not in selectable_presets(1.1)
     assert "DeepSeek Pro" in selectable_presets(1.2)
-    for name in ("Kimi", "Aion", "Qwen Max"):
+    for name in ("Kimi", "Aion", "Qwen Max", "Grok"):
         assert name not in selectable_presets(1.24)
         assert name in selectable_presets(1.25)
     # GLM Vision holds the vision and coding sets until the bar frees
@@ -760,7 +759,11 @@ def test_selectable_presets_names_the_live_reach_of_the_routing() -> None:
     # A shadowed preset never wins at any pressure: a cheaper or richer
     # preset answers every request it could.
     for ratio in (None, 1.0, 1.2, 1.4):
-        assert {"GLM 1M", "Inkling"}.isdisjoint(selectable_presets(ratio))
+        assert {"GLM 1M", "Inkling", "Nemotron Ultra"}.isdisjoint(selectable_presets(ratio))
+    # The floor band pins the bar to the cheapest enabled preset: Nemotron
+    # Nano alone survives it, and the reach ends where the bar lifts.
+    assert "Nemotron Nano" in selectable_presets(0.89)
+    assert "Nemotron Nano" not in selectable_presets(0.95)
     # The nsfw needs ride the 18+ gate: Qwen wins only through an nsfw
     # need, Qwen Max keeps a clean path (the coding, reasoning, and
     # thorough answers trio it alone carries).
