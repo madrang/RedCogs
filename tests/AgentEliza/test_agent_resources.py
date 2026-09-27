@@ -45,14 +45,21 @@ def test_the_chat_document_lists_the_presets_and_the_glossary() -> None:
 def test_the_chat_document_marks_the_live_routing_reach() -> None:
     # An open routing names its reach: the sole carrier of a trait pair
     # reads reachable, a shadowed preset reads unreachable.
-    text = entries_by_uri({"ratio": 1.2})["provider/models.md"]["build"]()
-    assert "the chat routing runs" in text
+    text = entries_by_uri({"ratio": 1.3})["provider/models.md"]["build"]()
+    assert "the chat routing runs and the markers" in text
     assert (
         "- Kimi (kimi-k3) — $18.75 — long context, vision, coding, thorough answers, writing — reachable"
     ) in text
     assert "- GLM 1M (z-ai-glm-5-3) — $5.5 — long context, coding, thorough answers — unreachable" in text
     # The unknown ratio keeps the routing open.
     assert "The credit ratio reads unknown" in entries_by_uri()["provider/models.md"]["build"]()
+    # Under the gate band the bar slides: the state line names the live
+    # bar, and the presets priced over it read unreachable.
+    gated = entries_by_uri({"ratio": 1.2})["provider/models.md"]["build"]()
+    assert "the chat routing runs under a $4.35 cost bar" in gated
+    assert (
+        "- Kimi (kimi-k3) — $18.75 — long context, vision, coding, thorough answers, writing — unreachable"
+    ) in gated
     # Under the routing floor the routing closes: every enabled preset
     # reads unreachable, the disabled ones keep their own marker.
     low = entries_by_uri({"ratio": 0.88})["provider/models.md"]["build"]()

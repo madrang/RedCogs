@@ -15,7 +15,7 @@ from .catalog import (
   , VENICE_MUSIC_MODELS
   , VENICE_PROMPT_MAX_CHARS
 )
-from .decisions import selectable_presets
+from .decisions import routing_cost_bar, selectable_presets
 
 # The uris of the four documents. The tools name them in their refusal
 # answers, so the registration and the pointers share one source.
@@ -28,12 +28,18 @@ MUSIC_URI = "harness:///provider/music.md"
 def _chat_text(ratio: float | None = None) -> str:
     """The chat presets: id, cost, traits, quirks, the routing reach at the
        credit ratio, and the trait glossary."""
+    bar = routing_cost_bar(ratio)
     if ratio is None:
         state = "The credit ratio reads unknown, so the chat routing runs."
     elif ratio < VENICE_CREDIT_ROUTING_FLOOR:
         state = (
             f"The credit ratio sits at {ratio:.2f}, under the routing floor: "
             "the chat routing stays closed and the configured model answers every conversation."
+        )
+    elif bar is not None:
+        state = (
+            f"The credit ratio sits at {ratio:.2f}: the chat routing runs under a "
+            f"${bar:.2f} cost bar and the markers name the presets it can land on."
         )
     else:
         state = (

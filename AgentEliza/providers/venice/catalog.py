@@ -251,6 +251,14 @@ VENICE_ROUTING_PRESSURE_MAX = 0.65
 # The scoring malus of a negative trait in the selection tiebreak: two
 # quirks read like one missing positive trait.
 VENICE_ROUTING_QUIRK_MALUS = 0.5
+# The costly-preset bar of the chat routing: a preset priced over the bar
+# stays out of the selection. The bar reads VENICE_ROUTING_COST_BAR at the
+# gate band, slides down to the cheapest enabled preset at the routing
+# floor, and pins there under it. The bands mirror the media ceilings: the
+# top band of the media limits shares the gate band value. An unread ratio
+# keeps the selection unbarred.
+VENICE_ROUTING_COST_BAR = 5.0
+VENICE_ROUTING_COST_BAR_AT = 1.25
 # The decision model of the chat routing: a fresh session asks it which chat
 # preset fits its opening message. Source: the live decision list
 # (GET /models?type=decision, read 2026-09-20), the only id it publishes.

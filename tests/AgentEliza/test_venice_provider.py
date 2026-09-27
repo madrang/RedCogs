@@ -703,7 +703,12 @@ def test_select_preset_filters_then_scores_the_survivors() -> None:
     # A tight balance raises the cost pressure: the cheaper carrier wins.
     assert select_preset({}, activity="roleplay", ratio=1.0) == "Aion Mini"
     assert select_preset({"thorough answers": 0.9}) == "Aion"
-    assert select_preset({"thorough answers": 0.9}, ratio=1.0) == "DeepSeek Pro"
+    assert select_preset({"thorough answers": 0.9}, ratio=1.2) == "DeepSeek Pro"
+    # The sliding cost bar: Kimi alone carries vision with writing, the bar
+    # keeps it out under the gate band and frees it at the band.
+    assert select_preset({"vision": 0.9, "writing": 0.9}) == "Kimi"
+    assert select_preset({"vision": 0.9, "writing": 0.9}, ratio=1.24) is None
+    assert select_preset({"vision": 0.9, "writing": 0.9}, ratio=1.25) == "Kimi"
     # The nsfw need dies unless the session allows it: the discard lands on
     # the generic set, where the malus already picked Aion.
     assert select_preset({"nsfw": 0.9}, nsfw_allowed=True) == "Aion"
@@ -739,15 +744,19 @@ def test_selectable_presets_names_the_live_reach_of_the_routing() -> None:
     # DeepSeek Lite sole-carries concise answers with writing, so it holds
     # its reach at every open ratio.
     assert "DeepSeek Lite" in selectable_presets(1.4)
-    # The cost pressure swings the reach: at the healthiest pressure Kimi
-    # outranks DeepSeek Pro on every set it could answer, a tighter balance
-    # hands those sets to the cheaper preset.
+    # The cost bar holds the costly tier out under the gate band, and the
+    # pressure hands the mid tier to the cheaper carriers: DeepSeek Pro
+    # joins at about 1.12, the over-$5 presets at the 1.25 band.
     assert "DeepSeek Pro" not in healthy
-    assert "DeepSeek Pro" in selectable_presets(1.1)
-    # GLM Vision holds the vision and coding sets deep into the lite band,
-    # down to about 1.19.
-    assert "GLM Vision" in selectable_presets(1.1)
-    assert "GLM Vision" not in selectable_presets(1.2)
+    assert "DeepSeek Pro" not in selectable_presets(1.1)
+    assert "DeepSeek Pro" in selectable_presets(1.2)
+    for name in ("Kimi", "Aion", "Qwen Max"):
+        assert name not in selectable_presets(1.24)
+        assert name in selectable_presets(1.25)
+    # GLM Vision holds the vision and coding sets until the bar frees
+    # Gemini at about 1.23.
+    assert "GLM Vision" in selectable_presets(1.2)
+    assert "GLM Vision" not in selectable_presets(1.3)
     # A shadowed preset never wins at any pressure: a cheaper or richer
     # preset answers every request it could.
     for ratio in (None, 1.0, 1.2, 1.4):

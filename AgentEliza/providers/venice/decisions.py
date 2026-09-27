@@ -5,6 +5,7 @@
 from .catalog import (
   JEV_MODEL_ID, VENICE_CHAT_CAPABILITIES, VENICE_CHAT_PRESETS
   , VENICE_CREDIT_GATE_BUFFER, VENICE_CREDIT_ROUTING_FLOOR
+  , VENICE_ROUTING_COST_BAR, VENICE_ROUTING_COST_BAR_AT
   , VENICE_ROUTING_PRESSURE_MAX, VENICE_ROUTING_PRESSURE_MIN, VENICE_ROUTING_QUIRK_MALUS, VENICE_ROUTING_TRAIT_AT,
 )
 
@@ -155,18 +156,43 @@ def _cost_pressure(ratio: float | None) -> float:
     return VENICE_ROUTING_PRESSURE_MIN + (VENICE_ROUTING_PRESSURE_MAX - VENICE_ROUTING_PRESSURE_MIN) * part
 
 
+def routing_cost_bar(ratio: float | None) -> float | None:
+    """
+       The cost ceiling the chat selection carries at a credit ratio: None
+       (no ceiling) at or above the gate band or on an unread ratio, a
+       linear slide from the bar top down to the cheapest enabled preset
+       between the gate band and the routing floor, and the cheapest pinned
+       under the floor.
+    """
+    if ratio is None or ratio >= VENICE_ROUTING_COST_BAR_AT:
+        return None
+    cheapest = min(
+        preset.get("cost", 0.0)
+        for preset in VENICE_CHAT_PRESETS.values()
+        if not preset.get("disabled")
+    )
+    if ratio < VENICE_CREDIT_ROUTING_FLOOR:
+        return cheapest
+    span = VENICE_ROUTING_COST_BAR_AT - VENICE_CREDIT_ROUTING_FLOOR
+    part = (ratio - VENICE_CREDIT_ROUTING_FLOOR) / span
+    return cheapest + (VENICE_ROUTING_COST_BAR - cheapest) * part
+
+
 def select_preset(strengths: dict, activity: str | None = None, nsfw_allowed: bool = False, ratio: float | None = None) -> str | None:
     """
        The preset the decision answer routes to: the traits at or above
        VENICE_ROUTING_TRAIT_AT count as needed, the picked activity joins
        them, and an nsfw need dies unless the session allows it. The stages
        remove the presets that miss a needed trait: nsfw first, the activity,
-       the detail side, then vision. The survivors score by extra traits minus
-       the cost pressure and the quirk malus (two quirks read like one
-       missing trait): for the same traits the cheaper preset wins, and a
-       costlier preset wins only through the traits it adds. Equal scores
-       keep the catalog order. None when no enabled preset carries every
-       needed trait: the caller keeps the configured model.
+       the detail side, then vision. The cost bar removes a preset priced
+       over it: the bar reads its top at the gate band and slides down to
+       the cheapest enabled preset at the routing floor. The survivors score
+       by extra traits minus the cost pressure and the quirk malus (two
+       quirks read like one missing trait): for the same traits the cheaper
+       preset wins, and a costlier preset wins only through the traits it
+       adds. Equal scores keep the catalog order. None when no enabled
+       preset carries every needed trait: the caller keeps the configured
+       model.
     """
     needed = {trait for trait, strength in strengths.items() if strength >= VENICE_ROUTING_TRAIT_AT}
     if activity is not None:
@@ -174,10 +200,13 @@ def select_preset(strengths: dict, activity: str | None = None, nsfw_allowed: bo
     if not nsfw_allowed:
         needed.discard("nsfw")
     pressure = _cost_pressure(ratio)
+    bar = routing_cost_bar(ratio)
     best_name = None
     best_score = None
     for name, preset in VENICE_CHAT_PRESETS.items():
         if preset.get("disabled"):
+            continue
+        if bar is not None and preset.get("cost", 0.0) > bar:
             continue
         traits = set(preset.get("traits", ()))
         if not needed <= traits:
@@ -200,9 +229,9 @@ def selectable_presets(ratio: float | None = None, nsfw_allowed: bool = True) ->
        can make, the union of the decision routing and the activity report.
        The requests draw from VENICE_CHAT_CAPABILITIES, and an nsfw need
        rides a session behind the 18+ gate. The ratio rides the tiebreak
-       pressure, so the reach tightens as the balance runs down. A ratio
-       under the routing floor closes the routing: no preset stays
-       reachable.
+       pressure and the cost bar, so the reach tightens as the balance runs
+       down. A ratio under the routing floor closes the routing: no preset
+       stays reachable.
     """
     if ratio is not None and ratio < VENICE_CREDIT_ROUTING_FLOOR:
         return set()

@@ -14,7 +14,7 @@ import aiohttp
 from ...llm_chat import ChatError
 from ...tools.base import DISCORD_FILE_HOSTS, _cap
 from .audio import quote_song
-from .decisions import select_preset
+from .decisions import routing_cost_bar, select_preset
 from .resources import EDITS_URI, IMAGES_URI, MUSIC_URI
 from .catalog import (
     VENICE_QUERY_MAX_CHARS
@@ -827,10 +827,11 @@ def _activity_tool() -> dict:
           , ratio=ratio
         )
         if resolved is None:
+            bar = routing_cost_bar(ratio)
             menu = "; ".join(
                 preset_menu_line(name, preset)
                 for name, preset in VENICE_CHAT_PRESETS.items()
-                if not preset.get("disabled")
+                if not preset.get("disabled") and (bar is None or preset.get("cost", 0.0) <= bar)
             )
             return f"Error: no environment preset provides: {', '.join(sorted(requested))}. Available: {menu}."
         current = await engine.conversation_preset() if engine.conversation_preset is not None else None
