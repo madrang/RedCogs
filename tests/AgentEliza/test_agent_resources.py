@@ -5,7 +5,7 @@ from pathlib import Path
 
 from AgentEliza.mcp_manager import HarnessResources
 from AgentEliza.providers.kimi_code import KimiCodeProvider
-from AgentEliza.providers.venice import VENICE_IMAGE_MODELS, VENICE_EDIT_MODELS, VeniceApiProvider
+from AgentEliza.providers.venice import VENICE_CHAT_PRESETS, VENICE_IMAGE_MODELS, VENICE_EDIT_MODELS, VeniceApiProvider
 from AgentEliza.providers.venice.resources import venice_agent_resources
 
 
@@ -40,6 +40,27 @@ def test_the_chat_document_lists_the_presets_and_the_glossary() -> None:
     # The glossary teaches every trait, positive and negative.
     assert "- loops — The model repeats the same words in loops." in text
     assert "- narrow tools — The model carries a fixed tool list only" in text
+
+
+def test_the_chat_document_marks_the_live_routing_reach() -> None:
+    # An open routing names its reach: the sole carrier of a trait pair
+    # reads reachable, a shadowed preset reads unreachable.
+    text = entries_by_uri({"ratio": 1.2})["provider/models.md"]["build"]()
+    assert "the chat routing runs" in text
+    assert (
+        "- Kimi (kimi-k3) — $18.75 — long context, vision, coding, thorough answers, writing — reachable"
+    ) in text
+    assert "- GLM 1M (z-ai-glm-5-3) — $5.5 — long context, coding, thorough answers — unreachable" in text
+    # The unknown ratio keeps the routing open.
+    assert "The credit ratio reads unknown" in entries_by_uri()["provider/models.md"]["build"]()
+    # Under the routing floor the routing closes: every enabled preset
+    # reads unreachable, the disabled ones keep their own marker.
+    low = entries_by_uri({"ratio": 0.88})["provider/models.md"]["build"]()
+    assert "under the routing floor" in low
+    assert "the configured model answers" in low
+    assert "— reachable" not in low
+    enabled = sum(1 for preset in VENICE_CHAT_PRESETS.values() if not preset.get("disabled"))
+    assert low.count("— unreachable") == enabled
 
 
 def test_the_render_documents_carry_the_live_enable_state() -> None:

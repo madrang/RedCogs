@@ -3,7 +3,7 @@
 # judgments, not generated text.
 
 from .catalog import (
-  JEV_MODEL_ID, VENICE_CHAT_PRESETS
+  JEV_MODEL_ID, VENICE_CHAT_CAPABILITIES, VENICE_CHAT_PRESETS
   , VENICE_CREDIT_GATE_BUFFER, VENICE_CREDIT_ROUTING_FLOOR
   , VENICE_ROUTING_PRESSURE_MAX, VENICE_ROUTING_PRESSURE_MIN, VENICE_ROUTING_QUIRK_MALUS, VENICE_ROUTING_TRAIT_AT,
 )
@@ -191,3 +191,36 @@ def select_preset(strengths: dict, activity: str | None = None, nsfw_allowed: bo
             best_name = name
             best_score = score
     return best_name
+
+
+def selectable_presets(ratio: float | None = None, nsfw_allowed: bool = True) -> set[str]:
+    """
+       The enabled presets the chat routing can land on at a credit ratio:
+       the winners of the selection over every capability request the agent
+       can make, the union of the decision routing and the activity report.
+       The requests draw from VENICE_CHAT_CAPABILITIES, and an nsfw need
+       rides a session behind the 18+ gate. The ratio rides the tiebreak
+       pressure, so the reach tightens as the balance runs down. A ratio
+       under the routing floor closes the routing: no preset stays
+       reachable.
+    """
+    if ratio is not None and ratio < VENICE_CREDIT_ROUTING_FLOOR:
+        return set()
+    vocabulary = set(VENICE_CHAT_CAPABILITIES)
+    winners = set()
+    for name, preset in VENICE_CHAT_PRESETS.items():
+        if preset.get("disabled"):
+            continue
+        # A winner always carries every needed trait, so the requests worth
+        # testing are the subsets of the traits of the preset.
+        traits = [trait for trait in preset.get("traits", ()) if trait in vocabulary]
+        for mask in range(1 << len(traits)):
+            strengths = {
+                trait: VENICE_ROUTING_TRAIT_AT
+                for index, trait in enumerate(traits)
+                if mask >> index & 1
+            }
+            if select_preset(strengths, None, nsfw_allowed, ratio) == name:
+                winners.add(name)
+                break
+    return winners

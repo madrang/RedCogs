@@ -64,5 +64,7 @@ def test_routing_tier_bands_the_balance() -> None:
     # The buffer band carries the full preset set, the floor band the lite tier.
     assert routing_tier(3, 33750, fresh) == "full"
     assert routing_tier(3, 22500, fresh) == "lite"
-    # Under the routing floor the routing stops.
-    assert routing_tier(3, 22500 - 1, fresh) == "none"
+    # Under the routing floor the routing stops. The floor sits at the ratio
+    # 0.89: 20025 credits at the fresh refill.
+    assert routing_tier(3, 20025, fresh) == "lite"
+    assert routing_tier(3, 20025 - 1, fresh) == "none"

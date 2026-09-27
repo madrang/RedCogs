@@ -10,7 +10,7 @@ import AgentEliza.providers.venice.audio as audio_flow
 from AgentEliza.llm_chat import ChatError
 from AgentEliza.providers.venice import (
     VeniceApiProvider, VENICE_BACKGROUND_COST, VENICE_CHAT_PRESETS, VENICE_EDIT_MODELS, VENICE_FIXED_TOOLS, VENICE_IMAGE_MODELS, VENICE_ROUTING_QUIRK_MALUS, VENICE_ROUTING_TRAIT_AT, _activity_tool, _background_remove_tool, _edit_tool, _image_tool
-  , activity_pick, model_decision_request, select_preset, trait_strengths,
+  , activity_pick, model_decision_request, select_preset, selectable_presets, trait_strengths,
 )
 from tests.AgentEliza.fakes import FakeResponse, FakeSession
 
@@ -726,6 +726,39 @@ def test_the_quirk_malus_costs_a_preset_like_half_a_trait() -> None:
     # A tight balance leans the other way: the cost pressure outweighs the
     # malus, the cheap quirk carrier (Gemma) beats the clean costly ones.
     assert select_preset({}, ratio=1.0) == "Gemma"
+
+
+def test_selectable_presets_names_the_live_reach_of_the_routing() -> None:
+    # The routing floor closes the routing: no preset stays reachable.
+    assert selectable_presets(0.88) == set()
+    # A healthy balance: the generic picks stay reachable, and the sole
+    # carriers of a trait pair stay reachable (Kimi alone carries vision
+    # and writing together).
+    healthy = selectable_presets(None)
+    assert {"Aion", "Aion Mini", "DeepSeek Lite", "Gemma", "Gemini", "Kimi", "Qwen", "Qwen Lite", "Qwen Max"} <= healthy
+    # DeepSeek Lite sole-carries concise answers with writing, so it holds
+    # its reach at every open ratio.
+    assert "DeepSeek Lite" in selectable_presets(1.4)
+    # The cost pressure swings the reach: at the healthiest pressure Kimi
+    # outranks DeepSeek Pro on every set it could answer, a tighter balance
+    # hands those sets to the cheaper preset.
+    assert "DeepSeek Pro" not in healthy
+    assert "DeepSeek Pro" in selectable_presets(1.1)
+    # GLM Vision holds the vision and coding sets deep into the lite band,
+    # down to about 1.19.
+    assert "GLM Vision" in selectable_presets(1.1)
+    assert "GLM Vision" not in selectable_presets(1.2)
+    # A shadowed preset never wins at any pressure: a cheaper or richer
+    # preset answers every request it could.
+    for ratio in (None, 1.0, 1.2, 1.4):
+        assert {"GLM 1M", "Inkling"}.isdisjoint(selectable_presets(ratio))
+    # The nsfw needs ride the 18+ gate: Qwen wins only through an nsfw
+    # need, Qwen Max keeps a clean path (the coding, reasoning, and
+    # thorough answers trio it alone carries).
+    gated = selectable_presets(None, nsfw_allowed=False)
+    assert "Qwen" not in gated
+    assert "Qwen Max" in gated
+    assert "Aion" in gated
 
 
 def test_extra_payload_caps_the_output_tokens_of_a_known_model() -> None:

@@ -3,8 +3,9 @@
 
 from ...stats import cost_ceiling
 from .catalog import (
-    VENICE_CHAT_PRESETS
+  VENICE_CHAT_PRESETS
   , VENICE_CHAT_TRAIT_TEXT
+  , VENICE_CREDIT_ROUTING_FLOOR
   , VENICE_IMAGE_DIALECTS
   , VENICE_IMAGE_MODELS
   , VENICE_IMAGE_PROMPT_LIMITS
@@ -14,6 +15,7 @@ from .catalog import (
   , VENICE_MUSIC_MODELS
   , VENICE_PROMPT_MAX_CHARS
 )
+from .decisions import selectable_presets
 
 # The uris of the four documents. The tools name them in their refusal
 # answers, so the registration and the pointers share one source.
@@ -23,14 +25,32 @@ EDITS_URI = "harness:///provider/edits.md"
 MUSIC_URI = "harness:///provider/music.md"
 
 
-def _chat_text() -> str:
-    """The chat presets: id, cost, traits, quirks, and the trait glossary."""
+def _chat_text(ratio: float | None = None) -> str:
+    """The chat presets: id, cost, traits, quirks, the routing reach at the
+       credit ratio, and the trait glossary."""
+    if ratio is None:
+        state = "The credit ratio reads unknown, so the chat routing runs."
+    elif ratio < VENICE_CREDIT_ROUTING_FLOOR:
+        state = (
+            f"The credit ratio sits at {ratio:.2f}, under the routing floor: "
+            "the chat routing stays closed and the configured model answers every conversation."
+        )
+    else:
+        state = (
+            f"The credit ratio sits at {ratio:.2f}: "
+            "the chat routing runs and the markers name the presets it can land on."
+        )
     lines = [
         "# The chat presets of Venice"
       , ""
-      , "The cost is the output price in USD per 1M output tokens. A disabled preset stays a manual choice: the routing never lands on it."
+      , "The cost is the output price in USD per 1M output tokens. A disabled preset stays a manual choice: the routing never lands on it. "
+        "A preset marked reachable is one the decision routing or the activity report can land on. "
+        "An nsfw path needs a conversation behind the 18+ gate."
+      , ""
+      , state
       , ""
     ]
+    reachable = selectable_presets(ratio)
     for name, preset in VENICE_CHAT_PRESETS.items():
         traits = ", ".join(preset.get("traits", ())) or "plain"
         line = f"- {name} ({preset['normal']}) — ${preset.get('cost', 0):g} — {traits}"
@@ -39,6 +59,10 @@ def _chat_text() -> str:
             line += f" — quirks: {', '.join(quirks)}"
         if preset.get("disabled"):
             line += " — disabled"
+        elif name in reachable:
+            line += " — reachable"
+        else:
+            line += " — unreachable"
         lines.append(line)
     lines += ["", "## The traits", ""]
     for trait, text in VENICE_CHAT_TRAIT_TEXT.items():
@@ -107,16 +131,17 @@ def _music_text() -> str:
 
 
 def venice_agent_resources(context: dict | None = None) -> list:
-    """The live model documents of the provider: the chat presets, the image
-    and edit catalogs with their enable state at the credit ratio of the
-    context, and the song models. The builders render at read time."""
+    """The live model documents of the provider: the chat presets with the
+    live routing reach, the image and edit catalogs with their enable state,
+    both at the credit ratio of the context, and the song models. The
+    builders render at read time."""
     ratio = (context or {}).get("ratio")
     return [
         {
             "uri": "provider/models.md"
           , "name": "models.md"
-          , "description": "The chat presets of the active provider: ids, costs, traits, and quirks."
-          , "build": _chat_text
+          , "description": "The chat presets of the active provider: ids, costs, traits, quirks, and the live routing reach."
+          , "build": lambda: _chat_text(ratio)
         }
       , {
             "uri": "provider/images.md"

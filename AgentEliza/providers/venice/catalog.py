@@ -234,8 +234,9 @@ VENICE_MUSIC_TIMEOUT = 900
 # routing floor.
 VENICE_CREDIT_GATE_BUFFER = 1.5
 # The routing floor of the credit ratio: under it the chat routing stops and
-# the configured model answers.
-VENICE_CREDIT_ROUTING_FLOOR = 1.0
+# the configured model answers. The floor sits a little under the media floor
+# band (0.9), so the chat routing outlives the single-generation media window.
+VENICE_CREDIT_ROUTING_FLOOR = 0.89
 # The cost ceiling of the lite tier of the chat routing. No caller rides it.
 VENICE_ROUTING_LITE_COST = 0.10
 # The strength a capability must read before the chat routing counts it as needed.
@@ -243,10 +244,10 @@ VENICE_ROUTING_TRAIT_AT = 0.5
 # The routing pressure of the selection tiebreak: the pressure names the cost
 # step in USD per 1M output tokens one extra preset trait must stay under.
 # A healthy balance reads the min, where one trait outweighs the whole span
-# of the enabled presets. The routing floor reads eight times the min, and
+# of the enabled presets. The routing floor reads thirteen times the min, and
 # the ratio between them scales linearly.
 VENICE_ROUTING_PRESSURE_MIN = 0.05
-VENICE_ROUTING_PRESSURE_MAX = 0.4
+VENICE_ROUTING_PRESSURE_MAX = 0.65
 # The scoring malus of a negative trait in the selection tiebreak: two
 # quirks read like one missing positive trait.
 VENICE_ROUTING_QUIRK_MALUS = 0.5
@@ -293,7 +294,7 @@ VENICE_CHAT_PRESETS = {
         # No coding trait (the operator's call): a coding request upgrades to DeepSeek Pro, the next preset that carries it.
         "normal": "deepseek-v4-flash-0731"  # released Jul 31, 2026
         # "normal": "deepseek-v4-1-flash" # Sep 9, 2026 - cost: 1.5
-      , "traits": ["long context", "concise answers"]
+      , "traits": ["long context", "concise answers", "writing"]
       , "cost": 0.35
     }
   , "DeepSeek Pro": {
