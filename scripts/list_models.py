@@ -1,8 +1,8 @@
 """List the models of a provider: context, prices, capability flags.
 
 The price summary follows the model type. A text model reports the
-operating cost of a 1M-token workload: 10x the input price, plus 1x the
-output price and 1x the cache-read price (each per 1M tokens). An image
+operating cost of a 1M-token workload: 12x the input price, plus 1x the
+output price and 66x the cache-read price (each per 1M tokens). An image
 model reports the per-image cost of the request the AgentEliza image tool
 sends: the 2K preset on the resolution-tier models (gpt-image-2-5-sunburst
 bills 2K medium), the flat generation price elsewhere, the default 1K tier when a
@@ -67,7 +67,7 @@ MUSIC_SONG_SECONDS = 210
 
 
 def text_prices(pricing: dict) -> dict:
-    """The operating cost of a text model: 10x input + 1x output + 1x
+    """The operating cost of a text model: 12x input + 1x output + 66x
     cache-read, each per 1M tokens. A model that reports no cache price
     does not bill cache reads: the term adds 0."""
     entry = {
@@ -78,7 +78,7 @@ def text_prices(pricing: dict) -> dict:
     prices = (entry["input_usd_per_m"], entry["output_usd_per_m"])
     if all(price is not None for price in prices):
         cache = entry["cache_input_usd_per_m"] or 0
-        entry["operating_usd_per_m"] = round(10 * prices[0] + prices[1] + cache, 6)
+        entry["operating_usd_per_m"] = round(12 * prices[0] + prices[1] + 66 * cache, 6)
     return entry
 
 

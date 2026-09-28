@@ -32,7 +32,7 @@ def test_the_venice_documents_cover_the_four_catalogs() -> None:
 
 def test_the_chat_document_lists_the_presets_and_the_glossary() -> None:
     text = entries_by_uri()["provider/models.md"]["build"]()
-    assert "- Kimi (kimi-k3) — $18.75 — long context, vision, coding, thorough answers, writing" in text
+    assert "- Kimi (kimi-k3) — $88.5 — long context, vision, coding, thorough answers, writing" in text
     # The quirks and the disabled state ride the line.
     assert "quirks: narrow tools, stiff prose" in text
     assert "Venice Uncensored (venice-uncensored-1-2)" in text
@@ -48,17 +48,17 @@ def test_the_chat_document_marks_the_live_routing_reach() -> None:
     text = entries_by_uri({"ratio": 1.3})["provider/models.md"]["build"]()
     assert "the chat routing runs and the markers" in text
     assert (
-        "- Kimi (kimi-k3) — $18.75 — long context, vision, coding, thorough answers, writing — reachable"
+        "- Kimi (kimi-k3) — $88.5 — long context, vision, coding, thorough answers, writing — reachable"
     ) in text
-    assert "- GLM 1M (z-ai-glm-5-3) — $5.5 — long context, coding, thorough answers — unreachable" in text
+    assert "- GLM 1M (z-ai-glm-5-3) — $47.95 — long context, coding, thorough answers — unreachable" in text
     # The unknown ratio keeps the routing open.
     assert "The credit ratio reads unknown" in entries_by_uri()["provider/models.md"]["build"]()
     # Under the gate band the bar slides: the state line names the live
     # bar, and the presets priced over it read unreachable.
     gated = entries_by_uri({"ratio": 1.2})["provider/models.md"]["build"]()
-    assert "the chat routing runs under a $4.35 cost bar" in gated
+    assert "the chat routing runs under a $26.00 cost bar" in gated
     assert (
-        "- Kimi (kimi-k3) — $18.75 — long context, vision, coding, thorough answers, writing — unreachable"
+        "- Kimi (kimi-k3) — $88.5 — long context, vision, coding, thorough answers, writing — unreachable"
     ) in gated
     # Under the routing floor the routing closes: every enabled preset
     # reads unreachable, the disabled ones keep their own marker.

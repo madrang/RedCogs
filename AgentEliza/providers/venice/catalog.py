@@ -241,13 +241,15 @@ VENICE_CREDIT_ROUTING_FLOOR = 0.89
 VENICE_ROUTING_LITE_COST = 0.10
 # The strength a capability must read before the chat routing counts it as needed.
 VENICE_ROUTING_TRAIT_AT = 0.5
-# The routing pressure of the selection tiebreak: the pressure names the cost
-# step in USD per 1M output tokens one extra preset trait must stay under.
-# A healthy balance reads the min, where one trait outweighs the whole span
-# of the enabled presets. The routing floor reads thirteen times the min, and
-# the ratio between them scales linearly.
-VENICE_ROUTING_PRESSURE_MIN = 0.05
-VENICE_ROUTING_PRESSURE_MAX = 0.65
+# The routing pressure of the selection tiebreak: the pressure names the
+# cost step, in operating USD per 1M-token workload, one extra preset
+# trait must stay under. The credit ratio paces the step: the gate buffer
+# reads the min, where one trait never outweighs a doubled cost anywhere
+# in the enabled catalog, and the routing floor reads the max, where even
+# a two-trait lead stays under a doubling. The ratio between them scales
+# linearly.
+VENICE_ROUTING_PRESSURE_MIN = 0.06
+VENICE_ROUTING_PRESSURE_MAX = 0.13
 # The scoring malus of a negative trait in the selection tiebreak: two
 # quirks read like one missing positive trait.
 VENICE_ROUTING_QUIRK_MALUS = 0.5
@@ -262,7 +264,7 @@ VENICE_ROUTING_INTELLIGENCE_SPAN = 1.0
 # floor, and pins there under it. The bands mirror the media ceilings: the
 # top band of the media limits shares the gate band value. An unread ratio
 # keeps the selection unbarred.
-VENICE_ROUTING_COST_BAR = 5.0
+VENICE_ROUTING_COST_BAR = 30.0
 VENICE_ROUTING_COST_BAR_AT = 1.25
 # The decision model of the chat routing: a fresh session asks it which chat
 # preset fits its opening message. Source: the live decision list
@@ -281,18 +283,20 @@ VENICE_CHAT_CAPABILITIES = (
     "vision", "nsfw", "long context", "coding", "reasoning", "writing", "imagination"
   , "roleplay", "storytelling", "concise answers", "thorough answers"
 )
-# The fixed tool list of the presets whose models overuse the wider tool
-# surface (the Qwen presets and Gemma): the choice poll, the environment
-# switch, and the media endpoints whose results stay small. The MCP servers
-# of the Config and every other harness or provider tool stay off these
-# presets.
+# The fixed tool list of the presets whose models take a barred tool
+# surface (the Qwen mid and Max presets, and Gemma): the Qwen 3.8 27B
+# abuses the data read tools, the Max filter rides as a preventive
+# measure, and Gemma stays under the model cap of 20 tool definitions. The
+# list holds the choice poll, the environment switch, and the media
+# endpoints whose results stay small. The MCP servers of the Config and
+# every other harness or provider tool stay off these presets.
 VENICE_FIXED_TOOLS = (
     "propose_choices", "set_activity"
   , "generate_image", "edit_image", "remove_background", "generate_song"
 )
 # Chat presets: a short display name for the agent and the user, the model id behind it, an optional NSFW variant id for conversations behind the 18+ gate, the capability names the preset provides, and the cost of the preset.
 # The variant carries the same capabilities as the normal id: a model whose capabilities differ joins the catalog under its own preset.
-# Cost: the output price of the preset model in USD per 1M output tokens (the output_usd_per_m column of scripts/list_models.py, read 2026-09-25).
+# Cost: the operating price of the preset model in USD per 1M-token workload (the operating_usd_per_m column of scripts/list_models.py: 12x the input price, plus the output price and 66x the cache-read price, read 2026-09-27).
 # The decision routing and the overload fallback rank the presets by this price.
 # The catalog order is preference order: the first preset that satisfies a request wins. The short names are the only model handle the agent ever sees.
 # An entry may carry disabled True: the environment tool and the overload fallback skip it, so the agent cannot reach it, while the user commands (setmodel, the providers menu) keep it.
@@ -309,17 +313,16 @@ VENICE_CHAT_PRESETS = {
     "DeepSeek Lite": {
         # No coding trait (the operator's call): a coding request upgrades to DeepSeek Pro, the next preset that carries it.
         "normal": "deepseek-v4-flash-0731"  # released Jul 31, 2026
-        # "normal": "deepseek-v4-1-flash" # Sep 9, 2026 - cost: 1.5
+        # "normal": "deepseek-v4-1-flash" # Sep 9, 2026 - cost: 6.495
       , "traits": ["long context", "concise answers", "writing"]
-      , "cost": 0.35
+      , "cost": 4.76
       , "intelligence_index": 34
     }
   , "DeepSeek Pro": {
-        "normal": "deepseek-v4-pro"  # released Apr 24, 2026
-        # "normal": "deepseek-v4-pro-0813" # Aug 13, 2026 - cost: 4.95
+        "normal": "deepseek-v4-pro-0813"  # released Aug 13, 2026, cheaper per workload than the April build
       , "traits": ["long context", "coding", "thorough answers", "writing"]
-      , "cost": 3.301
-      , "intelligence_index": 36  # the score of the 0813 build, the only one the index lists
+      , "cost": 35.64
+      , "intelligence_index": 36
     }
 
     # Google
@@ -327,7 +330,7 @@ VENICE_CHAT_PRESETS = {
         # The fixed tool list stays under the model cap of 20 tool definitions.
         "normal": "google-gemma-4-31b-it"  # released Apr 3, 2026
       , "traits": ["vision", "reasoning", "nsfw", "imagination"]
-      , "cost": 0.36
+      , "cost": 7.74
       , "intelligence_index": 19  # an estimated score, the site marks it pending its own evaluation
       , "negative_traits": ["narrow tools"]
       , "nsfw": "gemma-4-uncensored"  # released Apr 13, 2026
@@ -336,7 +339,7 @@ VENICE_CHAT_PRESETS = {
     , "Gemini": {
         "normal": "gemini-3-8-flash"  # released Sep 2, 2026
       , "traits": ["vision", "coding", "long context", "imagination", "concise answers"]
-      , "cost": 4.6875
+      , "cost": 22.125
       , "intelligence_index": 41
       , "negative_traits": ["no server tools"]
       , "mcp": False
@@ -347,7 +350,7 @@ VENICE_CHAT_PRESETS = {
         # Disabled, untested - 128K Ctx.
         "normal": "llama-3.2-3b"  # released Oct 3, 2024
       , "traits": ["concise answers"]
-      , "cost": 0.6
+      , "cost": 2.4
       , "intelligence_index": 6  # an estimated score
       , "disabled": True
     }
@@ -355,7 +358,7 @@ VENICE_CHAT_PRESETS = {
         # Disabled, untested - 128K Ctx.
         "normal": "llama-3.3-70b"  # released Apr 6, 2025
       , "traits": ["thorough answers"]
-      , "cost": 2.8
+      , "cost": 11.2
       , "intelligence_index": 8  # an estimated score
       , "disabled": True
     }
@@ -366,7 +369,7 @@ VENICE_CHAT_PRESETS = {
         # The cheap preset stays a manual choice of the operator.
         "normal": "zai-org-glm-4.7-flash"  # released Jan 29, 2026
       , "traits": ["concise answers"]
-      , "cost": 0.4
+      , "cost": 1.78
       , "intelligence_index": 15  # an estimated score
       , "nsfw": "olafangensan-glm-4.7-flash-heretic"  # released Feb 4, 2026
       , "disabled": True
@@ -374,13 +377,13 @@ VENICE_CHAT_PRESETS = {
   , "GLM Vision": {
         "normal": "z-ai-glm-5-3-flash"  # released Aug 21, 2026
       , "traits": ["long context", "vision", "coding"]
-      , "cost": 0.5
+      , "cost": 4.28
       , "intelligence_index": 42
     }
   , "GLM 1M": {
         "normal": "z-ai-glm-5-3"  # released Aug 18, 2026
       , "traits": ["long context", "coding", "thorough answers"]
-      , "cost": 5.5
+      , "cost": 47.95
       , "intelligence_index": 45
     }
 
@@ -388,7 +391,7 @@ VENICE_CHAT_PRESETS = {
   , "Inkling": {
         "normal": "inkling"  # released Jul 16, 2026
       , "traits": ["vision", "concise answers"]
-      , "cost": 5.0625
+      , "cost": 34.0875
       , "intelligence_index": 25
     }
 
@@ -396,43 +399,44 @@ VENICE_CHAT_PRESETS = {
   , "Kimi": {
         "normal": "kimi-k3"  # released Jul 16, 2026
       , "traits": ["long context", "vision", "coding", "thorough answers", "writing"]
-      , "cost": 18.75
+      , "cost": 88.5
       , "intelligence_index": 44
     }
 
     # Alibaba
   , "Qwen Lite": {
-        # No coding trait (the operator's call): a coding request upgrades to Qwen Max.
+        # No coding trait: a coding request upgrades to Qwen Max.
         "normal": "qwen-3-8-flash"  # 1M Ctx, released Sep 9, 2026
       , "traits": ["long context", "vision", "reasoning", "concise answers"]
-      , "cost": 0.49
+      , "cost": 3.094
       , "intelligence_index": 40  # the score of the Flash-Next build, the index lists no plain 3.8 Flash
-      , "negative_traits": ["narrow tools", "stiff prose"]
-      , "tool_filter": VENICE_FIXED_TOOLS
+      , "negative_traits": ["stiff prose"]
     }
   , "Qwen": {
-        # No coding trait (the operator's call): a coding request upgrades to Qwen Max.
+        # Disabled: less intelligent and pricier than the Lite preset (the index reads 34 at 8.60 operating against 40 at 3.094).
+        # No Qwen variant fills the mid slot (3.7 Plus reads 25 at 11.30, the 3.5 builds lower). Returns when a better mid build lands.
         "normal": "qwen-3-8-27b"  # 262K Ctx, released Aug 17, 2026
       , "traits": ["vision", "nsfw", "reasoning", "concise answers"]
-      , "cost": 3.2
+      , "cost": 8.6
       , "intelligence_index": 34
       , "negative_traits": ["narrow tools", "stiff prose"]
-      , "tool_filter": VENICE_FIXED_TOOLS
+      , "tool_filter": VENICE_FIXED_TOOLS # Abuses data read tools... So they are disabled for this model.
+      , "disabled": True
     }
   , "Qwen Max": {
         "normal": "qwen-3-8-2-4t-a95b"  # 262K Ctx, released Aug 12, 2026
       , "traits": ["coding", "nsfw", "reasoning", "thorough answers"]
-      , "cost": 7.5
+      , "cost": 58.125
       , "intelligence_index": 45
       , "negative_traits": ["narrow tools", "stiff prose"]
-      , "tool_filter": VENICE_FIXED_TOOLS
+      , "tool_filter": VENICE_FIXED_TOOLS # Added as a preventive measure. Not tested if required.
     }
 
     # xAI
   , "Grok": {
         "normal": "grok-4-7"  # released Sep 15, 2026
       , "traits": ["vision", "coding", "reasoning"]
-      , "cost": 6.8
+      , "cost": 71.66
       , "intelligence_index": 46
     }
 
@@ -441,7 +445,7 @@ VENICE_CHAT_PRESETS = {
         # Disabled, untested - 512K Ctx.
         "normal": "minimax-m3-preview"  # released Jun 11, 2026
       , "traits": ["vision", "coding", "reasoning"]
-      , "cost": 1.2
+      , "cost": 8.76
       , "intelligence_index": 29
       , "disabled": True
     }
@@ -451,7 +455,7 @@ VENICE_CHAT_PRESETS = {
         # Disabled, untested - 1M Ctx.
         "normal": "xiaomi-mimo-v2-5"  # released Jun 10, 2026
       , "traits": ["long context", "vision", "coding", "reasoning"]
-      , "cost": 2.0
+      , "cost": 12.08
       , "intelligence_index": 26  # the score of the V2.5 Pro build, the index lists no plain V2.5
       , "disabled": True
     }
@@ -461,7 +465,7 @@ VENICE_CHAT_PRESETS = {
         # Disabled, untested - 260K Ctx.
         "normal": "mercury-2-5"  # released Sep 7, 2026
       , "traits": ["reasoning"]
-      , "cost": 0.1875
+      , "cost": 1.1175
       , "intelligence_index": 12
       , "disabled": True
     }
@@ -471,7 +475,7 @@ VENICE_CHAT_PRESETS = {
         # Disabled, untested - 256K Ctx.
         "normal": "seed-2-1-turbo"  # released Jun 27, 2026
       , "traits": ["vision", "coding", "reasoning"]
-      , "cost": 3.125
+      , "cost": 18.875
       , "disabled": True
     }
 
@@ -480,7 +484,7 @@ VENICE_CHAT_PRESETS = {
         # Disabled, untested - 256K Ctx.
         "normal": "mistral-small-3-2-24b-instruct"  # released Jan 14, 2026
       , "traits": ["vision"]
-      , "cost": 0.25
+      , "cost": 1.375
       , "intelligence_index": 8  # an estimated score
       , "disabled": True
     }
@@ -489,13 +493,13 @@ VENICE_CHAT_PRESETS = {
   , "Nemotron Nano": {
         "normal": "nvidia-nemotron-3-nano-30b-a3b"  # released Jan 26, 2026
       , "traits": []
-      , "cost": 0.3
+      , "cost": 1.2
       , "intelligence_index": 9  # the reasoning variant reads 9, the plain build 7
     }
   , "Nemotron Ultra": {
         "normal": "nvidia-nemotron-3-ultra-550b-a55b"  # released Jun 3, 2026
       , "traits": ["reasoning"]
-      , "cost": 3.125
+      , "cost": 23
       , "intelligence_index": 23
     }
 
@@ -503,19 +507,19 @@ VENICE_CHAT_PRESETS = {
         # Model based on the GLM family (the 3.0 mini rode DeepSeek)
         "normal": "aion-labs-aion-3-5-mini"  # released Sep 22, 2026
       , "traits": ["nsfw", "roleplay", "storytelling", "concise answers"]
-      , "cost": 1.75
+      , "cost": 27.1
     }
   , "Aion": {
         # Model based on the GLM family
         "normal": "aion-labs-aion-3-5"  # released Sep 22, 2026
       , "traits": ["nsfw", "reasoning", "roleplay", "storytelling", "thorough answers"]
-      , "cost": 7.5
+      , "cost": 114.375
     }
 
   , "Venice Uncensored": {
         "normal": "venice-uncensored-1-2"  # released Apr 1, 2026
       , "traits": ["vision", "nsfw", "roleplay"]
-      , "cost": 0.9
+      , "cost": 3.3
       , "negative_traits": ["loops"]
       , "disabled": True # Spaz outs and repeat in loops the same 3 words. Broken!
     }
@@ -549,6 +553,7 @@ VENICE_CHAT_TRAIT_TEXT = {
 VENICE_CHAT_COMPLETION_TOKENS = {
     "deepseek-v4-flash-0731": 32768
   , "deepseek-v4-pro": 32768
+  , "deepseek-v4-pro-0813": 32768
   , "google-gemma-4-31b-it": 8192
   , "gemma-4-uncensored": 8192
   , "gemini-3-8-flash": 65536

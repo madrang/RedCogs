@@ -135,11 +135,12 @@ async def test_bundled_credits_answers_none_on_failures() -> None:
 
 
 def test_preset_fallback_steps_onto_a_smaller_window() -> None:
-    # The ladder ranks cost alone: the move from GLM 1M (a 1M window) steps
-    # up to Grok, and the switch condenses the session at the move.
-    assert VeniceApiProvider().preset_fallback("z-ai-glm-5-3") == "Grok"
-    # The ceiling cycles to the cheapest enabled preset.
-    assert VeniceApiProvider().preset_fallback("kimi-k3") == "Nemotron Nano"
+    # The ladder ranks cost alone: the move from GLM 1M steps up to Qwen
+    # Max, the move from Kimi to the priciest relay, and the ceiling from
+    # the relay cycles to the cheapest enabled preset.
+    assert VeniceApiProvider().preset_fallback("z-ai-glm-5-3") == "Qwen Max"
+    assert VeniceApiProvider().preset_fallback("kimi-k3") == "Aion"
+    assert VeniceApiProvider().preset_fallback("aion-labs-aion-3-5") == "Nemotron Nano"
 
 
 async def test_the_activity_tool_moves_only_on_a_different_set() -> None:
@@ -147,7 +148,7 @@ async def test_the_activity_tool_moves_only_on_a_different_set() -> None:
     # running preset answers unchanged, a different carrier moves once.
     switches: list = []
     activities: list = []
-    current = ["Aion"]
+    current = ["Aion Mini"]
 
     async def switch(model_id):
         switches.append(model_id)
@@ -213,9 +214,9 @@ async def test_the_activity_tool_rides_the_credit_ratio() -> None:
     assert answer == "The activity is 'a scene'. The bundled balance runs low, the environment stays as it is."
     assert switches == []
     assert activities == ["a scene"]
-    # A drawn balance keeps the costly carriers out and the cheaper Aion
-    # Mini takes the roleplay switch.
-    ratios[0] = 1.05
+    # A drawn balance keeps the costly carriers out: the roleplay tier
+    # frees past 1.21, and Aion Mini takes the switch.
+    ratios[0] = 1.22
     answer = await entry["handler"]({"activity": "a scene", "capabilities": ["roleplay"]}, engine)
     assert answer.startswith("The activity is 'a scene'. Active preset: Aion Mini.")
     assert switches == ["Aion Mini"]
@@ -688,33 +689,32 @@ def test_select_preset_filters_then_scores_the_survivors() -> None:
     # picks the richest cheap one. The quirk malus moves the generic pick
     # from Gemini (one quirk) to Aion: two quirks read like one missing
     # trait, so one quirk beats the 0.14 raw lead of Gemini.
-    assert select_preset({}) == "Aion"
-    assert select_preset({"vision": VENICE_ROUTING_TRAIT_AT - 0.01}) == "Aion"
-    # A needed trait removes the presets that miss it (Aion carries no
-    # vision): Gemini keeps the vision pick, the clean alternative Kimi
-    # costs more than the malus.
-    assert select_preset({"vision": 0.9}) == "Gemini"
-    # A real capability gap outweighs the quirk: Gemini keeps the coding
-    # pick over the clean carriers (one quirk never beats two extra traits).
+    assert select_preset({}) == "Qwen Lite"
+    assert select_preset({"vision": VENICE_ROUTING_TRAIT_AT - 0.01}) == "Qwen Lite"
+    # A needed trait removes the presets that miss it: Qwen Lite keeps the
+    # plain vision pick, and the coding sets need the coding carriers.
+    assert select_preset({"vision": 0.9}) == "Qwen Lite"
     assert select_preset({}, activity="coding") == "Gemini"
-    # The roleplay carriers alone survive the activity, the richer one wins.
-    assert select_preset({}, activity="roleplay") == "Aion"
-    # A tight balance raises the cost pressure: the cheaper carrier wins.
-    assert select_preset({}, activity="roleplay", ratio=1.05) == "Aion Mini"
-    assert select_preset({"thorough answers": 0.9}) == "Aion"
-    assert select_preset({"thorough answers": 0.9}, ratio=1.2) == "DeepSeek Pro"
+    # The roleplay tier belongs to the relay pair: the mini tier wins on
+    # price, and the drawn band bars it until about 1.21.
+    assert select_preset({}, activity="roleplay") == "Aion Mini"
+    assert select_preset({}, activity="roleplay", ratio=1.22) == "Aion Mini"
+    # The thorough answers pick lands on DeepSeek Pro, behind the cost bar
+    # on a drawn balance.
+    assert select_preset({"thorough answers": 0.9}) == "DeepSeek Pro"
+    assert select_preset({"thorough answers": 0.9}, ratio=1.3) == "DeepSeek Pro"
     # The sliding cost bar: Kimi alone carries vision with writing, the bar
     # keeps it out under the gate band and frees it at the band.
     assert select_preset({"vision": 0.9, "writing": 0.9}) == "Kimi"
     assert select_preset({"vision": 0.9, "writing": 0.9}, ratio=1.24) is None
     assert select_preset({"vision": 0.9, "writing": 0.9}, ratio=1.25) == "Kimi"
-    # The nsfw need dies unless the session allows it: the discard lands on
-    # the generic set, where the malus already picked Aion.
-    assert select_preset({"nsfw": 0.9}, nsfw_allowed=True) == "Aion"
-    assert select_preset({"nsfw": 0.9}) == "Aion"
+    # The nsfw need dies unless the session allows it: behind the gate Gemma
+    # answers the need, with the gate closed the generic pick returns.
+    assert select_preset({"nsfw": 0.9}, nsfw_allowed=True) == "Gemma"
+    assert select_preset({"nsfw": 0.9}) == "Qwen Lite"
     # The picked activity filters at any strength: the choice question has
     # no threshold of its own.
-    assert select_preset({}, activity="reasoning") == "Aion"
+    assert select_preset({}, activity="reasoning") == "Qwen Lite"
     # No enabled preset carries vision and storytelling together.
     assert select_preset({"vision": 0.9}, activity="storytelling") is None
     # The same extra count breaks to the cheaper preset.
@@ -724,52 +724,52 @@ def test_select_preset_filters_then_scores_the_survivors() -> None:
 def test_the_quirk_malus_costs_a_preset_like_half_a_trait() -> None:
     # The rule: two quirks read like one missing positive trait.
     assert VENICE_ROUTING_QUIRK_MALUS == 0.5
-    # The clean preset of an equal trait count wins the generic set (Aion
-    # over Gemini and its one quirk).
-    assert select_preset({}) == "Aion"
-    # The floor band keeps the cheap quirk carrier: the cost bar holds the
-    # clean carriers out, and Gemma beats what stays under it.
-    assert select_preset({}, ratio=0.90) == "Gemma"
+    # The trait contests keep their quirk carriers: Qwen Lite sole-carries
+    # the vision, reasoning, and concise answers trio.
+    assert select_preset({"vision": 0.9, "reasoning": 0.9, "concise answers": 0.9}) == "Qwen Lite"
+    # The shared vision and nsfw sets answer on Gemma, the lone enabled
+    # carrier behind the gate.
+    assert select_preset({"vision": 0.9, "nsfw": 0.9}, nsfw_allowed=True) == "Gemma"
+    # The floor band pins the bar to the cheapest enabled preset.
+    assert select_preset({}, ratio=0.90) == "Nemotron Nano"
 
 
 def test_the_intelligence_index_tips_the_drawn_band() -> None:
     # The span of the enabled scores reads one trait, and an unlisted
-    # preset reads the mean: the relay pair keeps the healthy generic pick.
+    # preset reads the mean: the relay pair sits at the middle of the tie.
     assert VENICE_ROUTING_INTELLIGENCE_SPAN == 1.0
-    assert select_preset({}) == "Aion"
-    # The drawn band prefers the smarter cheap carrier: GLM Vision (42 at
-    # $0.50) takes the generic and vision sets from Gemma (19 at $0.36).
-    assert select_preset({}, ratio=1.0) == "GLM Vision"
-    assert select_preset({"vision": 0.9}, ratio=1.0) == "GLM Vision"
-    # The healthy band keeps the trait picks: the index tips only the
-    # contests the traits leave open.
-    assert select_preset({"vision": 0.9}) == "Gemini"
+    # Qwen Lite (40 at 3.09 operating, one quirk) leads the generic and
+    # vision sets at every open pressure.
+    assert select_preset({}) == "Qwen Lite"
+    assert select_preset({"vision": 0.9}) == "Qwen Lite"
+    assert select_preset({"vision": 0.9}, ratio=1.0) == "Qwen Lite"
+    # The coding trait keeps the richer carrier: Gemini answers the coding
+    # sets at the healthy pressure.
+    assert select_preset({"vision": 0.9, "coding": 0.9}) == "Gemini"
 
 
 def test_selectable_presets_names_the_live_reach_of_the_routing() -> None:
     # The routing floor closes the routing: no preset stays reachable.
     assert selectable_presets(0.88) == set()
-    # A healthy balance: the generic picks stay reachable, and the sole
-    # carriers of a trait pair stay reachable (Kimi alone carries vision
-    # and writing together).
+    # A healthy balance reads ungated: every enabled preset that wins a set
+    # stays reachable, DeepSeek Pro included.
     healthy = selectable_presets(None)
-    assert {"Aion", "Aion Mini", "DeepSeek Lite", "Gemma", "Gemini", "Grok", "Kimi", "Qwen", "Qwen Lite", "Qwen Max"} <= healthy
+    assert {"Aion", "Aion Mini", "DeepSeek Lite", "DeepSeek Pro", "Gemma", "Gemini", "Grok", "Kimi", "Qwen Lite", "Qwen Max"} <= healthy
     # DeepSeek Lite sole-carries concise answers with writing, so it holds
     # its reach at every open ratio.
     assert "DeepSeek Lite" in selectable_presets(1.4)
-    # The cost bar holds the costly tier out under the gate band, and the
-    # pressure hands the mid tier to the cheaper carriers: DeepSeek Pro
-    # joins at about 1.12, the over-$5 presets at the 1.25 band.
-    assert "DeepSeek Pro" not in healthy
+    # The cost bar holds the costly tier out under the gate band: DeepSeek
+    # Pro and the relay-tier presets free at the 1.25 band.
     assert "DeepSeek Pro" not in selectable_presets(1.1)
-    assert "DeepSeek Pro" in selectable_presets(1.2)
-    for name in ("Kimi", "Aion", "Qwen Max", "Grok"):
+    assert "DeepSeek Pro" not in selectable_presets(1.2)
+    for name in ("Kimi", "Aion", "Qwen Max", "Grok", "DeepSeek Pro"):
         assert name not in selectable_presets(1.24)
         assert name in selectable_presets(1.25)
-    # GLM Vision holds the vision and coding sets until the bar frees
-    # Gemini at about 1.23.
-    assert "GLM Vision" in selectable_presets(1.2)
-    assert "GLM Vision" not in selectable_presets(1.3)
+    # GLM Vision holds the vision and coding sets past the 1.14 mark, until
+    # the scoring hands them back to Gemini at about 1.30.
+    assert "GLM Vision" in selectable_presets(1.14)
+    assert "GLM Vision" in selectable_presets(1.30)
+    assert "GLM Vision" not in selectable_presets(1.31)
     # A shadowed preset never wins at any pressure: a cheaper or richer
     # preset answers every request it could.
     for ratio in (None, 1.0, 1.2, 1.4):
@@ -825,12 +825,12 @@ async def test_decide_model_posts_and_selects_the_preset() -> None:
     # The questions: two noul, one score, one choice.
     assert set(kwargs["json"]["questions"]) == {"vision", "nsfw", "detail", "activity"}
     # The nsfw need dies unless the session allows it: the discard lands on
-    # the generic set, where the quirk malus picked Aion, and the answer
-    # carries no activity choice.
+    # the generic pick, and behind the gate Gemma answers the need. The
+    # answer carries no activity choice either way.
     nsfw = FakeSession(FakeResponse(200, {"answers": {"nsfw": {"probability": 0.9}}}))
-    assert await provider.decide_model(nsfw, "test-key", "Madrang: hi") == ("Aion", None)
+    assert await provider.decide_model(nsfw, "test-key", "Madrang: hi") == ("Qwen Lite", None)
     allowed = FakeSession(FakeResponse(200, {"answers": {"nsfw": {"probability": 0.9}}}))
-    assert await provider.decide_model(allowed, "test-key", "Madrang: hi", nsfw_allowed=True) == ("Aion", None)
+    assert await provider.decide_model(allowed, "test-key", "Madrang: hi", nsfw_allowed=True) == ("Gemma", None)
 
 
 async def test_decide_model_answers_none_on_failures() -> None:
@@ -843,18 +843,19 @@ async def test_decide_model_answers_none_on_failures() -> None:
     assert await provider.decide_model(empty, "k", "hi") is None
     # A low answer on the noul questions routes like a plain conversation.
     low = FakeSession(FakeResponse(200, {"answers": {"vision": {"probability": 0.1}, "nsfw": {"probability": 0.1}}}))
-    assert await provider.decide_model(low, "k", "hi") == ("Aion", None)
+    assert await provider.decide_model(low, "k", "hi") == ("Qwen Lite", None)
 
 
 def test_tool_filter_names_the_fixed_tool_presets() -> None:
     provider = VeniceApiProvider()
     fixed = frozenset(VENICE_FIXED_TOOLS)
     # A preset name, its raw id, and its NSFW variant all resolve the filter.
-    assert provider.tool_filter("Qwen Lite") == fixed
-    assert provider.tool_filter("qwen") == fixed
+    assert provider.tool_filter("Qwen") == fixed
     assert provider.tool_filter("qwen-3-8-27b") == fixed
+    assert provider.tool_filter("Qwen Max") == fixed
     assert provider.tool_filter("gemma-4-uncensored") == fixed
     # The rest of the catalog takes the full tool set.
+    assert provider.tool_filter("Qwen Lite") is None
     assert provider.tool_filter("DeepSeek Lite") is None
     assert provider.tool_filter("kimi-k3") is None
     assert provider.tool_filter("no-such-model") is None

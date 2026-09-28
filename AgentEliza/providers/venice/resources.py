@@ -49,7 +49,8 @@ def _chat_text(ratio: float | None = None) -> str:
     lines = [
         "# The chat presets of Venice"
       , ""
-      , "The cost is the output price in USD per 1M output tokens. A disabled preset stays a manual choice: the routing never lands on it. "
+      , "The cost is the operating price in USD per 1M-token workload: 12x the input price, plus the output price and 66x the cache-read price. "
+        "A disabled preset stays a manual choice: the routing never lands on it. "
         "A preset marked reachable is one the decision routing or the activity report can land on. "
         "An nsfw path needs a conversation behind the 18+ gate."
       , ""
