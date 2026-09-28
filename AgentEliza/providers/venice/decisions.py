@@ -277,3 +277,27 @@ def selectable_presets(ratio: float | None = None, nsfw_allowed: bool = True) ->
                 winners.add(name)
                 break
     return winners
+
+
+def best_value_preset() -> str | None:
+    """
+       The enabled preset with the best intelligence-to-price ratio: the
+       intelligence index a dollar of workload cost buys, the score over
+       the operating price. A preset without a score stays out of the
+       contest, ties keep the catalog order, and None names a catalog
+       where no enabled preset carries a score.
+    """
+    best_name = None
+    best_ratio = None
+    for name, preset in VENICE_CHAT_PRESETS.items():
+        if preset.get("disabled"):
+            continue
+        score = preset.get("intelligence_index")
+        cost = preset.get("cost", 0.0)
+        if score is None or cost <= 0:
+            continue
+        ratio = score / cost
+        if best_ratio is None or ratio > best_ratio:
+            best_name = name
+            best_ratio = ratio
+    return best_name

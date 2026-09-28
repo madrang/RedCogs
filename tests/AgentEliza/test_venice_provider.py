@@ -10,7 +10,7 @@ import AgentEliza.providers.venice.audio as audio_flow
 from AgentEliza.llm_chat import ChatError
 from AgentEliza.providers.venice import (
     VeniceApiProvider, VENICE_BACKGROUND_COST, VENICE_CHAT_PRESETS, VENICE_EDIT_MODELS, VENICE_FIXED_TOOLS, VENICE_IMAGE_MODELS, VENICE_ROUTING_INTELLIGENCE_SPAN, VENICE_ROUTING_QUIRK_MALUS, VENICE_ROUTING_TRAIT_AT, _activity_tool, _background_remove_tool, _edit_tool, _image_tool
-  , activity_pick, model_decision_request, select_preset, selectable_presets, trait_strengths,
+  , activity_pick, best_value_preset, model_decision_request, select_preset, selectable_presets, trait_strengths,
 )
 from tests.AgentEliza.fakes import FakeResponse, FakeSession
 
@@ -785,6 +785,15 @@ def test_selectable_presets_names_the_live_reach_of_the_routing() -> None:
     assert "Qwen" not in gated
     assert "Qwen Max" in gated
     assert "Aion" in gated
+
+
+def test_the_default_model_rides_the_best_value_preset() -> None:
+    # The value pick is the enabled preset with the best intelligence
+    # index a dollar of workload cost buys, computed from the live catalog:
+    # Qwen Lite leads today (40 over 3.094), GLM Vision and the nano tier
+    # follow. A preset without a score stays out of the contest.
+    assert best_value_preset() == "Qwen Lite"
+    assert VeniceApiProvider().default_model() == "Qwen Lite"
 
 
 def test_extra_payload_caps_the_output_tokens_of_a_known_model() -> None:

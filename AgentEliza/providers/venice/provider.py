@@ -11,7 +11,7 @@ import aiohttp
 
 from ..base import Provider, analyze_image_tool
 from .catalog import JEV_MODEL_ID, VENICE_CHAT_COMPLETION_TOKENS, VENICE_CREDIT_ALLOWANCE, VENICE_CHAT_PRESETS, VENICE_LIMIT_NAMES, VENICE_ROUTING_TRAIT_AT
-from .decisions import activity_pick, model_decision_request, select_preset, trait_strengths
+from .decisions import activity_pick, best_value_preset, model_decision_request, select_preset, trait_strengths
 from .resources import venice_agent_resources
 from .tools import (
     _background_remove_tool
@@ -35,7 +35,7 @@ class VeniceApiProvider(Provider):
     base_url = "https://api.venice.ai/api/v1"
     # A short list of the ~110 live models (GET /models needs no key); setmodel
     # accepts any other id with a notice. Context sizes from that endpoint.
-    # The first entry is the default model of the provider (DeepSeek Lite).
+    # The default model of the provider rides the best value preset (default_model).
     models = [
         "deepseek-v4-flash-0731"
       , "zai-org-glm-4.7-flash"
@@ -191,9 +191,15 @@ class VeniceApiProvider(Provider):
         return float(cost.get("usd") or cost.get("diem") or 0)
 
     def default_model(self) -> str:
-        """The default of a cleared configuration: the preset NAME of the first model, so the default resolves per request like any preset —
-           the 18+ variant behind the gate, the normal id elsewhere.
+        """The default of a cleared configuration: the enabled preset with the best
+           intelligence-to-price ratio (`best_value_preset` of decisions.py, computed
+           from the live catalog), so the default resolves per request like any preset —
+           the 18+ variant behind the gate, the normal id elsewhere. The first model of
+           the list answers when no preset carries a score.
         """
+        pick = best_value_preset()
+        if pick is not None:
+            return pick
         for name, preset in VENICE_CHAT_PRESETS.items():
             if preset.get("normal") == self.models[0]:
                 return name
