@@ -453,10 +453,10 @@ VENICE_CHAT_PRESETS = {
     # Xiaomi
   , "MiMo": {
         # Disabled, untested - 1M Ctx.
-        "normal": "xiaomi-mimo-v2-5"  # released Jun 10, 2026
+        "normal": "xiaomi-mimo-v2-6-flash"  # released Sep 27, 2026
       , "traits": ["long context", "vision", "coding", "reasoning"]
-      , "cost": 12.08
-      , "intelligence_index": 26  # the score of the V2.5 Pro build, the index lists no plain V2.5
+      , "cost": 2.6975
+      , "intelligence_index": 38
       , "disabled": True
     }
 
@@ -573,7 +573,7 @@ VENICE_CHAT_COMPLETION_TOKENS = {
   , "venice-uncensored-1-2": 8192
   , "grok-4-7": 200000
   , "minimax-m3-preview": 65536
-  , "xiaomi-mimo-v2-5": 65536
+  , "xiaomi-mimo-v2-6-flash": 131072
   , "mercury-2-5": 65536
   , "seed-2-1-turbo": 65536
   , "mistral-small-3-2-24b-instruct": 16384
