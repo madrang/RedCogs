@@ -77,17 +77,21 @@ class VeniceApiProvider(Provider):
     }
     # The curated models with the supportsVision flag of the live model list: they accept image input through the chat contract.
     # `eliza providers` marks them, and the later direct image path rides on this set.
+    # The set mirrors the vision trait of the chat presets, both variants of an entry, in catalog order (live flags read 2026-09-28).
     vision_models = {
-        "gemma-4-uncensored"
+        "google-gemma-4-31b-it"
+      , "gemma-4-uncensored"
+      , "gemini-3-8-flash"
       , "z-ai-glm-5-3-flash"
-
-      , "qwen-3-8-27b"
-      , "qwen-3-8-max"
-
-      , "gemini-3-5-flash"
-
       , "inkling"
       , "kimi-k3"
+      , "qwen-3-8-flash"
+      , "qwen-3-8-27b"
+      , "grok-4-7"
+      , "minimax-m3-preview"
+      , "xiaomi-mimo-v2-6-flash"
+      , "seed-2-1-turbo"
+      , "mistral-small-3-2-24b-instruct"
 
         # Under Tests! TODO: Validate if we keep it.
       , "venice-uncensored-1-2"
