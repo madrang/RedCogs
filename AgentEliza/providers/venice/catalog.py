@@ -452,12 +452,10 @@ VENICE_CHAT_PRESETS = {
 
     # Xiaomi
   , "MiMo": {
-        # Disabled, untested - 1M Ctx.
         "normal": "xiaomi-mimo-v2-6-flash"  # released Sep 27, 2026
       , "traits": ["long context", "vision", "coding", "reasoning"]
       , "cost": 2.6975
       , "intelligence_index": 38
-      , "disabled": True
     }
 
     # Inception
