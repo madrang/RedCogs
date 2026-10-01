@@ -119,13 +119,36 @@ class IncomingMessage:
         return f"{moment:{MESSAGE_TIME_FORMAT}}"
 
 
+class MediaGate:
+    """The one-media gate of a reply: the first media tool call that sends
+    a request claims it, and every later media call of the same reply
+    reads the refusal. The gate never touches the tool descriptors: the
+    schemas stay frozen whatever its state, so the prompt cache holds."""
+
+    def __init__(self) -> None:
+        self.claimed = False
+
+    def refusal(self) -> str | None:
+        """The gate error when a media call already ran this reply, else None."""
+        if not self.claimed:
+            return None
+        return (
+            "Error: a media was already generated this turn. "
+            "One media tool call serves one user request, the next one waits for the next message."
+        )
+
+    def claim(self) -> None:
+        """Mark the gate spent: the calling tool sends its request."""
+        self.claimed = True
+
+
 class ToolContext:
     """The engine surface one native provider tool runs on: the closures
     of a reply and its facts. The engine builds one per reply; a tool
     handler receives it beside the arguments, and a new capability is a
     field here, not a new argument of every handler."""
 
-    def __init__(self, *, call_api, fetch_url, api_post, send_file, channel_nsfw, set_conversation_model, vision_chat, show_image, request_song=None, media_ceiling=None, add_media_cost=None, set_activity=None, conversation_preset=None, credit_ratio=None):
+    def __init__(self, *, call_api, fetch_url, api_post, send_file, channel_nsfw, set_conversation_model, vision_chat, show_image, request_song=None, media_ceiling=None, add_media_cost=None, set_activity=None, conversation_preset=None, credit_ratio=None, media_gate=None):
         self.call_api = call_api
         self.fetch_url = fetch_url
         self.api_post = api_post
@@ -140,6 +163,7 @@ class ToolContext:
         self.set_activity = set_activity
         self.conversation_preset = conversation_preset
         self.credit_ratio = credit_ratio
+        self.media_gate = media_gate
 
 
 class ChatEngine:
@@ -733,6 +757,7 @@ class ChatEngine:
             , request_song=request_song, media_ceiling=media_ceiling
             , add_media_cost=add_media_cost, set_activity=set_activity
             , conversation_preset=conversation_preset, credit_ratio=credit_ratio
+            , media_gate=MediaGate()
         )
 
         # The user turn of this message. On a vision chat model the images

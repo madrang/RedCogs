@@ -7,7 +7,7 @@ import pytest
 from aiohttp import ClientConnectionError
 
 import AgentEliza.providers.venice.audio as audio_flow
-from AgentEliza.llm_chat import ChatError
+from AgentEliza.llm_chat import ChatError, MediaGate
 from AgentEliza.providers.venice import (
     VeniceApiProvider, VENICE_BACKGROUND_COST, VENICE_CHAT_PRESETS, VENICE_EDIT_MODELS, VENICE_FIXED_TOOLS, VENICE_IMAGE_MODELS, VENICE_ROUTING_INTELLIGENCE_SPAN, VENICE_ROUTING_QUIRK_MALUS, VENICE_ROUTING_TRAIT_AT, _activity_tool, _background_remove_tool, _edit_tool, _image_tool
   , activity_pick, best_value_preset, model_decision_request, select_preset, selectable_presets, trait_strengths,
@@ -309,6 +309,61 @@ async def test_a_remembered_preset_resolves_and_runs_under_no_live_ceiling() -> 
     answer = await generate["handler"]({"prompt": "a cat", "model": "Muse"}, engine)
     assert not answer.startswith("Error")
     assert posts[0]["model"] == "muse-image"
+
+
+async def test_the_media_gate_serves_one_call_a_reply() -> None:
+    # The gate opens the reply, closes on the first request that goes
+    # out, and refuses every later media call. An error that stays
+    # before the request leaves the gate open.
+    gate = MediaGate()
+    posts: list = []
+
+    async def api_post(path, *, json_body=None, data=None, binary=False, timeout=120):
+        posts.append(json_body)
+        return {"images": [base64.b64encode(b"png").decode()]}, {}
+
+    async def send_file(name, raw):
+        return f"posted {name}"
+
+    engine = SimpleNamespace(api_post=api_post, send_file=send_file, channel_nsfw=None, media_gate=gate)
+    generate = _image_tool()
+    # An unknown model stays before the request: the gate stays open.
+    answer = await generate["handler"]({"prompt": "a cat", "model": "no such"}, engine)
+    assert answer.startswith("Error: unknown image model")
+    assert gate.refusal() is None
+    # The first request goes out and the gate closes.
+    answer = await generate["handler"]({"prompt": "a cat", "model": "Muse"}, engine)
+    assert not answer.startswith("Error")
+    assert gate.refusal() is not None
+    assert "a media was already generated this turn" in gate.refusal()
+    # Every later media call of the reply reads the refusal, and no
+    # further request goes out.
+    assert await generate["handler"]({"prompt": "a cat", "model": "Muse"}, engine) == gate.refusal()
+    edit = _edit_tool()
+    assert await edit["handler"]({"image": "https://x/y.png", "prompt": "a hat"}, engine) == gate.refusal()
+    removal = _background_remove_tool()
+    assert await removal["handler"]({"image": "https://x/y.png"}, engine) == gate.refusal()
+    assert len(posts) == 1
+
+
+async def test_the_media_gate_counts_every_sent_request() -> None:
+    # The claim rides the send, not the outcome: a flagged content
+    # denial billed like a render, so it closes the gate the same.
+    gate = MediaGate()
+    headers = {"x-venice-is-content-violation": "true"}
+
+    async def api_post(path, *, json_body=None, data=None, binary=False, timeout=120):
+        return {"images": [base64.b64encode(b"png").decode()]}, headers
+
+    async def send_file(name, raw):
+        return f"posted {name}"
+
+    engine = SimpleNamespace(api_post=api_post, send_file=send_file, channel_nsfw=None, media_gate=gate)
+    generate = _image_tool()
+    answer = await generate["handler"]({"prompt": "a name", "model": "Muse"}, engine)
+    assert "[venice] content violation: yes" in answer
+    assert gate.refusal() is not None
+    assert await generate["handler"]({"prompt": "a name", "model": "Muse"}, engine) == gate.refusal()
 
 
 async def test_the_render_tools_report_their_price_on_every_answer() -> None:

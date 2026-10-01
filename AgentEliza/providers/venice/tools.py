@@ -5,6 +5,7 @@
 #  , plus the shared model-parameter builders and the preset menu line.
 
 import base64
+import logging
 import random
 import re
 from urllib.parse import urlparse
@@ -43,6 +44,31 @@ from .catalog import (
   , VENICE_ROUTING_TRAIT_AT
 )
 from .moderation import _moderation_status, _refusal_error
+
+log = logging.getLogger("red.agenteliza")
+
+
+def _gate_refusal(engine):
+    """The one-media gate error of the reply, None when the gate sits open
+       or the engine surface carries no gate."""
+    gate = getattr(engine, "media_gate", None)
+    return gate.refusal() if gate is not None else None
+
+
+def _gate_claim(engine) -> None:
+    """Spend the one-media gate of the reply: the calling tool sends its
+       request, so every later media call of the same reply reads the
+       refusal."""
+    gate = getattr(engine, "media_gate", None)
+    if gate is not None:
+        gate.claim()
+
+
+def _render_log(what: str, preset: str, model: str, violation: str, status: str) -> None:
+    """Log one answered render request: the preset of the model and the
+       moderation flags of the answer, the raised flags or a clean read."""
+    flags = status.removeprefix("[venice] ") if status else f"no abuse flag (violation reads {violation})"
+    log.info("The image %s answered: preset %s (%s), %s.", what, preset, model, flags)
 
 
 def _search_tool() -> dict:
@@ -221,6 +247,8 @@ def _image_tool(ceiling: float | None = None) -> dict:
        The tool result appends the moderation flags of the answer as a [venice] status line, and only a flag that reads yes appears: a clean answer carries no line.
        A refusal needs both marks, a blank image and the violation flag: only then the tool answers with an error and posts nothing.
        Without the flag, a small image posts as content.
+       One media call serves one reply: the gate on the engine context refuses every later media call of the same reply before its request, and the descriptors never change with the gate so the prompt cache holds.
+       Every answered render logs at info with the preset and the moderation flags of the answer.
     """
     # The ceiling of the credit ratio bounds the catalog: the entries over
     # it leave the enum and the handler walk. None serves the full catalog.
@@ -229,6 +257,9 @@ def _image_tool(ceiling: float | None = None) -> dict:
         catalog = {name: entry for name, entry in VENICE_IMAGE_MODELS.items() if entry["cost"] <= ceiling}
 
     async def handler(arguments, engine):
+        blocked = _gate_refusal(engine)
+        if blocked is not None:
+            return blocked
         prompt = str(arguments.get("prompt") or "").strip()
         if not prompt:
             return "Error: the prompt must be a non-empty string."
@@ -312,6 +343,9 @@ def _image_tool(ceiling: float | None = None) -> dict:
             # The endpoint default true blurs adult content: it drops only
             # where Discord itself gates the channel behind 18+.
             body["safe_mode"] = False
+        # Every earlier error stayed before the request: the gate stays
+        # open for them. The request goes out now, so the gate closes.
+        _gate_claim(engine)
         try:
             data, headers = await engine.api_post("/image/generate", json_body=body, timeout=VENICE_RENDER_TIMEOUT)
         except ChatError as e:
@@ -323,6 +357,7 @@ def _image_tool(ceiling: float | None = None) -> dict:
         # The moderation signals of the endpoint: a content violation is the
         # documented face of the silent refusal (a blank image with no error).
         violation, status = _moderation_status(headers)
+        _render_log("generation", preset_name, model, violation, status)
         images = data.get("images") or []
         if not images:
             return "Error: the image generation returned no image."
@@ -384,6 +419,8 @@ def _edit_tool(ceiling: float | None = None) -> dict:
        Every answered edit reports the catalog price of its preset into the cost total of the reply like generate_image: the extra images of a multi-edit bill beyond the price.
        safe_mode drops only on an age-restricted channel.
        The moderation flags report like generate_image: only a flag that reads yes appears, and a blank refusal needs both marks.
+       One media call serves one reply: the gate on the engine context refuses every later media call of the same reply before its request, and the descriptors never change with the gate so the prompt cache holds.
+       Every answered edit logs at info with the preset and the moderation flags of the answer.
     """
     # The ceiling of the credit ratio bounds the catalog: the entries over
     # it leave the enum and the handler walk. None serves the full catalog.
@@ -392,6 +429,9 @@ def _edit_tool(ceiling: float | None = None) -> dict:
         catalog = {name: entry for name, entry in VENICE_EDIT_MODELS.items() if entry["cost"] <= ceiling}
 
     async def handler(arguments, engine):
+        blocked = _gate_refusal(engine)
+        if blocked is not None:
+            return blocked
         image = str(arguments.get("image") or "").strip()
         if not image.startswith(("http://", "https://")):
             return "Error: the image must be the http(s) URL of the picture to edit."
@@ -505,6 +545,9 @@ def _edit_tool(ceiling: float | None = None) -> dict:
             # The endpoint default true blurs adult content: it drops only
             # where Discord itself gates the channel behind 18+.
             body["safe_mode"] = False
+        # Every earlier error stayed before the request: the gate stays
+        # open for them. The request goes out now, so the gate closes.
+        _gate_claim(engine)
         try:
             data, headers = await engine.api_post(path, json_body=body, binary=True, timeout=VENICE_RENDER_TIMEOUT)
         except ChatError as e:
@@ -516,6 +559,7 @@ def _edit_tool(ceiling: float | None = None) -> dict:
         if not isinstance(data, (bytes, bytearray)) or not data:
             return "Error: the image edit returned no image."
         violation, status = _moderation_status(headers)
+        _render_log("edit", preset_name, model, violation, status)
         refused = _refusal_error("edit", bytes(data), violation, status)
         if refused is not None:
             return refused
@@ -575,9 +619,13 @@ def _background_remove_tool() -> dict:
        The binary answer posts as a file.
        The call bills the flat price of bria-bg-remover (VENICE_BACKGROUND_COST, the entry the live image list carries behind the endpoint, released Feb 25, 2026), and every answered removal reports it into the cost total of the reply.
        The endpoint takes no model, so no catalog entry rides the tool.
+       One media call serves one reply: the gate on the engine context refuses every later media call of the same reply before its request, and the descriptors never change with the gate so the prompt cache holds.
     """
 
     async def handler(arguments, engine):
+        blocked = _gate_refusal(engine)
+        if blocked is not None:
+            return blocked
         image = str(arguments.get("image") or "").strip()
         if not image.startswith(("http://", "https://")):
             return "Error: the image must be the http(s) URL of the picture."
@@ -593,6 +641,9 @@ def _background_remove_tool() -> dict:
             body["image"] = base64.b64encode(fetched[0]).decode("ascii")
         else:
             body["image_url"] = image
+        # Every earlier error stayed before the request: the gate stays
+        # open for them. The request goes out now, so the gate closes.
+        _gate_claim(engine)
         try:
             data, headers = await engine.api_post("/image/background-remove", json_body=body, binary=True)
         except ChatError as e:
@@ -664,9 +715,13 @@ def _music_tool() -> dict:
        The tool validates the request against the constraints table and prices it with the live quote endpoint.
        It then hands the request to the approval flow of the engine: the embed with the Approve and Reject buttons and the price posts to the conversation,
        and the generation runs only after the approval.
-       The tool returns before the vote: the outcome arrives as a later harness turn."""
+       The tool returns before the vote: the outcome arrives as a later harness turn.
+       One media call serves one reply: the gate on the engine context refuses every later media call of the same reply before its request, and the descriptors never change with the gate so the prompt cache holds. The approval request claims the gate like a sent render."""
 
     async def handler(arguments, engine):
+        blocked = _gate_refusal(engine)
+        if blocked is not None:
+            return blocked
         prompt = str(arguments.get("prompt") or "").strip()
         if not prompt:
             return "Error: the prompt must be a non-empty string."
@@ -738,6 +793,10 @@ def _music_tool() -> dict:
             , "cost": cost
             , "body": body
         }
+        # Every earlier error stayed before the request: the gate stays
+        # open for them. The approval request goes out now, so the gate
+        # closes.
+        _gate_claim(engine)
         return await engine.request_song(request)
 
     return {
