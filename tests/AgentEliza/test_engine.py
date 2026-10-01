@@ -725,16 +725,16 @@ async def test_a_filtered_preset_carries_only_the_fixed_tools() -> None:
         {"name": "generate_image", "description": "d", "parameters": {}, "handler": noop}
       , {"name": "web_search", "description": "d", "parameters": {}, "handler": noop}
     ]
-    preset = FakePreset(native, tool_filter=frozenset({"generate_image", "propose_choices"}))
+    preset = FakePreset(native, tool_filter=frozenset({"generate_image", "ask_question"}))
     api = FakeApi([close("Hi.")], preset=preset)
-    engine = build_engine(api, harness_tools=FakeHarnessTools(["propose_choices", "read_history"]))
+    engine = build_engine(api, harness_tools=FakeHarnessTools(["ask_question", "read_history"]))
     # The conversation sits on the filtered preset: a session override names it.
     session = await engine.history.get(7, "user")
     session.model_override = "Qwen"
     assert await drain(engine, "hi") == ["Hi."]
     names = {tool["function"]["name"] for tool in api.requests[0]["tools"]}
     # The harness defaults and the provider tools outside the filter stay off.
-    assert names == {"generate_image", "propose_choices"}
+    assert names == {"generate_image", "ask_question"}
 
 
 async def test_a_preset_that_bars_mcp_keeps_the_other_tools() -> None:
@@ -749,7 +749,7 @@ async def test_a_preset_that_bars_mcp_keeps_the_other_tools() -> None:
     mcp_tool = {"type": "function", "function": {"name": "user_server_tool", "description": "d", "parameters": {}}}
     engine = build_engine(
         api
-        , harness_tools=FakeHarnessTools(["propose_choices", "read_history"])
+        , harness_tools=FakeHarnessTools(["ask_question", "read_history"])
         , mcp=FakeMCP([mcp_tool])
     )
     # The conversation sits on the barring preset: a session override names it.
@@ -759,4 +759,4 @@ async def test_a_preset_that_bars_mcp_keeps_the_other_tools() -> None:
     names = {tool["function"]["name"] for tool in api.requests[0]["tools"]}
     # The MCP tool of the user server stays out, the harness defaults and the provider tool stay.
     assert "user_server_tool" not in names
-    assert names == {"propose_choices", "read_history", "generate_image"}
+    assert names == {"ask_question", "read_history", "generate_image"}

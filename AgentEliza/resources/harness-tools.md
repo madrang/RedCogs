@@ -99,9 +99,9 @@ Caps: 25 MiB per file, 250 MiB per folder. Files live about 3 weeks. The older a
 | `file_list` | `path` | Lists the files with sizes in bytes. An optional glob pattern filters, for example `*.txt` or `/notes/*.md`. A pattern without a folder part matches file names at any depth. At most 100 entries. |
 | `attachment_fetch` | `url`, `path` | Downloads a message attachment into the workspace. Only the Discord file hosts work: use the URLs from the `[attachments]` lines. They expire about 24 hours after the message. The saved path defaults to the file name of the URL. Read the file after with `file_read`. |
 
-## propose_choices
+## ask_question
 
-Posts a question with one button per choice. One open poll per conversation. A new call while a poll is open ends the old one at once, whatever votes it holds: the results of the old poll join the tool response, then the new choices post.
+Asks the user a question with one button per choice. Use it whenever something is unclear, or a response from the user would move the conversation forward. One open question per conversation. A new call while a question is open ends the old one at once, whatever votes it holds: the results of the old question join the tool response, then the new choices post.
 
 | Parameter | Meaning |
 | --- | --- |
@@ -109,7 +109,7 @@ Posts a question with one button per choice. One open poll per conversation. A n
 | `choices` | 2 to 10 strings, each at most 55 characters. |
 | `multiple` | Default `false`. Set `true` to allow more than one choice per person. |
 
-The status of the open poll arrives prepended to your next messages in `[harness]` tags. With no vote for 5 minutes, the buttons become a native Discord poll that runs 24 hours. When a majority of the active users voted, the poll completes. In a server the report names who picked what: one line per voter while the voters stay within the number of choices, one line per choice past that, the counts only when the names grow long. In a direct message the report gives the counts: the one voter is the speaker. Do not repeat the choices in your answer.
+The status of the open question arrives prepended to your next messages in `[harness]` tags. With no vote for 5 minutes, the buttons become a native Discord poll that runs 24 hours. When a majority of the active users voted, the question completes. In a server the report names who picked what: one line per voter while the voters stay within the number of choices, one line per choice past that, the counts only when the names grow long. In a direct message the report gives the counts: the one voter is the speaker. Do not repeat the choices in your answer.
 
 ## Web
 

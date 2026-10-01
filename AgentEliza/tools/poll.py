@@ -1,21 +1,22 @@
-"""The propose_choices tool: propose choices for an answer to a question."""
+"""The ask_question tool: ask the user a question with one button per choice."""
 
 from ..polls import POLL_ANSWERS_MAX, POLL_ANSWER_MAX_CHARS, POLL_QUESTION_MAX_CHARS, POLL_VIEW_IDLE
 
 
 class PollTools:
-    """The propose_choices tool."""
+    """The ask_question tool."""
 
     def poll_tools(self) -> list:
-        """The OpenAI function schema of the choices tool."""
+        """The OpenAI function schema of the question tool."""
         return [
             {
                 "type": "function"
                 , "function": {
-                    "name": "propose_choices"
+                    "name": "ask_question"
                     , "description": (
-                        "Propose choices for an answer to a question: a message with one button per choice. "
-                        "A new call ends an open poll at once, and its results join the tool result. "
+                        "Ask the user a question: a message with one button per choice. "
+                        "Use it whenever something is unclear, or a response from the user would move the conversation forward. "
+                        "A new call ends an open question at once, and its results join the tool result. "
                         "The status arrives prepended to the next messages. Do not repeat the choices in your answer."
                     )
                     , "parameters": {
@@ -42,7 +43,7 @@ class PollTools:
             }
         ]
 
-    async def _tool_propose_choices(self, arguments: dict, *, guild_id, channel_id, user_id) -> str:
+    async def _tool_ask_question(self, arguments: dict, *, guild_id, channel_id, user_id) -> str:
         question = arguments.get("question")
         if not isinstance(question, str) or not question.strip():
             return "Error: the question must be a non-empty string."
@@ -74,7 +75,7 @@ class PollTools:
         if error:
             return error
         posted = (
-            f"The choices for {question!r} have been posted with {len(cleaned)} options. "
+            f"The question {question!r} has been posted with {len(cleaned)} choices. "
             "The status arrives prepended to the next messages."
         )
         return f"{report}\n{posted}" if report else posted

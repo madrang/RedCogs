@@ -921,7 +921,7 @@ def test_tool_filter_names_the_fixed_tool_presets() -> None:
 
 def test_the_fixed_tool_list_holds_the_small_answer_tools() -> None:
     assert set(VENICE_FIXED_TOOLS) == {
-        "propose_choices", "set_activity"
+        "ask_question", "set_activity"
       , "generate_image", "edit_image", "remove_background", "generate_song"
     }
 

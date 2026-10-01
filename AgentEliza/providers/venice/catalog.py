@@ -287,11 +287,11 @@ VENICE_CHAT_CAPABILITIES = (
 # surface (the Qwen mid and Max presets, and Gemma): the Qwen 3.8 27B
 # abuses the data read tools, the Max filter rides as a preventive
 # measure, and Gemma stays under the model cap of 20 tool definitions. The
-# list holds the choice poll, the environment switch, and the media
+# list holds the question tool, the environment switch, and the media
 # endpoints whose results stay small. The MCP servers of the Config and
 # every other harness or provider tool stay off these presets.
 VENICE_FIXED_TOOLS = (
-    "propose_choices", "set_activity"
+    "ask_question", "set_activity"
   , "generate_image", "edit_image", "remove_background", "generate_song"
 )
 # Chat presets: a short display name for the agent and the user, the model id behind it, an optional NSFW variant id for conversations behind the 18+ gate, the capability names the preset provides, and the cost of the preset.

@@ -504,7 +504,7 @@ class PollManager:
         require_votes: a completed poll without any vote answers None (the
         natural expiry then stays silent).
         force: an active view closes at once with the votes it holds. The
-        replace path of propose_choices.
+        replace path of ask_question.
         """
         state = self.active.get(session_id)
         if state is None:
