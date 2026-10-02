@@ -29,6 +29,41 @@ MCP_TOOL_ROUNDS = 16
 # session, so an unbounded set would bloat the context until a compaction.
 VISION_MAX_IMAGES = 4
 VISION_IMAGE_BUDGET_BYTES = 8 * 1024 * 1024
+
+
+def _drop_overcap_images(messages: list, cap: int) -> None:
+    """Drop the oldest image parts of a message list over the image
+       ceiling of the model. The thinned records lose their parts for
+       good: an image past the cap never rides a request again, so the
+       session keeps the text parts alone."""
+    total = sum(
+        1
+        for message in messages
+        if isinstance(message.get("content"), list)
+        for part in message["content"]
+        if isinstance(part, dict) and part.get("type") == "image_url"
+    )
+    if total <= cap:
+        return
+    over = total - cap
+    for message in messages:
+        if over <= 0:
+            break
+        content = message.get("content")
+        if not isinstance(content, list):
+            continue
+        kept = []
+        for part in content:
+            if over > 0 and isinstance(part, dict) and part.get("type") == "image_url":
+                over -= 1
+                continue
+            kept.append(part)
+        if kept and len(kept) != len(content):
+            message["content"] = kept
+    log.info(
+        "The request dropped its %d oldest image parts: the model takes at most %d images."
+        , total - cap, cap,
+    )
 # The image mime type of a file extension, for the data URIs of posted
 # files (the Discord attachments name theirs through the content type).
 IMAGE_EXT_MIMES = {
@@ -588,6 +623,10 @@ class ChatEngine:
             preset is not None
             and preset.resolve_model(request_model) in preset.vision_models
         )
+        # A model whose backend caps the images of one request below the
+        # published spec: the send path drops the oldest image parts over
+        # the cap, and the session records lose them too.
+        image_cap = preset.vision_image_limit(request_model) if preset is not None else None
 
         async def call_api(tool_payload):
             """One chat-completions call on the active provider, for native provider tools."""
@@ -829,6 +868,12 @@ class ChatEngine:
             compacted context. The error still reaches the user: the
             notice is staged with the fallback name and yields ahead of
             the answer. Any other failure passes through."""
+            if image_cap is not None:
+                # The images of one request sit under the model ceiling.
+                # The oldest parts drop for good: the session records lose
+                # them too, an image past the cap never rides a request
+                # again, and the text parts keep the record.
+                _drop_overcap_images(request_payload.get("messages") or [], image_cap)
             try:
                 return await self.api.chat_request(api_key, request_payload)
             except ChatError as e:

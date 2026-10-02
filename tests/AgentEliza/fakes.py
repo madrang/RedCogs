@@ -174,6 +174,9 @@ class FakePreset:
     def tool_filter(self, model):
         return self._tool_filter
 
+    def vision_image_limit(self, model):
+        return None
+
     def mcp_tools_allowed(self, model):
         return self._mcp
 

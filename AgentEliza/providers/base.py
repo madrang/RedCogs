@@ -164,6 +164,11 @@ class Provider:
         the model takes the full set."""
         return None
 
+    def vision_image_limit(self, model: str) -> int | None:
+        """The image ceiling of one request on the model, None when the
+        provider names none."""
+        return None
+
     def mcp_tools_allowed(self, model: str) -> bool:
         """Whether the request model may carry the tools of the configured MCP
         servers. False bars the MCP tools alone: the harness and provider

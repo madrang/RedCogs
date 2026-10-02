@@ -169,6 +169,17 @@ class VeniceApiProvider(Provider):
                 return frozenset(allowed) if allowed else None
         return None
 
+    def vision_image_limit(self, model: str) -> int | None:
+        """The image ceiling of one request on the model, None when the
+           catalog names none. A preset names it through the vision_images
+           key, a backend limit below the published spec."""
+        for catalog_name, preset in VENICE_CHAT_PRESETS.items():
+            if (catalog_name.lower() == str(model).strip().lower()
+                    or model in (preset.get("normal"), preset.get("nsfw"))):
+                limit = preset.get("vision_images")
+                return int(limit) if limit else None
+        return None
+
     def mcp_tools_allowed(self, model: str) -> bool:
         """Whether the request model may carry the tools of the configured MCP servers.
            A preset bars them through the mcp key: the Gemini backend rejects the schema

@@ -836,6 +836,17 @@ def test_selectable_presets_names_the_live_reach_of_the_routing() -> None:
     assert "Aion" in gated
 
 
+def test_the_vision_image_limit_names_the_backend_ceiling() -> None:
+    provider = VeniceApiProvider()
+    # The MiMo entry names the live refusal: the backend takes four
+    # images a request whatever the spec publishes.
+    assert provider.vision_image_limit("MiMo") == 4
+    assert provider.vision_image_limit("xiaomi-mimo-v2-6-flash") == 4
+    # The rest of the catalog and the unknown ids name no ceiling.
+    assert provider.vision_image_limit("Kimi") is None
+    assert provider.vision_image_limit("no-such-model") is None
+
+
 def test_the_default_model_rides_the_best_value_preset() -> None:
     # The value pick is the enabled preset with the best intelligence
     # index a dollar of workload cost buys, computed from the live catalog:

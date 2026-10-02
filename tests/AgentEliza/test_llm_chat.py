@@ -3,8 +3,38 @@
 import pytest
 
 from AgentEliza.history import History
-from AgentEliza.llm_chat import ChatEngine, IncomingMessage, collapse_blank_lines
+from AgentEliza.llm_chat import ChatEngine, IncomingMessage, _drop_overcap_images, collapse_blank_lines
 from tests.AgentEliza.fakes import FakeApi, FakeBot, FakeCompactor, FakeConfig, FakeHarnessTools, FakeMCP, FakeMemory, FakePreset, FakeScopeStats
+
+
+def _image_part(n: int) -> dict:
+    return {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{'a' * n}"}}
+
+
+def test_the_image_trim_drops_the_oldest_parts_for_good() -> None:
+    # Five images ride two notes and a message, the model takes four: the
+    # oldest image parts drop for good — the session records lose them —
+    # and the text parts stay.
+    early = {
+        "role": "user"
+      , "content": [{"type": "text", "text": "early note"}, _image_part(1), _image_part(2)],
+    }
+    late = {
+        "role": "user"
+      , "content": [{"type": "text", "text": "late note"}, _image_part(3), _image_part(4)],
+    }
+    message = {
+        "role": "user"
+      , "content": [{"type": "text", "text": "the turn"}, _image_part(5)],
+    }
+    _drop_overcap_images([early, late, message], 4)
+    # The oldest note lost one image, the rest stay whole.
+    assert early["content"] == [{"type": "text", "text": "early note"}, _image_part(2)]
+    assert late["content"] == [{"type": "text", "text": "late note"}, _image_part(3), _image_part(4)]
+    assert message["content"] == [{"type": "text", "text": "the turn"}, _image_part(5)]
+    # Under the cap nothing changes.
+    _drop_overcap_images([early, late, message], 4)
+    assert len(early["content"]) == 2
 
 
 @pytest.mark.parametrize(

@@ -755,6 +755,14 @@ class Eliza(commands.Cog):
                 f"{HISTORY_MAX_TOKENS:,} tokens, about {HISTORY_MAX_CHARS:,} characters."
             )
         vision_model = getattr(preset, "vision_model", None)
+        # A conversation model with vision sees the images itself: the
+        # reading session's model decides the vision line, an override
+        # included.
+        request_model = (reading.model_override if reading is not None and reading.model_override else None) or await self.model_name()
+        sees_images = (
+            preset is not None
+            and preset.resolve_model(request_model) in (getattr(preset, "vision_models", None) or set())
+        )
         model_display = (preset.preset_name(await self.model_name()) or await self.model_name()) if preset is not None else await self.model_name()
         fixed = bool(await self.config.model_name())
         router = getattr(preset, "decide_model", None) is not None if preset is not None else False
@@ -775,7 +783,13 @@ class Eliza(commands.Cog):
             , f"- Model: {model_display} ({mode})"
             , context_line
         ]
-        if vision_model:
+        if sees_images:
+            lines.append(
+                "- Vision: this conversation's model sees the images itself. "
+                "Message attachments join the context as images, and `analyze_image` reads an image "
+                "straight into the conversation: no other model answers between."
+            )
+        elif vision_model:
             lines.append(f"- Vision: available. `analyze_image` answers through the model `{vision_model}`.")
         else:
             lines.append("- Vision: not available. This provider ships no `analyze_image` tool.")

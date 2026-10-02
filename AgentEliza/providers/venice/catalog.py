@@ -302,6 +302,8 @@ VENICE_FIXED_TOOLS = (
 # An entry may carry disabled True: the environment tool and the overload fallback skip it, so the agent cannot reach it, while the user commands (setmodel, the providers menu) keep it.
 # An entry may carry tool_filter, the names of the only tools its models may carry: the engine drops every other tool, the MCP set included.
 # An entry may carry mcp False: the model takes no MCP server tools, the harness and provider tools stay (the Gemini backend rejects the schema keywords of the user servers).
+# An entry may carry vision_images, the image ceiling of one request on the model: the engine drops the oldest image parts of a request over it.
+# The key names a backend limit below the published spec, read from a live refusal.
 # An entry may carry negative_traits, the quirks its models carry: a narrow tool surface, no server tools, stiff prose. The names never join a request
 # (the decision flow and the environment tool ask for capabilities alone). The selection scores them through VENICE_ROUTING_QUIRK_MALUS. They also exist
 # for the agent-facing notes and for the prompt patches that may come to compensate the quirks we want to avoid.
@@ -456,6 +458,7 @@ VENICE_CHAT_PRESETS = {
       , "traits": ["long context", "vision", "coding", "reasoning"]
       , "cost": 2.6975
       , "intelligence_index": 38
+      , "vision_images": 4  # the Xiaomi backend refuses a fifth image in one request ("Too many images in request: 5 > 4", read 2026-09-30). The live spec's maxImages 10 reads wrong on both MiMo builds
     }
 
     # Inception
