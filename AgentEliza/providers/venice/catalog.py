@@ -32,18 +32,18 @@ VENICE_IMAGE_MODELS = {
   , "Qwen": {"model": "qwen-image-3-pro", "traits": ["uncensored"], "cost": 0.09}  # released Jul 15, 2026
   , "Seedream": {"model": "seedream-v5-pro", "traits": ["uncensored", "copyrighted_material"], "cost": 0.11}  # released Jul 7, 2026
   , "Luma": {"model": "luma-uni-1-max", "traits": [], "cost": 0.12}  # released Jun 16, 2026
-  , "Ideogram": {"model": "ideogram-v4", "traits": [], "cost": 0.06}  # released Jun 2, 2026
+  , "Ideogram": {"model": "ideogram-v4-5", "traits": [], "cost": 0.07}  # released Sep 29, 2026
   , "Krea": {"model": "krea-v2-large", "traits": [], "cost": 0.07}  # released May 21, 2026
   , "GPT Image": {"model": "gpt-image-2-5-sunburst", "traits": [], "cost": 0.05}  # released Sep 7, 2026
   , "Wan": {"model": "wan-2-7-pro-text-to-image", "traits": [], "cost": 0.09375}  # released Mar 31, 2026
   , "Lustify": {"model": "lustify-v8", "traits": ["uncensored"], "cost": 0.01}  # released Mar 29, 2026
   , "Hunyuan": {"model": "hunyuan-image-v3", "traits": [], "cost": 0.09}  # released Feb 28, 2026
   , "Nano Banana": {"model": "nano-banana-2", "traits": [], "cost": 0.14}  # released Feb 25, 2026
-  , "Recraft": {"model": "recraft-v4-pro", "traits": [], "cost": 0.29}  # released Feb 11, 2026
+  , "Recraft": {"model": "recraft-v4", "traits": [], "cost": 0.05}  # released Feb 11, 2026
   , "Chroma": {"model": "chroma", "traits": ["uncensored"], "cost": 0.01}  # released Jan 29, 2026
   , "ImagineArt": {"model": "imagineart-1.5-pro", "traits": [], "cost": 0.06}  # released Jan 26, 2026
   , "Z Turbo": {"model": "z-image-turbo", "traits": [], "cost": 0.01}  # released Dec 3, 2025
-  , "Flux": {"model": "flux-2-max", "traits": [], "cost": 0.09}  # released Nov 25, 2025
+  , "Flux": {"model": "flux-3-image", "traits": [], "cost": 0.145}  # released Sep 30, 2026
   , "Venice SD": {"model": "venice-sd35", "traits": [], "cost": 0.01}  # released Mar 27, 2025
   , "WAI Illustrious": {"model": "wai-Illustrious", "traits": ["uncensored"], "cost": 0.01}  # released Jan 11, 2025
 }
@@ -56,18 +56,18 @@ VENICE_IMAGE_PROMPT_LIMITS = {
   , "qwen-image-3-pro": 10000
   , "seedream-v5-pro": 10000
   , "luma-uni-1-max": 6000
-  , "ideogram-v4": 10000
+  , "ideogram-v4-5": 10000
   , "krea-v2-large": 5000
   , "gpt-image-2-5-sunburst": 10000
   , "wan-2-7-pro-text-to-image": 3000
   , "lustify-v8": 1500
   , "hunyuan-image-v3": 3000
   , "nano-banana-2": 32768
-  , "recraft-v4-pro": 10000
+  , "recraft-v4": 10000
   , "chroma": 7500
   , "imagineart-1.5-pro": 10000
   , "z-image-turbo": 7500
-  , "flux-2-max": 3000
+  , "flux-3-image": 32000
   , "venice-sd35": 1500
   , "wai-Illustrious": 1500
   , "muse-image-edit": 10000
@@ -78,12 +78,13 @@ VENICE_IMAGE_PROMPT_LIMITS = {
   , "gpt-image-2-5-sunburst-edit": 10000
   , "firered-image-edit": 1500
   , "nano-banana-2-edit": 32768
-  , "flux-2-max-edit": 3000
+  , "flux-3-image-edit": 32000
   , "seedream-v4-edit": 10000
 }
 # The sizing dialect of each curated model. An unknown id takes the ratio dialect.
 # pixel models size through width and height (model_spec.constraints carries a widthHeightDivisor and no aspectRatios).
-# resolution-tier models carry a fixed resolution (and gpt-image-2-5-sunburst a quality) preset (constraints carries a resolutions array).
+# resolution-tier models carry a fixed resolution preset (constraints carries a resolutions array).
+# The quality set below names the resolution models that take the quality preset too.
 # The rest take the aspect ratio as-is.
 # The tool description reports the dialect beside the traits of each model, so the agent knows which parameters apply.
 VENICE_IMAGE_DIALECTS = {
@@ -92,24 +93,31 @@ VENICE_IMAGE_DIALECTS = {
   , "qwen-image-3-pro": "resolution"
   , "seedream-v5-pro": "resolution"
   , "luma-uni-1-max": "ratio"
-  , "ideogram-v4": "ratio"
+  , "ideogram-v4-5": "resolution"
   , "krea-v2-large": "ratio"
   , "gpt-image-2-5-sunburst": "resolution"
   , "wan-2-7-pro-text-to-image": "ratio"
   , "lustify-v8": "pixel"
   , "hunyuan-image-v3": "ratio"
   , "nano-banana-2": "resolution"
-  , "recraft-v4-pro": "ratio"
+  , "recraft-v4": "ratio"
   , "chroma": "pixel"
   , "imagineart-1.5-pro": "ratio"
   , "z-image-turbo": "pixel"
-  , "flux-2-max": "ratio"
+  , "flux-3-image": "resolution"
   , "venice-sd35": "pixel"
   , "wai-Illustrious": "pixel"
 }
 # The presets of the resolution-tier models. 2K and medium for now, adjust after some use.
 VENICE_IMAGE_RESOLUTION = "2K"
 VENICE_IMAGE_QUALITY = "medium"
+# The generate models that take the quality preset: the tool sends them the medium constant.
+# A model in the set skips its default high, so the catalog cost matches the bill.
+# A model outside the set renders at its default quality.
+VENICE_IMAGE_QUALITY_MODELS = {
+    "gpt-image-2-5-sunburst"
+  , "ideogram-v4-5"
+}
 # The total timeout of one image render attempt: a 2K edit render runs past the 120 s augment default of provider_post.
 # The value matches the inference cap of chat_request — a server-side render waits like a long generation.
 VENICE_RENDER_TIMEOUT = 900
@@ -154,7 +162,7 @@ VENICE_EDIT_MODELS = {
   , "GPT Image": {"model": "gpt-image-2-5-sunburst-edit", "traits": [], "cost": 0.15, "max_images": 6}  # released Sep 7, 2026
   , "FireRed": {"model": "firered-image-edit", "traits": [], "cost": 0.04, "max_images": None}  # released Mar 24, 2026
   , "Nano Banana": {"model": "nano-banana-2-edit", "traits": [], "cost": 0.14, "max_images": 6}  # released Feb 25, 2026
-  , "Flux": {"model": "flux-2-max-edit", "traits": [], "cost": 0.12, "max_images": 6}  # released Jan 4, 2026
+  , "Flux": {"model": "flux-3-image-edit", "traits": [], "cost": 0.145, "max_images": 6}  # released Sep 30, 2026
   , "Seedream": {"model": "seedream-v4-edit", "traits": ["uncensored"], "cost": 0.05, "max_images": 6}  # released Jan 3, 2026
 }
 # The edit models that price and render by resolution tier: the edit tool sends the same 2K constant as generate, so the catalog cost matches the bill.
@@ -165,6 +173,7 @@ VENICE_EDIT_TIER_MODELS = {
   , "nano-banana-2-edit"
   , "grok-imagine-image-2-0-edit"
   , "qwen-image-3-pro-edit"
+  , "flux-3-image-edit"
 }
 # The edit models that render below the 2K preset: an id here renders at its mapped resolution instead.
 # No model rides the map today. The quality routes stay closed on the edit endpoint: the body field is an unrecognized key, and a model feature suffix answers an invalid model id.

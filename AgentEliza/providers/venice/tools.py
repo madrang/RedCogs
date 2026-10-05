@@ -26,6 +26,7 @@ from .catalog import (
   , VENICE_IMAGE_DIALECTS
   , VENICE_IMAGE_RESOLUTION
   , VENICE_IMAGE_QUALITY
+  , VENICE_IMAGE_QUALITY_MODELS
   , VENICE_RENDER_TIMEOUT
   , VENICE_PIXEL_RATIOS
   , VENICE_SEED_MAX
@@ -323,9 +324,8 @@ def _image_tool(ceiling: float | None = None) -> dict:
             body["aspect_ratio"] = aspect_ratio
         if dialect == "resolution":
             body["resolution"] = VENICE_IMAGE_RESOLUTION
-            if model == "gpt-image-2-5-sunburst":
-                # gpt-image-2-5-sunburst is the only curated model with a
-                # quality field, and its default high bills high.
+            if model in VENICE_IMAGE_QUALITY_MODELS:
+                # A quality model skips its default high, which bills high.
                 body["quality"] = VENICE_IMAGE_QUALITY
         cfg_scale = arguments.get("cfg_scale")
         try:
