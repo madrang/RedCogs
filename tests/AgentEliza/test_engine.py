@@ -66,16 +66,27 @@ async def test_a_plain_reply_yields_the_closing_text() -> None:
     assert stats.records and stats.records[0]["prompt_tokens"] == 0
 
 
-async def test_a_note_yields_collapsed_before_the_tools_run() -> None:
+async def test_a_note_yields_after_the_tools_of_its_round_run() -> None:
     first = {"choices": [{"message": {
         "content": "Let me check.\n\n\n\n"
         , "tool_calls": [{"id": "1", "function": {"name": "echo", "arguments": "{}"}}]
     }}]}
     api = FakeApi([first, close("Done.")])
-    tools = FakeHarnessTools(["echo"])
-    engine = build_engine(api, harness_tools=tools)
-    assert await drain(engine, "hi") == ["Let me check.", "Done."]
-    assert tools.calls == [("echo", {})]
+    events: list[str] = []
+
+    class Recording(FakeHarnessTools):
+        async def run(self, name, arguments, **scope):
+            events.append("tool")
+            return await super().run(name, arguments, **scope)
+
+    engine = build_engine(api, harness_tools=Recording(["echo"]))
+    async for segment in engine.generate_reply(IncomingMessage(
+        channel_id=100, content="hi", user_id=7, user_name="Madrang", bot_name="TestBot"
+    )):
+        events.append(f"segment:{segment}")
+    # A tool that posts its own message (a dice roll, a file) lands before
+    # the note the model wrote alongside its call.
+    assert events == ["tool", "segment:Let me check.", "segment:Done."]
     # The turn and the whole exchange stay in the session.
     session = engine.history.sessions[7]
     assert session.messages[-1]["content"] == "Done."

@@ -974,11 +974,6 @@ class ChatEngine:
             echo["tool_calls"] = tool_calls
             messages.append(echo)
             exchange.append(echo)
-            if text and text != NO_REPLY_TAG:
-                # A note the model wrote alongside its calls: the caller
-                # posts it while the tools run.
-                emitted = True
-                yield text
             for call in tool_calls:
                 function = call.get("function", {})
                 try:
@@ -1031,6 +1026,12 @@ class ChatEngine:
                 }
                 messages.append(result)
                 exchange.append(result)
+            if text and text != NO_REPLY_TAG:
+                # A note the model wrote alongside its calls. It posts after
+                # the calls of the round: a tool that posts its own message
+                # (a dice roll, a file) lands first.
+                emitted = True
+                yield text
             if posted_images and vision_chat:
                 # The vision chat model sees what a tool posted: the images
                 # join the exchange as a harness note, so the model can
