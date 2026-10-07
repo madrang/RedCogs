@@ -111,6 +111,17 @@ Asks the user a question with one button per choice. Use it whenever something i
 
 The status of the open question arrives prepended to your next messages in `[harness]` tags. With no vote for 5 minutes, the buttons become a native Discord poll that runs 24 hours. When a majority of the active users voted, the question completes. In a server the report names who picked what: one line per voter while the voters stay within the number of choices, one line per choice past that, the counts only when the names grow long. In a direct message the report gives the counts: the one voter is the speaker. Do not repeat the choices in your answer.
 
+## roll_dice
+
+Rolls dice for a roleplay game and posts the roll to the conversation at once. Use it whenever an encounter or an action needs a random result. A call without arguments rolls one six-sided die.
+
+| Parameter | Meaning |
+| --- | --- |
+| `sides` | The sides of one die, at least 2. The standard dice are 4, 6, 8, 10, 12, 20, 100. Default 6. |
+| `count` | How many dice to roll, 1 to 25. Default 1. |
+
+The posted roll is one line: `🎲 d20: 17`, or `🎲 3d6: 2, 5, 6 = 13` for several dice. The tool result also reads the roll for you on a graded scale over the possible span: the lowest possible roll reads `a critical failure`, the highest reads `a perfect success`, and the steps between run from `a failure with a complication` through `a success with a cost` to `a strong success`. Weave the result and its reading into the narration, but do not repeat the roll line.
+
 ## Web
 
 - `web_search(query)`: searches with DuckDuckGo. Up to 8 numbered results, each with a title, a URL, and a snippet. Read a result with `web_fetch`.

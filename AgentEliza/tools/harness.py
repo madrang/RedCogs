@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 
 from ..memory import Memory
+from .dice import DiceTools
 from .files import FileTools
 from .history import HistoryTools
 from .mcp import MCPTools
@@ -36,7 +37,7 @@ class HarnessOptions:
     mcp: object = None
 
 
-class HarnessTools(MemoryTools, HistoryTools, FileTools, PollTools, WebTools, WorkspaceTools, MCPTools):
+class HarnessTools(MemoryTools, HistoryTools, FileTools, PollTools, DiceTools, WebTools, WorkspaceTools, MCPTools):
     """The set of the harness tools, one mixin per tool family.
 
     Each tool maps to a `_tool_<name>` method. Memory tools resolve the
@@ -61,7 +62,7 @@ class HarnessTools(MemoryTools, HistoryTools, FileTools, PollTools, WebTools, Wo
 
     def tools(self) -> list:
         """The OpenAI function schemas of the harness tools, in a stable order."""
-        return [*self.memory_tools(), *self.history_tools(), *self.file_tools(), *self.poll_tools(), *self.web_tools(), *self.workspace_tools(), *self.mcp_tools()]
+        return [*self.memory_tools(), *self.history_tools(), *self.file_tools(), *self.poll_tools(), *self.dice_tools(), *self.web_tools(), *self.workspace_tools(), *self.mcp_tools()]
 
     async def run(self, name: str, arguments: dict, *, guild_id, channel_id, user_id, is_owner: bool = False) -> str:
         """Run one harness tool and return its output as text."""
