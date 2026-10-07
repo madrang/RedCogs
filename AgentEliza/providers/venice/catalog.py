@@ -38,7 +38,7 @@ VENICE_IMAGE_MODELS = {
   , "Wan": {"model": "wan-2-7-pro-text-to-image", "traits": [], "cost": 0.09375}  # released Mar 31, 2026
   , "Lustify": {"model": "lustify-v8", "traits": ["uncensored"], "cost": 0.01}  # released Mar 29, 2026
   , "Hunyuan": {"model": "hunyuan-image-v3", "traits": [], "cost": 0.09}  # released Feb 28, 2026
-  , "Nano Banana": {"model": "nano-banana-2", "traits": [], "cost": 0.14}  # released Feb 25, 2026
+  , "Nano Banana": {"model": "nano-banana-2-1", "traits": [], "cost": 0.14}  # released Oct 5, 2026
   , "Recraft": {"model": "recraft-v4", "traits": [], "cost": 0.05}  # released Feb 11, 2026
   , "Chroma": {"model": "chroma", "traits": ["uncensored"], "cost": 0.01}  # released Jan 29, 2026
   , "ImagineArt": {"model": "imagineart-1.5-pro", "traits": [], "cost": 0.06}  # released Jan 26, 2026
@@ -62,7 +62,7 @@ VENICE_IMAGE_PROMPT_LIMITS = {
   , "wan-2-7-pro-text-to-image": 3000
   , "lustify-v8": 1500
   , "hunyuan-image-v3": 3000
-  , "nano-banana-2": 32768
+  , "nano-banana-2-1": 32768
   , "recraft-v4": 10000
   , "chroma": 7500
   , "imagineart-1.5-pro": 10000
@@ -77,7 +77,7 @@ VENICE_IMAGE_PROMPT_LIMITS = {
   , "wan-2-7-pro-edit": 5000
   , "gpt-image-2-5-sunburst-edit": 10000
   , "firered-image-edit": 1500
-  , "nano-banana-2-edit": 32768
+  , "nano-banana-2-1-edit": 32768
   , "flux-3-image-edit": 32000
   , "seedream-v4-edit": 10000
 }
@@ -99,7 +99,7 @@ VENICE_IMAGE_DIALECTS = {
   , "wan-2-7-pro-text-to-image": "ratio"
   , "lustify-v8": "pixel"
   , "hunyuan-image-v3": "ratio"
-  , "nano-banana-2": "resolution"
+  , "nano-banana-2-1": "resolution"
   , "recraft-v4": "ratio"
   , "chroma": "pixel"
   , "imagineart-1.5-pro": "ratio"
@@ -161,7 +161,7 @@ VENICE_EDIT_MODELS = {
   , "Wan": {"model": "wan-2-7-pro-edit", "traits": [], "cost": 0.094, "max_images": 6}  # released Apr 22, 2026
   , "GPT Image": {"model": "gpt-image-2-5-sunburst-edit", "traits": [], "cost": 0.15, "max_images": 6}  # released Sep 7, 2026
   , "FireRed": {"model": "firered-image-edit", "traits": [], "cost": 0.04, "max_images": None}  # released Mar 24, 2026
-  , "Nano Banana": {"model": "nano-banana-2-edit", "traits": [], "cost": 0.14, "max_images": 6}  # released Feb 25, 2026
+  , "Nano Banana": {"model": "nano-banana-2-1-edit", "traits": [], "cost": 0.14, "max_images": 6}  # released Oct 5, 2026
   , "Flux": {"model": "flux-3-image-edit", "traits": [], "cost": 0.145, "max_images": 6}  # released Sep 30, 2026
   , "Seedream": {"model": "seedream-v4-edit", "traits": ["uncensored"], "cost": 0.05, "max_images": 6}  # released Jan 3, 2026
 }
@@ -170,7 +170,7 @@ VENICE_EDIT_MODELS = {
 # The set holds model ids: the handler resolves a preset name to its entry before it reads the set.
 VENICE_EDIT_TIER_MODELS = {
     "gpt-image-2-5-sunburst-edit"
-  , "nano-banana-2-edit"
+  , "nano-banana-2-1-edit"
   , "grok-imagine-image-2-0-edit"
   , "qwen-image-3-pro-edit"
   , "flux-3-image-edit"
