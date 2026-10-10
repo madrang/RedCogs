@@ -70,9 +70,10 @@ PRESENCE_SEPARATOR = " • "
 LONG_REPLY_MAX_PAGES = 4
 # The snippet cap of the on_message log line: longer messages clip.
 MESSAGE_LOG_MAX_CHARS = 200
-# The clip cap of each part of an error notice: the exception text and the raw
-# provider answer together stay under the Discord content cap of 4000.
-ERROR_NOTICE_MAX_CHARS = 1500
+# The clip cap of each part of an error notice: the exception text and the
+# raw provider answer. Both parts with their snippet markers, the code
+# fence, and the timeout line stay under the Discord content cap of 2000.
+ERROR_NOTICE_MAX_CHARS = 900
 
 
 def _log_snippet(text: str, limit: int = MESSAGE_LOG_MAX_CHARS) -> str:
