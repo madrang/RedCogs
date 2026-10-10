@@ -513,6 +513,15 @@ VENICE_CHAT_PRESETS = {
       , "intelligence_index": 23
     }
 
+    # Abliteration
+  , "Abliterated Large": {
+        # Disabled, untested - 1M Ctx. A GLM-5.3 build with the alignment removed, an always-on reasoner.
+        "normal": "abliteration-abliterated-model-large-v2"  # released Sep 30, 2026
+      , "traits": ["long context", "reasoning", "nsfw"]
+      , "cost": 60.8
+      , "disabled": True
+    }
+
   , "Aion Mini": {
         # Model based on the GLM family (the 3.0 mini rode DeepSeek)
         "normal": "aion-labs-aion-3-5-mini"  # released Sep 22, 2026
@@ -589,4 +598,5 @@ VENICE_CHAT_COMPLETION_TOKENS = {
   , "mistral-small-3-2-24b-instruct": 16384
   , "nvidia-nemotron-3-nano-30b-a3b": 16384
   , "nvidia-nemotron-3-ultra-550b-a55b": 32768
+  , "abliteration-abliterated-model-large-v2": 32768
 }
