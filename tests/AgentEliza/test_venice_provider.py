@@ -762,9 +762,10 @@ def test_select_preset_filters_then_scores_the_survivors() -> None:
     assert select_preset({"vision": 0.9, "writing": 0.9}) == "Kimi"
     assert select_preset({"vision": 0.9, "writing": 0.9}, ratio=1.24) is None
     assert select_preset({"vision": 0.9, "writing": 0.9}, ratio=1.25) == "Kimi"
-    # The nsfw need dies unless the session allows it: behind the gate Gemma
-    # answers the need, with the gate closed the generic pick returns.
-    assert select_preset({"nsfw": 0.9}, nsfw_allowed=True) == "Gemma"
+    # The nsfw need dies unless the session allows it: behind the gate Qwen
+    # answers the need, the cheapest enabled nsfw carrier, with the gate
+    # closed the generic pick returns.
+    assert select_preset({"nsfw": 0.9}, nsfw_allowed=True) == "Qwen"
     assert select_preset({"nsfw": 0.9}) == "MiMo"
     # The picked activity filters at any strength: the choice question has
     # no threshold of its own.
@@ -781,9 +782,8 @@ def test_the_quirk_malus_costs_a_preset_like_half_a_trait() -> None:
     # The trait contests keep their quirk carriers: Qwen Lite sole-carries
     # the vision, reasoning, and concise answers trio.
     assert select_preset({"vision": 0.9, "reasoning": 0.9, "concise answers": 0.9}) == "Qwen Lite"
-    # The shared vision and nsfw sets answer on Gemma, the lone enabled
-    # carrier behind the gate.
-    assert select_preset({"vision": 0.9, "nsfw": 0.9}, nsfw_allowed=True) == "Gemma"
+    # Qwen sole-carries vision with nsfw behind the gate.
+    assert select_preset({"vision": 0.9, "nsfw": 0.9}, nsfw_allowed=True) == "Qwen"
     # The floor band pins the bar to the cheapest enabled preset.
     assert select_preset({}, ratio=0.90) == "Nemotron Nano"
 
@@ -807,7 +807,7 @@ def test_selectable_presets_names_the_live_reach_of_the_routing() -> None:
     # A healthy balance reads ungated: every enabled preset that wins a set
     # stays reachable, DeepSeek Pro included.
     healthy = selectable_presets(None)
-    assert {"Aion", "Aion Mini", "DeepSeek Lite", "DeepSeek Pro", "Gemma", "Gemini", "Kimi", "MiMo", "Qwen Lite", "Qwen Max"} <= healthy
+    assert {"Aion", "Aion Mini", "DeepSeek Lite", "DeepSeek Pro", "Gemini", "Kimi", "MiMo", "Qwen Lite", "Qwen Max"} <= healthy
     # DeepSeek Lite sole-carries concise answers with writing, so it holds
     # its reach at every open ratio.
     assert "DeepSeek Lite" in selectable_presets(1.4)
@@ -845,6 +845,18 @@ def test_the_vision_image_limit_names_the_backend_ceiling() -> None:
     # The rest of the catalog and the unknown ids name no ceiling.
     assert provider.vision_image_limit("Kimi") is None
     assert provider.vision_image_limit("no-such-model") is None
+
+
+def test_negative_traits_name_the_quirks_of_the_entry() -> None:
+    provider = VeniceApiProvider()
+    # A preset name and its raw id resolve the quirks of the entry.
+    assert provider.negative_traits("Qwen") == ("eager reader", "stiff prose")
+    assert provider.negative_traits("qwen-3-8-27b") == ("eager reader", "stiff prose")
+    assert provider.negative_traits("Qwen Max") == ("eager reader", "stiff prose")
+    # The rest of the catalog and the unknown ids name none.
+    assert provider.negative_traits("Gemma") == ("narrow tools",)
+    assert provider.negative_traits("MiMo") == ()
+    assert provider.negative_traits("no-such-model") == ()
 
 
 def test_the_default_model_rides_the_best_value_preset() -> None:
@@ -894,12 +906,13 @@ async def test_decide_model_posts_and_selects_the_preset() -> None:
     # The questions: two noul, one score, one choice.
     assert set(kwargs["json"]["questions"]) == {"vision", "nsfw", "detail", "activity"}
     # The nsfw need dies unless the session allows it: the discard lands on
-    # the generic pick, and behind the gate Gemma answers the need. The
-    # answer carries no activity choice either way.
+    # the generic pick, and behind the gate Qwen answers the need, the
+    # cheapest enabled nsfw carrier. The answer carries no activity choice
+    # either way.
     nsfw = FakeSession(FakeResponse(200, {"answers": {"nsfw": {"probability": 0.9}}}))
     assert await provider.decide_model(nsfw, "test-key", "Madrang: hi") == ("MiMo", None)
     allowed = FakeSession(FakeResponse(200, {"answers": {"nsfw": {"probability": 0.9}}}))
-    assert await provider.decide_model(allowed, "test-key", "Madrang: hi", nsfw_allowed=True) == ("Gemma", None)
+    assert await provider.decide_model(allowed, "test-key", "Madrang: hi", nsfw_allowed=True) == ("Qwen", None)
 
 
 async def test_decide_model_answers_none_on_failures() -> None:
@@ -918,11 +931,13 @@ async def test_decide_model_answers_none_on_failures() -> None:
 def test_tool_filter_names_the_fixed_tool_presets() -> None:
     provider = VeniceApiProvider()
     fixed = frozenset(VENICE_FIXED_TOOLS)
-    # A preset name, its raw id, and its NSFW variant all resolve the filter.
-    assert provider.tool_filter("Qwen") == fixed
-    assert provider.tool_filter("qwen-3-8-27b") == fixed
-    assert provider.tool_filter("Qwen Max") == fixed
+    # The disabled Gemma and its NSFW variant resolve the filter.
+    assert provider.tool_filter("Gemma") == fixed
     assert provider.tool_filter("gemma-4-uncensored") == fixed
+    # The Qwen pair carries no filter: the full tool set rides its requests.
+    assert provider.tool_filter("Qwen") is None
+    assert provider.tool_filter("Qwen Max") is None
+    assert provider.tool_filter("qwen-3-8-2-4t-a95b") is None
     # The rest of the catalog takes the full tool set.
     assert provider.tool_filter("Qwen Lite") is None
     assert provider.tool_filter("DeepSeek Lite") is None

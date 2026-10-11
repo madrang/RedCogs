@@ -292,13 +292,11 @@ VENICE_CHAT_CAPABILITIES = (
     "vision", "nsfw", "long context", "coding", "reasoning", "writing", "imagination"
   , "roleplay", "storytelling", "concise answers", "thorough answers"
 )
-# The fixed tool list of the presets whose models take a barred tool
-# surface (the Qwen mid and Max presets, and Gemma): the Qwen 3.8 27B
-# abuses the data read tools, the Max filter rides as a preventive
-# measure, and Gemma stays under the model cap of 20 tool definitions. The
-# list holds the question tool, the environment switch, and the media
-# endpoints whose results stay small. The MCP servers of the Config and
-# every other harness or provider tool stay off these presets.
+# The fixed tool list of the preset whose model takes a barred tool
+# surface (the disabled Gemma): Gemma stays under the model cap of 20 tool
+# definitions. The list holds the question tool, the environment switch,
+# and the media endpoints whose results stay small. The MCP servers of the
+# Config and every other harness or provider tool stay off this preset.
 VENICE_FIXED_TOOLS = (
     "ask_question", "set_activity"
   , "generate_image", "edit_image", "remove_background", "generate_song"
@@ -313,7 +311,7 @@ VENICE_FIXED_TOOLS = (
 # An entry may carry mcp False: the model takes no MCP server tools, the harness and provider tools stay (the Gemini backend rejects the schema keywords of the user servers).
 # An entry may carry vision_images, the image ceiling of one request on the model: the engine drops the oldest image parts of a request over it.
 # The key names a backend limit below the published spec, read from a live refusal.
-# An entry may carry negative_traits, the quirks its models carry: a narrow tool surface, no server tools, stiff prose. The names never join a request
+# An entry may carry negative_traits, the quirks its models carry: a narrow tool surface, an eager reader, stiff prose. The names never join a request
 # (the decision flow and the environment tool ask for capabilities alone). The selection scores them through VENICE_ROUTING_QUIRK_MALUS. They also exist
 # for the agent-facing notes and for the prompt patches that may come to compensate the quirks we want to avoid.
 # An entry may carry intelligence_index, the Artificial Analysis Intelligence Index score of its model (v4.3.2, read 2026-09-27). An entry without the key
@@ -346,13 +344,14 @@ VENICE_CHAT_PRESETS = {
       , "negative_traits": ["narrow tools"]
       , "nsfw": "gemma-4-uncensored"  # released Apr 13, 2026
       , "tool_filter": VENICE_FIXED_TOOLS
+      # Disabled, Limited tools impact users.
+      , "disabled": True
     }
     , "Gemini": {
         "normal": "gemini-3-8-flash"  # released Sep 2, 2026
       , "traits": ["vision", "coding", "long context", "imagination", "concise answers"]
       , "cost": 22.125
       , "intelligence_index": 41
-      , "negative_traits": ["no server tools"]
       , "mcp": False
     }
 
@@ -424,23 +423,19 @@ VENICE_CHAT_PRESETS = {
       , "negative_traits": ["stiff prose"]
     }
   , "Qwen": {
-        # Disabled: less intelligent and pricier than the Lite preset (the index reads 34 at 8.60 operating against 40 at 3.094).
-        # No Qwen variant fills the mid slot (3.7 Plus reads 25 at 11.30, the 3.5 builds lower). Returns when a better mid build lands.
+        # The sole enabled carrier of vision with nsfw behind the 18+ gate.
         "normal": "qwen-3-8-27b"  # 262K Ctx, released Aug 17, 2026
       , "traits": ["vision", "nsfw", "reasoning", "concise answers"]
       , "cost": 8.6
       , "intelligence_index": 34
-      , "negative_traits": ["narrow tools", "stiff prose"]
-      , "tool_filter": VENICE_FIXED_TOOLS # Abuses data read tools... So they are disabled for this model.
-      , "disabled": True
+      , "negative_traits": ["eager reader", "stiff prose"]
     }
   , "Qwen Max": {
         "normal": "qwen-3-8-2-4t-a95b"  # 262K Ctx, released Aug 12, 2026
       , "traits": ["coding", "nsfw", "reasoning", "thorough answers"]
       , "cost": 58.125
       , "intelligence_index": 45
-      , "negative_traits": ["narrow tools", "stiff prose"]
-      , "tool_filter": VENICE_FIXED_TOOLS # Added as a preventive measure. Not tested if required.
+      , "negative_traits": ["eager reader", "stiff prose"]
     }
 
     # xAI
@@ -558,7 +553,7 @@ VENICE_CHAT_TRAIT_TEXT = {
   , "concise answers": "The model answers short."
   , "thorough answers": "The model answers in depth."
   , "narrow tools": "The model carries a fixed tool list only, the wider tool surface stays off its requests."
-  , "no server tools": "The model takes no MCP server tools, the harness and provider tools stay."
+  , "eager reader": "The model reads more information than an answer needs."
   , "stiff prose": "The answers read stiff and filtered for creative work."
   , "loops": "The model repeats the same words in loops."
 }

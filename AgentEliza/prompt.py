@@ -3,6 +3,23 @@
 import contextlib
 import discord
 
+# The history rule and the gather rule: an eager reader over-reads under
+# them, so the trait bars the rules from the prompt of the conversations
+# it tags.
+HISTORY_RULE = (
+    "- When a user mentions a past event that you do not know, use the read_history tool to find the exchange.\n"
+)
+GATHER_RULE = (
+    "- When an answer needs information that you do not have, gather it with your tools before you answer.\n"
+)
+
+# The rules a negative trait bars: the lines leave the system message of a
+# conversation whose model carries the trait. A trait without an entry
+# changes nothing.
+TRAIT_BARRED_RULES = {
+    "eager reader": (HISTORY_RULE, GATHER_RULE)
+}
+
 SYSTEM_PROMPT = (
     "The harness marks the context with simple delimiters:\n"
     "- A user message starts with the UTC time, the sender name, the mention id, and a colon, for example `2026-08-12T14:30Z Madrang <@491487179927978014>: hello`\n"
@@ -30,9 +47,9 @@ SYSTEM_PROMPT = (
     "Conversation rules:\n"
     "- An empty message is a poke. The user wants your attention and said nothing.\n"
     "- To stay silent, answer with only `[no-reply]`. The harness then sends nothing.\n"
-    "- When a user mentions a past event that you do not know, use the read_history tool to find the exchange.\n"
-    "- When an answer needs information that you do not have, gather it with your tools before you answer.\n"
-    "- When something is unclear, or a response from the user would move the conversation forward, ask with the ask_question tool. "
+    + HISTORY_RULE
+    + GATHER_RULE
+    + "- When something is unclear, or a response from the user would move the conversation forward, ask with the ask_question tool. "
     "A question with choices simplifies the interaction for the user.\n"
     "- When only the user can decide, ask with the ask_question tool: their intent, their plans, their preferences. "
     "When chance decides the outcome, roll with the roll_dice tool: an action that can fail, an encounter that can turn. "
@@ -119,9 +136,14 @@ async def place_block(bot, guild_id, channel_id, is_owner: bool = False) -> str:
     return "\n".join(lines)
 
 
-def system_text(bot_name: str, memory_entries: list, rules_block: str = "", place: str = "") -> str:
-    """The system message of a context: prompt, place, rules, memory blocks."""
+def system_text(bot_name: str, memory_entries: list, rules_block: str = "", place: str = "", quirks: tuple = ()) -> str:
+    """The system message of a context: prompt, place, rules, memory blocks.
+
+    A negative trait of the model bars its rules from the prompt."""
     text = SYSTEM_PROMPT.format(name=bot_name)
+    for quirk in quirks:
+        for barred in TRAIT_BARRED_RULES.get(quirk, ()):
+            text = text.replace(barred, "")
     if place:
         text += f"\n\n{place}"
     if rules_block:

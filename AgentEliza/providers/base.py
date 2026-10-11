@@ -169,6 +169,11 @@ class Provider:
         provider names none."""
         return None
 
+    def negative_traits(self, model: str) -> tuple:
+        """The negative traits of the request model, empty when the provider
+        names none. A trait may bar rules from the system prompt."""
+        return ()
+
     def mcp_tools_allowed(self, model: str) -> bool:
         """Whether the request model may carry the tools of the configured MCP
         servers. False bars the MCP tools alone: the harness and provider

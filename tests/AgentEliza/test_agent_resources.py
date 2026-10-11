@@ -34,12 +34,13 @@ def test_the_chat_document_lists_the_presets_and_the_glossary() -> None:
     text = entries_by_uri()["provider/models.md"]["build"]()
     assert "- Kimi (kimi-k3) — $88.5 — long context, vision, coding, thorough answers, writing" in text
     # The quirks and the disabled state ride the line.
-    assert "quirks: narrow tools, stiff prose" in text
+    assert "quirks: eager reader, stiff prose" in text
     assert "Venice Uncensored (venice-uncensored-1-2)" in text
     assert " — disabled" in text
     # The glossary teaches every trait, positive and negative.
     assert "- loops — The model repeats the same words in loops." in text
     assert "- narrow tools — The model carries a fixed tool list only" in text
+    assert "- eager reader — The model reads more information than an answer needs." in text
 
 
 def test_the_chat_document_marks_the_live_routing_reach() -> None:

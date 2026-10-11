@@ -161,7 +161,7 @@ class VeniceApiProvider(Provider):
 
     def tool_filter(self, model: str) -> frozenset | None:
         """The names of the only tools a request model may carry, None when the model takes the full set.
-           A preset names its filter through the tool_filter key: the Qwen pair and Gemma carry VENICE_FIXED_TOOLS."""
+           A preset names its filter through the tool_filter key: the disabled Gemma carries VENICE_FIXED_TOOLS."""
         for catalog_name, preset in VENICE_CHAT_PRESETS.items():
             if (catalog_name.lower() == str(model).strip().lower()
                     or model in (preset.get("normal"), preset.get("nsfw"))):
@@ -179,6 +179,15 @@ class VeniceApiProvider(Provider):
                 limit = preset.get("vision_images")
                 return int(limit) if limit else None
         return None
+
+    def negative_traits(self, model: str) -> tuple:
+        """The quirks of the request model, empty when the catalog names
+           none. A preset names them through the negative_traits key."""
+        for catalog_name, preset in VENICE_CHAT_PRESETS.items():
+            if (catalog_name.lower() == str(model).strip().lower()
+                    or model in (preset.get("normal"), preset.get("nsfw"))):
+                return tuple(preset.get("negative_traits") or ())
+        return ()
 
     def mcp_tools_allowed(self, model: str) -> bool:
         """Whether the request model may carry the tools of the configured MCP servers.

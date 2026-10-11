@@ -514,7 +514,11 @@ class ChatEngine:
             rules_block += f"\nWhenever this conversation becomes idle, you always update the {summary_scope} summary, and the conversation resumes from it later."
             # A fresh session lost its verbatim turns: the Discord history restores them.
             fresh = not session.messages
-            session.start_context(system_text(name, memory, rules_block, await place_block(self.bot, guild_id, channel_id, is_owner=is_owner)))
+            # The barred rules freeze with the context: a model change
+            # mid-context reads the old set until the context expires.
+            traits_of = getattr(preset, "negative_traits", None)
+            quirks = traits_of(request_model) if traits_of is not None else ()
+            session.start_context(system_text(name, memory, rules_block, await place_block(self.bot, guild_id, channel_id, is_owner=is_owner), quirks=quirks))
             if fresh:
                 # The persisted summary joins as the compaction exchange, before the backfilled turns it summarizes.
                 if session.summary:
@@ -544,8 +548,8 @@ class ChatEngine:
         # the moment of the call.
         stamp = message.stamp
         # A preset may name the only tools its request model may carry (the
-        # Qwen pair and Gemma of Venice: the models overuse the wider tool
-        # surface). The filter keeps the named tools alone, and the MCP
+        # disabled Gemma of Venice: its model caps the tool definitions at
+        # 20). The filter keeps the named tools alone, and the MCP
         # servers never join the reply: their gather is skipped whole.
         # A preset may also bar the MCP servers alone (Gemini of Venice: its
         # backend rejects the schema keywords of the user servers), the
