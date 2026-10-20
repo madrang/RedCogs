@@ -79,19 +79,22 @@ class VeniceApiProvider(Provider):
     # `eliza providers` marks them, and the later direct image path rides on this set.
     # The set mirrors the vision trait of the chat presets, both variants of an entry, in catalog order (live flags read 2026-09-28).
     vision_models = {
-        "google-gemma-4-31b-it"
+        "deepseek-v4-1-flash-1017"
+      , "google-gemma-4-31b-it"
       , "gemma-4-uncensored"
       , "gemini-3-8-flash"
+      , "muse-spark-open"
       , "z-ai-glm-5-3-flash"
       , "inkling"
       , "kimi-k3"
       , "qwen-3-8-flash"
       , "qwen-3-8-27b"
       , "grok-4-7"
-      , "minimax-m3-preview"
+      , "minimax-m3-1-flash"
       , "xiaomi-mimo-v2-6-flash"
       , "seed-2-1-turbo"
       , "mistral-small-3-2-24b-instruct"
+      , "nvidia-nemotron-3-5-super-vl-120b-a12b"
 
         # Under Tests! TODO: Validate if we keep it.
       , "venice-uncensored-1-2"

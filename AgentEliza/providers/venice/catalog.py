@@ -43,7 +43,7 @@ VENICE_IMAGE_MODELS = {
   , "Chroma": {"model": "chroma", "traits": ["uncensored"], "cost": 0.01}  # released Jan 29, 2026
   , "ImagineArt": {"model": "imagineart-1.5-pro", "traits": [], "cost": 0.06}  # released Jan 26, 2026
   , "Z Turbo": {"model": "z-image-turbo", "traits": [], "cost": 0.01}  # released Dec 3, 2025
-  , "Flux": {"model": "flux-3-image", "traits": [], "cost": 0.145}  # released Sep 30, 2026
+  , "Flux": {"model": "flux-3-image", "traits": [], "cost": 0.29}  # released Sep 30, 2026, the tiers doubled Oct 2026
   , "Venice SD": {"model": "venice-sd35", "traits": [], "cost": 0.01}  # released Mar 27, 2025
   , "WAI Illustrious": {"model": "wai-Illustrious", "traits": ["uncensored"], "cost": 0.01}  # released Jan 11, 2025
 }
@@ -136,8 +136,9 @@ VENICE_PIXEL_RATIOS = {
 }
 # The seed range of the endpoint.
 VENICE_SEED_MAX = 999_999_999
-# The flat price of one background removal (bria-bg-remover, the entry the
-# live image list carries behind the endpoint, released Feb 25, 2026).
+# The flat price of one background removal. The bria-bg-remover entry left
+# the live image list (read 2026-10-19), so the flat $0.03 of its last
+# published spec stays until a live quote names a new price.
 VENICE_BACKGROUND_COST = 0.03
 # The curated edit models of /image/edit.
 # Order and keys mirror the generate catalog: release date, the most recent first, the first entry the default model, preset-name keys the agent sees.
@@ -162,7 +163,7 @@ VENICE_EDIT_MODELS = {
   , "GPT Image": {"model": "gpt-image-2-5-sunburst-edit", "traits": [], "cost": 0.15, "max_images": 6}  # released Sep 7, 2026
   , "FireRed": {"model": "firered-image-edit", "traits": [], "cost": 0.04, "max_images": None}  # released Mar 24, 2026
   , "Nano Banana": {"model": "nano-banana-2-1-edit", "traits": [], "cost": 0.14, "max_images": 6}  # released Oct 5, 2026
-  , "Flux": {"model": "flux-3-image-edit", "traits": [], "cost": 0.145, "max_images": 6}  # released Sep 30, 2026
+  , "Flux": {"model": "flux-3-image-edit", "traits": [], "cost": 0.29, "max_images": 6}  # released Sep 30, 2026, the tiers doubled Oct 2026
   , "Seedream": {"model": "seedream-v4-edit", "traits": ["uncensored"], "cost": 0.05, "max_images": 6}  # released Jan 3, 2026
 }
 # The edit models that price and render by resolution tier: the edit tool sends the same 2K constant as generate, so the catalog cost matches the bill.
@@ -320,12 +321,17 @@ VENICE_FIXED_TOOLS = (
 # The comment on each entry names the release date of its model ids (the created field of the live list).
 VENICE_CHAT_PRESETS = {
     "DeepSeek Lite": {
-        # No coding trait (the operator's call): a coding request upgrades to DeepSeek Pro, the next preset that carries it.
+        # No coding trait (the operator's call): a coding request upgrades to Flash or Pro, the next presets that carry it.
         "normal": "deepseek-v4-flash-0731"  # released Jul 31, 2026
-        # "normal": "deepseek-v4-1-flash" # Sep 9, 2026 - cost: 6.495
       , "traits": ["long context", "concise answers", "writing"]
-      , "cost": 4.76
+      , "cost": 3.668
       , "intelligence_index": 34
+    }
+  , "DeepSeek Flash": {
+        "normal": "deepseek-v4-1-flash-1017"  # released Oct 16, 2026
+      , "traits": ["long context", "vision", "coding", "reasoning"]
+      , "cost": 5.295
+      , "intelligence_index": 45
     }
   , "DeepSeek Pro": {
         "normal": "deepseek-v4-pro-0813"  # released Aug 13, 2026, cheaper per workload than the April build
@@ -370,6 +376,14 @@ VENICE_CHAT_PRESETS = {
       , "traits": ["thorough answers"]
       , "cost": 11.2
       , "intelligence_index": 8  # an estimated score
+      , "disabled": True
+    }
+  , "Muse Spark": {
+        # Disabled, untested - 1M Ctx. A sparse MoE of 816B total and 42B active parameters.
+        "normal": "muse-spark-open"  # released Oct 14, 2026
+      , "traits": ["long context", "vision", "coding", "reasoning"]
+      , "cost": 36.4375
+      , "intelligence_index": 39
       , "disabled": True
     }
 
@@ -448,11 +462,11 @@ VENICE_CHAT_PRESETS = {
 
     # MiniMaxAI
   , "MiniMax": {
-        # Disabled, untested - 512K Ctx.
-        "normal": "minimax-m3-preview"  # released Jun 11, 2026
+        # Disabled, untested - 1M Ctx.
+        "normal": "minimax-m3-1-flash"  # released Oct 17, 2026
       , "traits": ["vision", "coding", "reasoning"]
-      , "cost": 8.76
-      , "intelligence_index": 29
+      , "cost": 4.2375
+      , "intelligence_index": 42
       , "disabled": True
     }
 
@@ -467,11 +481,10 @@ VENICE_CHAT_PRESETS = {
 
     # Inception
   , "Mercury": {
-        # Disabled, untested - 260K Ctx.
-        "normal": "mercury-2-5"  # released Sep 7, 2026
+        # Disabled, untested - 1M Ctx. The 2-5 build answered HTTP 500 on the harness (2026-09-23).
+        "normal": "mercury-3"  # released Oct 18, 2026
       , "traits": ["reasoning"]
-      , "cost": 1.1175
-      , "intelligence_index": 12
+      , "cost": 2.21
       , "disabled": True
     }
 
@@ -506,6 +519,13 @@ VENICE_CHAT_PRESETS = {
       , "traits": ["reasoning"]
       , "cost": 23
       , "intelligence_index": 23
+    }
+  , "Nemotron Super": {
+        # Disabled, untested - 262K Ctx.
+        "normal": "nvidia-nemotron-3-5-super-vl-120b-a12b"  # released Oct 15, 2026
+      , "traits": ["vision", "coding", "reasoning"]
+      , "cost": 12.5
+      , "disabled": True
     }
 
     # Abliteration
@@ -566,6 +586,7 @@ VENICE_CHAT_TRAIT_TEXT = {
 # read, so the Aion 3.5 entries carry the cap of the 3.0 pair they replace.
 VENICE_CHAT_COMPLETION_TOKENS = {
     "deepseek-v4-flash-0731": 32768
+  , "deepseek-v4-1-flash-1017": 131072
   , "deepseek-v4-pro": 32768
   , "deepseek-v4-pro-0813": 32768
   , "google-gemma-4-31b-it": 8192
@@ -582,16 +603,18 @@ VENICE_CHAT_COMPLETION_TOKENS = {
   , "aion-labs-aion-3-5": 32768
   , "llama-3.2-3b": 4096
   , "llama-3.3-70b": 4096
+  , "muse-spark-open": 131072
   , "zai-org-glm-4.7-flash": 16384
   , "olafangensan-glm-4.7-flash-heretic": 24000
   , "venice-uncensored-1-2": 8192
   , "grok-4-7": 200000
-  , "minimax-m3-preview": 65536
+  , "minimax-m3-1-flash": 131072
+  , "mercury-3": 131072
   , "xiaomi-mimo-v2-6-flash": 131072
-  , "mercury-2-5": 65536
   , "seed-2-1-turbo": 65536
   , "mistral-small-3-2-24b-instruct": 16384
   , "nvidia-nemotron-3-nano-30b-a3b": 16384
   , "nvidia-nemotron-3-ultra-550b-a55b": 32768
+  , "nvidia-nemotron-3-5-super-vl-120b-a12b": 32768
   , "abliteration-abliterated-model-large-v2": 32768
 }
