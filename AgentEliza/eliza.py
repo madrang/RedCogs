@@ -594,9 +594,13 @@ class Eliza(commands.Cog):
                             raw=data,
                         )
                     if response.status == 400:
-                        log.warning("The API rejected the request as invalid (400): %s", data)
+                        log.warning("The API rejected the request as invalid (400) on model %s: %s", payload.get("model"), data)
                         detail = _error_message(data) or data
-                        raise ChatError("bad_request", f"The API rejected the request (400): {detail}", raw=data)
+                        raise ChatError(
+                            "bad_request"
+                            , f"The API rejected the request (400) on model {payload.get('model')}: {detail}"
+                            , raw=data,
+                        )
                     if response.status == 401:
                         log.warning("The API rejected the API key (401).")
                         raise ChatError(
