@@ -41,7 +41,7 @@ class VeniceApiProvider(Provider):
       , "zai-org-glm-4.7-flash"
       , "z-ai-glm-5-3"
       , "venice-uncensored-1-2"
-      , "kimi-k3"
+      , "kimi-k3-1-pro"
       , "qwen-3-8-max"
       , "z-ai-glm-5-3-flash"
       , "gemini-3-5-flash"
@@ -57,7 +57,7 @@ class VeniceApiProvider(Provider):
     context_lengths = {
         "z-ai-glm-5-3": 1_000_000
       , "venice-uncensored-1-2": 128_000
-      , "kimi-k3": 1_000_000
+      , "kimi-k3-1-pro": 1_000_000
       , "qwen-3-8-max": 1_000_000
       , "z-ai-glm-5-3-flash": 1_048_576
       , "zai-org-glm-4.7-flash": 128_000
@@ -80,13 +80,14 @@ class VeniceApiProvider(Provider):
     # The set mirrors the vision trait of the chat presets, both variants of an entry, in catalog order (live flags read 2026-09-28).
     vision_models = {
         "deepseek-v4-1-flash-1017"
+      , "deepseek-v4-1-flash-uncensored"
       , "google-gemma-4-31b-it"
       , "gemma-4-uncensored"
       , "gemini-3-8-flash"
       , "muse-spark-open"
       , "z-ai-glm-5-3-flash"
       , "inkling"
-      , "kimi-k3"
+      , "kimi-k3-1-pro"
       , "qwen-3-8-flash"
       , "qwen-3-8-27b"
       , "grok-4-7"

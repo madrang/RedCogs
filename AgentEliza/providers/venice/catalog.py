@@ -332,6 +332,7 @@ VENICE_CHAT_PRESETS = {
       , "traits": ["long context", "vision", "coding", "reasoning"]
       , "cost": 5.295
       , "intelligence_index": 45
+      , "nsfw": "deepseek-v4-1-flash-uncensored"  # released Oct 22, 2026, an abliterated variant at 5.8245 operating
     }
   , "DeepSeek Pro": {
         "normal": "deepseek-v4-pro-0813"  # released Aug 13, 2026, cheaper per workload than the April build
@@ -421,10 +422,10 @@ VENICE_CHAT_PRESETS = {
 
     # MoonshotAI
   , "Kimi": {
-        "normal": "kimi-k3"  # released Jul 16, 2026
+        "normal": "kimi-k3-1-pro"  # released Oct 22, 2026, cheaper per workload than the K3 (88.5)
       , "traits": ["long context", "vision", "coding", "thorough answers", "writing"]
-      , "cost": 88.5
-      , "intelligence_index": 44
+      , "cost": 70.8
+      , "intelligence_index": 55
     }
 
     # Alibaba
@@ -587,6 +588,7 @@ VENICE_CHAT_TRAIT_TEXT = {
 VENICE_CHAT_COMPLETION_TOKENS = {
     "deepseek-v4-flash-0731": 32768
   , "deepseek-v4-1-flash-1017": 131072
+  , "deepseek-v4-1-flash-uncensored": 131072
   , "deepseek-v4-pro": 32768
   , "deepseek-v4-pro-0813": 32768
   , "google-gemma-4-31b-it": 8192
@@ -595,7 +597,7 @@ VENICE_CHAT_COMPLETION_TOKENS = {
   , "z-ai-glm-5-3-flash": 131072
   , "z-ai-glm-5-3": 131072
   , "inkling": 65536
-  , "kimi-k3": 131072
+  , "kimi-k3-1-pro": 131072
   , "qwen-3-8-flash": 131072
   , "qwen-3-8-27b": 65536
   , "qwen-3-8-2-4t-a95b": 65536
