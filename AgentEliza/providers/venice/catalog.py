@@ -530,6 +530,13 @@ VENICE_CHAT_PRESETS = {
     }
 
     # Abliteration
+  , "Abliterated Flash": {
+        # Disabled, untested - 1M Ctx. An abliterated DeepSeek V4.1 Flash base, the same backbone as the DeepSeek Flash preset.
+        "normal": "abliteration-abliterated-model-large-flash"  # released Oct 22, 2026
+      , "traits": ["long context", "vision", "coding", "reasoning", "nsfw"]
+      , "cost": 25.75
+      , "disabled": True
+    }
   , "Abliterated Large": {
         # Disabled, untested - 1M Ctx. A GLM-5.3 build with the alignment removed, an always-on reasoner.
         "normal": "abliteration-abliterated-model-large-v2"  # released Sep 30, 2026
@@ -540,9 +547,11 @@ VENICE_CHAT_PRESETS = {
 
   , "Aion Mini": {
         # Model based on the GLM family (the 3.0 mini rode DeepSeek)
+        # Disabled: the backend ran buggy through the week (the operator's call, 2026-10-23). Returns when the backend stabilizes.
         "normal": "aion-labs-aion-3-5-mini"  # released Sep 22, 2026
       , "traits": ["nsfw", "roleplay", "storytelling", "concise answers"]
       , "cost": 27.1
+      , "disabled": True
     }
   , "Aion": {
         # Model based on the GLM family
@@ -619,4 +628,5 @@ VENICE_CHAT_COMPLETION_TOKENS = {
   , "nvidia-nemotron-3-ultra-550b-a55b": 32768
   , "nvidia-nemotron-3-5-super-vl-120b-a12b": 32768
   , "abliteration-abliterated-model-large-v2": 32768
+  , "abliteration-abliterated-model-large-flash": 131072
 }

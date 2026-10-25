@@ -148,7 +148,7 @@ async def test_the_activity_tool_moves_only_on_a_different_set() -> None:
     # running preset answers unchanged, a different carrier moves once.
     switches: list = []
     activities: list = []
-    current = ["Aion Mini"]
+    current = ["Aion"]
 
     async def switch(model_id):
         switches.append(model_id)
@@ -215,12 +215,12 @@ async def test_the_activity_tool_rides_the_credit_ratio() -> None:
     assert switches == []
     assert activities == ["a scene"]
     # A drawn balance keeps the costly carriers out: the roleplay tier
-    # frees past 1.21, and Aion Mini takes the switch.
-    ratios[0] = 1.22
+    # frees past the 1.25 band, and Aion takes the switch.
+    ratios[0] = 1.25
     answer = await entry["handler"]({"activity": "a scene", "capabilities": ["roleplay"]}, engine)
-    assert answer.startswith("The activity is 'a scene'. Active preset: Aion Mini.")
-    assert switches == ["Aion Mini"]
-    current[0] = "Aion Mini"
+    assert answer.startswith("The activity is 'a scene'. Active preset: Aion.")
+    assert switches == ["Aion"]
+    current[0] = "Aion"
 
 
 async def test_the_activity_tool_validates_and_restores() -> None:
@@ -750,10 +750,11 @@ def test_select_preset_filters_then_scores_the_survivors() -> None:
     # vision pick, and the coding sets need the coding carriers.
     assert select_preset({"vision": 0.9}) == "MiMo"
     assert select_preset({}, activity="coding") == "MiMo"
-    # The roleplay tier belongs to the relay pair: the mini tier wins on
-    # price, and the drawn band bars it until about 1.21.
-    assert select_preset({}, activity="roleplay") == "Aion Mini"
-    assert select_preset({}, activity="roleplay", ratio=1.22) == "Aion Mini"
+    # The roleplay tier belongs to Aion alone: the disabled Mini left it the
+    # sole carrier, and the cost bar holds it out under the gate band.
+    assert select_preset({}, activity="roleplay") == "Aion"
+    assert select_preset({}, activity="roleplay", ratio=1.22) is None
+    assert select_preset({}, activity="roleplay", ratio=1.25) == "Aion"
     # The thorough answers pick lands on DeepSeek Pro, behind the cost bar
     # on a drawn balance.
     assert select_preset({"thorough answers": 0.9}) == "DeepSeek Pro"
@@ -810,7 +811,7 @@ def test_selectable_presets_names_the_live_reach_of_the_routing() -> None:
     # A healthy balance reads ungated: every enabled preset that wins a set
     # stays reachable, DeepSeek Pro included.
     healthy = selectable_presets(None)
-    assert {"Aion", "Aion Mini", "DeepSeek Lite", "DeepSeek Pro", "Gemini", "Kimi", "MiMo", "Qwen", "Qwen Lite", "Qwen Max"} <= healthy
+    assert {"Aion", "DeepSeek Lite", "DeepSeek Pro", "Gemini", "Kimi", "MiMo", "Qwen", "Qwen Lite", "Qwen Max"} <= healthy
     # DeepSeek Lite sole-carries concise answers with writing, so it holds
     # its reach at every open ratio.
     assert "DeepSeek Lite" in selectable_presets(1.4)

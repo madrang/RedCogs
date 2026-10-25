@@ -96,6 +96,7 @@ class VeniceApiProvider(Provider):
       , "seed-2-1-turbo"
       , "mistral-small-3-2-24b-instruct"
       , "nvidia-nemotron-3-5-super-vl-120b-a12b"
+      , "abliteration-abliterated-model-large-flash"
 
         # Under Tests! TODO: Validate if we keep it.
       , "venice-uncensored-1-2"
