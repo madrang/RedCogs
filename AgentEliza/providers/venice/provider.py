@@ -80,7 +80,7 @@ class VeniceApiProvider(Provider):
     # The set mirrors the vision trait of the chat presets, both variants of an entry, in catalog order (live flags read 2026-09-28).
     vision_models = {
         "deepseek-v4-1-flash-1017"
-      , "deepseek-v4-1-flash-uncensored"
+      , "deepseek-v4-1-flash-1017-uncensored"
       , "google-gemma-4-31b-it"
       , "gemma-4-uncensored"
       , "gemini-3-8-flash"

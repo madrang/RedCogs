@@ -135,11 +135,11 @@ async def test_bundled_credits_answers_none_on_failures() -> None:
 
 
 def test_preset_fallback_steps_onto_a_smaller_window() -> None:
-    # The ladder ranks cost alone: the move from GLM 1M steps up to Qwen
-    # Max, the move from Kimi to the priciest relay, and the ceiling from
-    # the relay cycles to the cheapest enabled preset.
+    # The ladder ranks cost alone: the move from DeepSeek Pro steps up to
+    # Kimi, the move from GLM 1M to Qwen Max, and the ceiling from Aion
+    # cycles to the cheapest enabled preset.
+    assert VeniceApiProvider().preset_fallback("deepseek-v4-pro-0813") == "Kimi"
     assert VeniceApiProvider().preset_fallback("z-ai-glm-5-3") == "Qwen Max"
-    assert VeniceApiProvider().preset_fallback("kimi-k3-1-pro") == "Grok"
     assert VeniceApiProvider().preset_fallback("aion-labs-aion-3-5") == "Nemotron Nano"
 
 
@@ -177,9 +177,9 @@ async def test_the_activity_tool_moves_only_on_a_different_set() -> None:
     assert switches == []
     # A different set moves the conversation onto the routed carrier.
     answer = await entry["handler"]({"activity": "debugging", "capabilities": ["coding"]}, engine)
-    assert answer.startswith("The activity is 'debugging'. Active preset: MiMo.")
-    assert switches == ["MiMo"]
-    current[0] = "MiMo"
+    assert answer.startswith("The activity is 'debugging'. Active preset: DeepSeek Flash.")
+    assert switches == ["DeepSeek Flash"]
+    current[0] = "DeepSeek Flash"
 
 
 async def test_the_activity_tool_rides_the_credit_ratio() -> None:
@@ -505,7 +505,7 @@ def test_the_edit_model_enum_names_the_compositing_models() -> None:
     description = model["description"]
     # The compositing group names every model that takes extra images, so
     # Luma (no compositing) stays out of it.
-    assert "Composites extra images: Muse, Grok, Qwen, Wan, GPT Image, FireRed, Nano Banana, Flux, Seedream." in description
+    assert "Composites extra images: Muse, Grok, Qwen, Wan, GPT Image, Krea, FireRed, Nano Banana, Flux, Seedream." in description
     assert "Uncensored: Seedream." in description
 
 
@@ -741,24 +741,25 @@ def test_trait_strengths_reads_the_detail_axis_as_one_side() -> None:
 
 def test_select_preset_filters_then_scores_the_survivors() -> None:
     # No trait at the threshold: every enabled preset survives, and the score
-    # picks the richest cheap one: MiMo carries four traits at the second
-    # smallest price of the enabled catalog. Kimi at index 55 tops the span,
-    # so the index weighs less against the cost everywhere.
-    assert select_preset({}) == "MiMo"
-    assert select_preset({"vision": VENICE_ROUTING_TRAIT_AT - 0.01}) == "MiMo"
-    # A needed trait removes the presets that miss it: MiMo keeps the plain
+    # picks the richest cheap one: Flash carries four traits at the second
+    # smallest price of the enabled catalog, and its index lead over MiMo
+    # outweighs the doubled price at the open pressure. Kimi at index 46
+    # tops the span under the v5 scale.
+    assert select_preset({}) == "DeepSeek Flash"
+    assert select_preset({"vision": VENICE_ROUTING_TRAIT_AT - 0.01}) == "DeepSeek Flash"
+    # A needed trait removes the presets that miss it: Flash keeps the plain
     # vision pick, and the coding sets need the coding carriers.
-    assert select_preset({"vision": 0.9}) == "MiMo"
-    assert select_preset({}, activity="coding") == "MiMo"
+    assert select_preset({"vision": 0.9}) == "DeepSeek Flash"
+    assert select_preset({}, activity="coding") == "DeepSeek Flash"
     # The roleplay tier belongs to Aion alone: the disabled Mini left it the
     # sole carrier, and the cost bar holds it out under the gate band.
     assert select_preset({}, activity="roleplay") == "Aion"
     assert select_preset({}, activity="roleplay", ratio=1.22) is None
     assert select_preset({}, activity="roleplay", ratio=1.25) == "Aion"
-    # The thorough answers pick lands on DeepSeek Pro, behind the cost bar
-    # on a drawn balance.
-    assert select_preset({"thorough answers": 0.9}) == "DeepSeek Pro"
-    assert select_preset({"thorough answers": 0.9}, ratio=1.3) == "DeepSeek Pro"
+    # The thorough answers pick lands on Kimi, behind the cost bar on a
+    # drawn balance.
+    assert select_preset({"thorough answers": 0.9}) == "Kimi"
+    assert select_preset({"thorough answers": 0.9}, ratio=1.3) == "Kimi"
     # The sliding cost bar: Kimi alone carries vision with writing, the bar
     # keeps it out under the gate band and frees it at the band.
     assert select_preset({"vision": 0.9, "writing": 0.9}) == "Kimi"
@@ -768,10 +769,10 @@ def test_select_preset_filters_then_scores_the_survivors() -> None:
     # answers the need, the cheapest enabled nsfw carrier, with the gate
     # closed the generic pick returns.
     assert select_preset({"nsfw": 0.9}, nsfw_allowed=True) == "Qwen"
-    assert select_preset({"nsfw": 0.9}) == "MiMo"
+    assert select_preset({"nsfw": 0.9}) == "DeepSeek Flash"
     # The picked activity filters at any strength: the choice question has
     # no threshold of its own.
-    assert select_preset({}, activity="reasoning") == "MiMo"
+    assert select_preset({}, activity="reasoning") == "DeepSeek Flash"
     # No enabled preset carries vision and storytelling together.
     assert select_preset({"vision": 0.9}, activity="storytelling") is None
     # Qwen Lite sole-carries the vision, reasoning, and concise answers trio.
@@ -794,40 +795,46 @@ def test_the_intelligence_index_tips_the_drawn_band() -> None:
     # The span of the enabled scores reads one trait, and an unlisted
     # preset reads the mean: the relay pair sits at the middle of the tie.
     assert VENICE_ROUTING_INTELLIGENCE_SPAN == 1.0
-    # MiMo (38 at 2.6975 operating) leads the generic, vision, and coding
-    # sets at every pressure: four traits at the second smallest enabled
-    # price. Kimi's 55 tops the index span, so Flash's 45 weighs no more
-    # than its doubled price costs.
-    assert select_preset({}) == "MiMo"
-    assert select_preset({"vision": 0.9}) == "MiMo"
+    # Flash (33 at 5.295 operating) leads the generic, vision, and coding
+    # sets at the open pressure: four traits at the second smallest enabled
+    # price, and its index lead over MiMo outweighs its doubled price. The
+    # drawn pressure tips the same sets back onto MiMo (27 at 2.6975).
+    assert select_preset({}) == "DeepSeek Flash"
+    assert select_preset({"vision": 0.9}) == "DeepSeek Flash"
     assert select_preset({"vision": 0.9}, ratio=1.0) == "MiMo"
     assert select_preset({"vision": 0.9}, ratio=1.4) == "MiMo"
-    assert select_preset({"vision": 0.9, "coding": 0.9}) == "MiMo"
+    assert select_preset({"vision": 0.9, "coding": 0.9}) == "DeepSeek Flash"
 
 
 def test_selectable_presets_names_the_live_reach_of_the_routing() -> None:
     # The routing floor closes the routing: no preset stays reachable.
     assert selectable_presets(0.88) == set()
     # A healthy balance reads ungated: every enabled preset that wins a set
-    # stays reachable, DeepSeek Pro included.
+    # stays reachable, Flash and Kimi included.
     healthy = selectable_presets(None)
-    assert {"Aion", "DeepSeek Lite", "DeepSeek Pro", "Gemini", "Kimi", "MiMo", "Qwen", "Qwen Lite", "Qwen Max"} <= healthy
+    assert {"Aion", "DeepSeek Flash", "DeepSeek Lite", "Gemini", "Kimi", "Qwen", "Qwen Lite", "Qwen Max"} <= healthy
     # DeepSeek Lite sole-carries concise answers with writing, so it holds
     # its reach at every open ratio.
     assert "DeepSeek Lite" in selectable_presets(1.4)
-    # The cost bar holds the costly tier out under the gate band: DeepSeek
-    # Pro and the relay-tier presets free at the 1.25 band.
-    assert "DeepSeek Pro" not in selectable_presets(1.1)
-    assert "DeepSeek Pro" not in selectable_presets(1.2)
-    for name in ("Kimi", "Aion", "Qwen Max", "DeepSeek Pro"):
+    # The index tip splits the generic sets across the pressure: Flash and
+    # MiMo carry the same traits, Flash wins them at the open pressure, and
+    # MiMo wins them wherever the pressure crosses the price gap. Each
+    # reads unreachable on the other side.
+    assert "DeepSeek Flash" in selectable_presets(None)
+    assert "DeepSeek Flash" not in selectable_presets(1.4)
+    assert "MiMo" not in selectable_presets(None)
+    assert "MiMo" in selectable_presets(1.4)
+    # The cost bar holds the costly tier out under the gate band: the
+    # relay-tier presets free at the 1.25 band.
+    for name in ("Kimi", "Aion", "Qwen Max"):
         assert name not in selectable_presets(1.24)
         assert name in selectable_presets(1.25)
     # A shadowed preset never wins at any pressure: a cheaper or richer
     # preset answers every request it could. MiMo answers every set GLM
-    # Vision and Grok carried, and every set Flash carried since Kimi's 55
-    # topped the index span.
+    # Vision and Grok carried, and Kimi answers every set DeepSeek Pro
+    # carried since its price fell under Pro's.
     for ratio in (None, 1.0, 1.2, 1.25, 1.4):
-        assert {"GLM 1M", "GLM Vision", "Grok", "Inkling", "Nemotron Ultra", "DeepSeek Flash"}.isdisjoint(selectable_presets(ratio))
+        assert {"DeepSeek Pro", "GLM 1M", "GLM Vision", "Grok", "Inkling", "Nemotron Ultra"}.isdisjoint(selectable_presets(ratio))
     # The floor band pins the bar to the cheapest enabled preset: Nemotron
     # Nano alone survives it, and the reach ends where the bar lifts.
     assert "Nemotron Nano" in selectable_presets(0.89)
@@ -867,7 +874,7 @@ def test_negative_traits_name_the_quirks_of_the_entry() -> None:
 def test_the_default_model_rides_the_best_value_preset() -> None:
     # The value pick is the enabled preset with the best intelligence
     # index a dollar of workload cost buys, computed from the live catalog:
-    # MiMo leads today (38 over 2.6975), Qwen Lite and GLM Vision follow.
+    # MiMo leads today (27 over 2.6975), Qwen Lite and GLM Vision follow.
     # A preset without a score stays out of the contest.
     assert best_value_preset() == "MiMo"
     assert VeniceApiProvider().default_model() == "MiMo"
@@ -902,7 +909,7 @@ async def test_decide_model_posts_and_selects_the_preset() -> None:
     }}
     session = FakeSession(FakeResponse(200, answer))
     # The weak option probability still filters: the choice pick carries no threshold.
-    assert await provider.decide_model(session, "test-key", "Madrang: hi") == ("MiMo", "coding")
+    assert await provider.decide_model(session, "test-key", "Madrang: hi") == ("DeepSeek Flash", "coding")
     url, kwargs = session.calls[0]
     assert url == "https://api.venice.ai/api/v1/decisions"
     assert kwargs["headers"]["Authorization"] == "Bearer test-key"
@@ -915,7 +922,7 @@ async def test_decide_model_posts_and_selects_the_preset() -> None:
     # cheapest enabled nsfw carrier. The answer carries no activity choice
     # either way.
     nsfw = FakeSession(FakeResponse(200, {"answers": {"nsfw": {"probability": 0.9}}}))
-    assert await provider.decide_model(nsfw, "test-key", "Madrang: hi") == ("MiMo", None)
+    assert await provider.decide_model(nsfw, "test-key", "Madrang: hi") == ("DeepSeek Flash", None)
     allowed = FakeSession(FakeResponse(200, {"answers": {"nsfw": {"probability": 0.9}}}))
     assert await provider.decide_model(allowed, "test-key", "Madrang: hi", nsfw_allowed=True) == ("Qwen", None)
 
@@ -930,7 +937,7 @@ async def test_decide_model_answers_none_on_failures() -> None:
     assert await provider.decide_model(empty, "k", "hi") is None
     # A low answer on the noul questions routes like a plain conversation.
     low = FakeSession(FakeResponse(200, {"answers": {"vision": {"probability": 0.1}, "nsfw": {"probability": 0.1}}}))
-    assert await provider.decide_model(low, "k", "hi") == ("MiMo", None)
+    assert await provider.decide_model(low, "k", "hi") == ("DeepSeek Flash", None)
 
 
 def test_tool_filter_names_the_fixed_tool_presets() -> None:

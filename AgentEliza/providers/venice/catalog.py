@@ -33,15 +33,16 @@ VENICE_IMAGE_MODELS = {
   , "Seedream": {"model": "seedream-v5-pro", "traits": ["uncensored", "copyrighted_material"], "cost": 0.11}  # released Jul 7, 2026
   , "Luma": {"model": "luma-uni-1-max", "traits": [], "cost": 0.12}  # released Jun 16, 2026
   , "Ideogram": {"model": "ideogram-v4-5", "traits": [], "cost": 0.07}  # released Sep 29, 2026
-  , "Krea": {"model": "krea-v2-large", "traits": [], "cost": 0.07}  # released May 21, 2026
-  , "GPT Image": {"model": "gpt-image-2-5-sunburst", "traits": [], "cost": 0.05}  # released Sep 7, 2026
+  , "Krea": {"model": "krea-3", "traits": [], "cost": 0.08}  # released Nov 1, 2026
+  , "GPT Image": {"model": "gpt-image-2-6-sunburst", "traits": [], "cost": 0.13}  # released Nov 4, 2026
   , "Wan": {"model": "wan-2-7-pro-text-to-image", "traits": [], "cost": 0.09375}  # released Mar 31, 2026
   , "Lustify": {"model": "lustify-v8", "traits": ["uncensored"], "cost": 0.01}  # released Mar 29, 2026
   , "Hunyuan": {"model": "hunyuan-image-v3", "traits": [], "cost": 0.09}  # released Feb 28, 2026
   , "Nano Banana": {"model": "nano-banana-2-1", "traits": [], "cost": 0.14}  # released Oct 5, 2026
   , "Recraft": {"model": "recraft-v4", "traits": [], "cost": 0.05}  # released Feb 11, 2026
   , "Chroma": {"model": "chroma", "traits": ["uncensored"], "cost": 0.01}  # released Jan 29, 2026
-  , "ImagineArt": {"model": "imagineart-1.5-pro", "traits": [], "cost": 0.06}  # released Jan 26, 2026
+  # Disabled: the id left the live image list (read 2026-11-09).
+  # "ImagineArt": {"model": "imagineart-1.5-pro", "traits": [], "cost": 0.06},  # released Jan 26, 2026
   , "Z Turbo": {"model": "z-image-turbo", "traits": [], "cost": 0.01}  # released Dec 3, 2025
   , "Flux": {"model": "flux-3-image", "traits": [], "cost": 0.29}  # released Sep 30, 2026, the tiers doubled Oct 2026
   , "Venice SD": {"model": "venice-sd35", "traits": [], "cost": 0.01}  # released Mar 27, 2025
@@ -57,15 +58,14 @@ VENICE_IMAGE_PROMPT_LIMITS = {
   , "seedream-v5-pro": 10000
   , "luma-uni-1-max": 6000
   , "ideogram-v4-5": 10000
-  , "krea-v2-large": 5000
-  , "gpt-image-2-5-sunburst": 10000
+  , "krea-3": 10000
+  , "gpt-image-2-6-sunburst": 10000
   , "wan-2-7-pro-text-to-image": 3000
   , "lustify-v8": 1500
   , "hunyuan-image-v3": 3000
   , "nano-banana-2-1": 32768
   , "recraft-v4": 10000
   , "chroma": 7500
-  , "imagineart-1.5-pro": 10000
   , "z-image-turbo": 7500
   , "flux-3-image": 32000
   , "venice-sd35": 1500
@@ -75,7 +75,8 @@ VENICE_IMAGE_PROMPT_LIMITS = {
   , "qwen-image-3-pro-edit": 10000
   , "luma-uni-1-edit": 6000
   , "wan-2-7-pro-edit": 5000
-  , "gpt-image-2-5-sunburst-edit": 10000
+  , "gpt-image-2-6-sunburst-edit": 10000
+  , "krea-3-edit": 10000
   , "firered-image-edit": 1500
   , "nano-banana-2-1-edit": 32768
   , "flux-3-image-edit": 32000
@@ -94,15 +95,14 @@ VENICE_IMAGE_DIALECTS = {
   , "seedream-v5-pro": "resolution"
   , "luma-uni-1-max": "ratio"
   , "ideogram-v4-5": "resolution"
-  , "krea-v2-large": "ratio"
-  , "gpt-image-2-5-sunburst": "resolution"
+  , "krea-3": "resolution"
+  , "gpt-image-2-6-sunburst": "resolution"
   , "wan-2-7-pro-text-to-image": "ratio"
   , "lustify-v8": "pixel"
   , "hunyuan-image-v3": "ratio"
   , "nano-banana-2-1": "resolution"
   , "recraft-v4": "ratio"
   , "chroma": "pixel"
-  , "imagineart-1.5-pro": "ratio"
   , "z-image-turbo": "pixel"
   , "flux-3-image": "resolution"
   , "venice-sd35": "pixel"
@@ -115,8 +115,9 @@ VENICE_IMAGE_QUALITY = "medium"
 # A model in the set skips its default high, so the catalog cost matches the bill.
 # A model outside the set renders at its default quality.
 VENICE_IMAGE_QUALITY_MODELS = {
-    "gpt-image-2-5-sunburst"
+    "gpt-image-2-6-sunburst"
   , "ideogram-v4-5"
+  , "krea-3"
 }
 # The total timeout of one image render attempt: a 2K edit render runs past the 120 s augment default of provider_post.
 # The value matches the inference cap of chat_request — a server-side render waits like a long generation.
@@ -145,7 +146,7 @@ VENICE_BACKGROUND_COST = 0.03
 # Source: the live list under the inpaint type (GET /models?type=inpaint, which needs no key). The edit models are inpaint models.
 # Cost: the inpaint price at the 2K resolution tier, else the flat price.
 # A quality table never sets an edit cost — the endpoint refuses the quality body field, so every model renders at its default quality.
-# gpt-image-2-5-sunburst-edit defaults to high and bills 2K at $0.15.
+# gpt-image-2-6-sunburst-edit defaults to high and bills 2K at $0.16.
 # grok-imagine-image-2-0-edit defaults to medium, so its 2K price is $0.10 either way.
 # Each entry holds the model id behind its name, its capability traits (plain names), and its real cost in USD per edit.
 # The comment on each entry names the release date (the created field of the live list).
@@ -160,7 +161,8 @@ VENICE_EDIT_MODELS = {
   , "Qwen": {"model": "qwen-image-3-pro-edit", "traits": [], "cost": 0.09, "max_images": None}  # released Jul 15, 2026
   , "Luma": {"model": "luma-uni-1-edit", "traits": [], "cost": 0.06}  # released Jun 16, 2026
   , "Wan": {"model": "wan-2-7-pro-edit", "traits": [], "cost": 0.094, "max_images": 6}  # released Apr 22, 2026
-  , "GPT Image": {"model": "gpt-image-2-5-sunburst-edit", "traits": [], "cost": 0.15, "max_images": 6}  # released Sep 7, 2026
+  , "GPT Image": {"model": "gpt-image-2-6-sunburst-edit", "traits": [], "cost": 0.16, "max_images": 6}  # released Nov 4, 2026
+  , "Krea": {"model": "krea-3-edit", "traits": [], "cost": 0.10, "max_images": 8}  # released Nov 1, 2026
   , "FireRed": {"model": "firered-image-edit", "traits": [], "cost": 0.04, "max_images": None}  # released Mar 24, 2026
   , "Nano Banana": {"model": "nano-banana-2-1-edit", "traits": [], "cost": 0.14, "max_images": 6}  # released Oct 5, 2026
   , "Flux": {"model": "flux-3-image-edit", "traits": [], "cost": 0.29, "max_images": 6}  # released Sep 30, 2026, the tiers doubled Oct 2026
@@ -170,11 +172,12 @@ VENICE_EDIT_MODELS = {
 # A model outside the quality set renders at its default quality.
 # The set holds model ids: the handler resolves a preset name to its entry before it reads the set.
 VENICE_EDIT_TIER_MODELS = {
-    "gpt-image-2-5-sunburst-edit"
+    "gpt-image-2-6-sunburst-edit"
   , "nano-banana-2-1-edit"
   , "grok-imagine-image-2-0-edit"
   , "qwen-image-3-pro-edit"
   , "flux-3-image-edit"
+  , "krea-3-edit"
 }
 # The edit models that render below the 2K preset: an id here renders at its mapped resolution instead.
 # No model rides the map today. The quality routes stay closed on the edit endpoint: the body field is an unrecognized key, and a model feature suffix answers an invalid model id.
@@ -182,7 +185,7 @@ VENICE_EDIT_TIER_MODELS = {
 VENICE_EDIT_MODEL_RESOLUTIONS = {}
 # The edit models that take the quality preset: the tool sends them the medium constant of generate, so the model skips its high default and the catalog cost matches the bill.
 # No model accepts the parameter today, so the set is empty.
-# TODO: revalidate later — the docs and the live specs still carry the parameter and its quality tables (2K medium $0.06 on gpt-image-2-5-sunburst-edit).
+# TODO: revalidate later — the docs and the live specs still carry the parameter and its quality tables (2K medium $0.14 on gpt-image-2-6-sunburst-edit).
 VENICE_EDIT_QUALITY_MODELS: set[str] = set()
 # The edit answer formats of the endpoint, mapped to file extensions.
 VENICE_EDIT_FORMATS = {"image/png": "png", "image/jpeg": "jpg", "image/webp": "webp"}
@@ -315,7 +318,7 @@ VENICE_FIXED_TOOLS = (
 # An entry may carry negative_traits, the quirks its models carry: a narrow tool surface, an eager reader, stiff prose. The names never join a request
 # (the decision flow and the environment tool ask for capabilities alone). The selection scores them through VENICE_ROUTING_QUIRK_MALUS. They also exist
 # for the agent-facing notes and for the prompt patches that may come to compensate the quirks we want to avoid.
-# An entry may carry intelligence_index, the Artificial Analysis Intelligence Index score of its model (v4.3.2, read 2026-09-27). An entry without the key
+# An entry may carry intelligence_index, the Artificial Analysis Intelligence Index score of its model (v5.0.1, read 2026-11-09). An entry without the key
 # reads the mean of the enabled scores at selection: the relay products and the unlisted builds sit outside the index. The selection weighs the score
 # through VENICE_ROUTING_INTELLIGENCE_SPAN.
 # The comment on each entry names the release date of its model ids (the created field of the live list).
@@ -325,20 +328,19 @@ VENICE_CHAT_PRESETS = {
         "normal": "deepseek-v4-flash-0731"  # released Jul 31, 2026
       , "traits": ["long context", "concise answers", "writing"]
       , "cost": 3.668
-      , "intelligence_index": 34
     }
   , "DeepSeek Flash": {
         "normal": "deepseek-v4-1-flash-1017"  # released Oct 16, 2026
       , "traits": ["long context", "vision", "coding", "reasoning"]
       , "cost": 5.295
-      , "intelligence_index": 45
-      , "nsfw": "deepseek-v4-1-flash-uncensored"  # released Oct 22, 2026, an abliterated variant at 5.8245 operating
+      , "intelligence_index": 33
+      , "nsfw": "deepseek-v4-1-flash-1017-uncensored"  # released Oct 26, 2026, an abliterated variant at 5.8245 operating
     }
   , "DeepSeek Pro": {
         "normal": "deepseek-v4-pro-0813"  # released Aug 13, 2026, cheaper per workload than the April build
       , "traits": ["long context", "coding", "thorough answers", "writing"]
       , "cost": 35.64
-      , "intelligence_index": 36
+      , "intelligence_index": 23
     }
 
     # Google
@@ -347,7 +349,7 @@ VENICE_CHAT_PRESETS = {
         "normal": "google-gemma-4-31b-it"  # released Apr 3, 2026
       , "traits": ["vision", "reasoning", "nsfw", "imagination"]
       , "cost": 7.74
-      , "intelligence_index": 19  # an estimated score, the site marks it pending its own evaluation
+      , "intelligence_index": 4
       , "negative_traits": ["narrow tools"]
       , "nsfw": "gemma-4-uncensored"  # released Apr 13, 2026
       , "tool_filter": VENICE_FIXED_TOOLS
@@ -358,7 +360,7 @@ VENICE_CHAT_PRESETS = {
         "normal": "gemini-3-8-flash"  # released Sep 2, 2026
       , "traits": ["vision", "coding", "long context", "imagination", "concise answers"]
       , "cost": 22.125
-      , "intelligence_index": 41
+      , "intelligence_index": 31
       , "mcp": False
     }
 
@@ -368,7 +370,6 @@ VENICE_CHAT_PRESETS = {
         "normal": "llama-3.2-3b"  # released Oct 3, 2024
       , "traits": ["concise answers"]
       , "cost": 2.4
-      , "intelligence_index": 6  # an estimated score
       , "disabled": True
     }
   , "Llama": {
@@ -376,7 +377,6 @@ VENICE_CHAT_PRESETS = {
         "normal": "llama-3.3-70b"  # released Apr 6, 2025
       , "traits": ["thorough answers"]
       , "cost": 11.2
-      , "intelligence_index": 8  # an estimated score
       , "disabled": True
     }
   , "Muse Spark": {
@@ -384,7 +384,7 @@ VENICE_CHAT_PRESETS = {
         "normal": "muse-spark-open"  # released Oct 14, 2026
       , "traits": ["long context", "vision", "coding", "reasoning"]
       , "cost": 36.4375
-      , "intelligence_index": 39
+      , "intelligence_index": 25
       , "disabled": True
     }
 
@@ -395,7 +395,6 @@ VENICE_CHAT_PRESETS = {
         "normal": "zai-org-glm-4.7-flash"  # released Jan 29, 2026
       , "traits": ["concise answers"]
       , "cost": 1.78
-      , "intelligence_index": 15  # an estimated score
       , "nsfw": "olafangensan-glm-4.7-flash-heretic"  # released Feb 4, 2026
       , "disabled": True
     }
@@ -403,13 +402,13 @@ VENICE_CHAT_PRESETS = {
         "normal": "z-ai-glm-5-3-flash"  # released Aug 21, 2026
       , "traits": ["long context", "vision", "coding"]
       , "cost": 4.28
-      , "intelligence_index": 42
+      , "intelligence_index": 28
     }
   , "GLM 1M": {
         "normal": "z-ai-glm-5-3"  # released Aug 18, 2026
       , "traits": ["long context", "coding", "thorough answers"]
       , "cost": 47.95
-      , "intelligence_index": 45
+      , "intelligence_index": 32
     }
 
     # Thinking Machines
@@ -417,15 +416,15 @@ VENICE_CHAT_PRESETS = {
         "normal": "inkling"  # released Jul 16, 2026
       , "traits": ["vision", "concise answers"]
       , "cost": 34.0875
-      , "intelligence_index": 25
+      , "intelligence_index": 12
     }
 
     # MoonshotAI
   , "Kimi": {
         "normal": "kimi-k3-1-pro"  # released Oct 22, 2026, cheaper per workload than the K3 (88.5)
       , "traits": ["long context", "vision", "coding", "thorough answers", "writing"]
-      , "cost": 70.8
-      , "intelligence_index": 55
+      , "cost": 47.2
+      , "intelligence_index": 46
     }
 
     # Alibaba
@@ -434,7 +433,6 @@ VENICE_CHAT_PRESETS = {
         "normal": "qwen-3-8-flash"  # 1M Ctx, released Sep 9, 2026
       , "traits": ["long context", "vision", "reasoning", "concise answers"]
       , "cost": 3.094
-      , "intelligence_index": 40  # the score of the Flash-Next build, the index lists no plain 3.8 Flash
       , "negative_traits": ["stiff prose"]
     }
   , "Qwen": {
@@ -442,14 +440,14 @@ VENICE_CHAT_PRESETS = {
         "normal": "qwen-3-8-27b"  # 262K Ctx, released Aug 17, 2026
       , "traits": ["vision", "nsfw", "reasoning", "concise answers"]
       , "cost": 8.6
-      , "intelligence_index": 34
+      , "intelligence_index": 20
       , "negative_traits": ["eager reader", "stiff prose"]
     }
   , "Qwen Max": {
         "normal": "qwen-3-8-2-4t-a95b"  # 262K Ctx, released Aug 12, 2026
       , "traits": ["coding", "nsfw", "reasoning", "thorough answers"]
       , "cost": 58.125
-      , "intelligence_index": 45
+      , "intelligence_index": 34
       , "negative_traits": ["eager reader", "stiff prose"]
     }
 
@@ -458,7 +456,7 @@ VENICE_CHAT_PRESETS = {
         "normal": "grok-4-7"  # released Sep 15, 2026
       , "traits": ["vision", "coding", "reasoning"]
       , "cost": 71.66
-      , "intelligence_index": 46
+      , "intelligence_index": 35
     }
 
     # MiniMaxAI
@@ -467,7 +465,7 @@ VENICE_CHAT_PRESETS = {
         "normal": "minimax-m3-1-flash"  # released Oct 17, 2026
       , "traits": ["vision", "coding", "reasoning"]
       , "cost": 4.2375
-      , "intelligence_index": 42
+      , "intelligence_index": 29
       , "disabled": True
     }
 
@@ -476,7 +474,7 @@ VENICE_CHAT_PRESETS = {
         "normal": "xiaomi-mimo-v2-6-flash"  # released Sep 27, 2026
       , "traits": ["long context", "vision", "coding", "reasoning"]
       , "cost": 2.6975
-      , "intelligence_index": 38
+      , "intelligence_index": 27
       , "vision_images": 4  # the Xiaomi backend refuses a fifth image in one request ("Too many images in request: 5 > 4", read 2026-09-30). The live spec's maxImages 10 reads wrong on both MiMo builds
     }
 
@@ -504,7 +502,6 @@ VENICE_CHAT_PRESETS = {
         "normal": "mistral-small-3-2-24b-instruct"  # released Jan 14, 2026
       , "traits": ["vision"]
       , "cost": 1.375
-      , "intelligence_index": 8  # an estimated score
       , "disabled": True
     }
 
@@ -513,19 +510,19 @@ VENICE_CHAT_PRESETS = {
         "normal": "nvidia-nemotron-3-nano-30b-a3b"  # released Jan 26, 2026
       , "traits": []
       , "cost": 1.2
-      , "intelligence_index": 9  # the reasoning variant reads 9, the plain build 7
     }
   , "Nemotron Ultra": {
         "normal": "nvidia-nemotron-3-ultra-550b-a55b"  # released Jun 3, 2026
       , "traits": ["reasoning"]
       , "cost": 23
-      , "intelligence_index": 23
+      , "intelligence_index": 12
     }
   , "Nemotron Super": {
         # Disabled, untested - 262K Ctx.
         "normal": "nvidia-nemotron-3-5-super-vl-120b-a12b"  # released Oct 15, 2026
       , "traits": ["vision", "coding", "reasoning"]
-      , "cost": 12.5
+      , "cost": 5.54
+      , "intelligence_index": 14
       , "disabled": True
     }
 
@@ -587,7 +584,7 @@ VENICE_CHAT_TRAIT_TEXT = {
   , "stiff prose": "The answers read stiff and filtered for creative work."
   , "loops": "The model repeats the same words in loops."
 }
-# The output token ceiling of each curated chat model (maxCompletionTokens of the live model list, read 2026-09-23).
+# The output token ceiling of each curated chat model (maxCompletionTokens of the live model list, read 2026-11-09).
 # The request carries it as max_tokens: an absent cap lets the backend reserve an output default that can exceed
 # the context of the model (minimax-m3-preview reserved 512000 of its 524288), so a small prompt already trips
 # the context check. The cap equals the true ceiling of the model, so it cuts no generation short.
@@ -595,12 +592,12 @@ VENICE_CHAT_TRAIT_TEXT = {
 # The live list publishes no constraints for the text models at the 2026-09-25
 # read, so the Aion 3.5 entries carry the cap of the 3.0 pair they replace.
 VENICE_CHAT_COMPLETION_TOKENS = {
-    "deepseek-v4-flash-0731": 32768
-  , "deepseek-v4-1-flash-1017": 131072
-  , "deepseek-v4-1-flash-uncensored": 131072
+    "deepseek-v4-flash-0731": 262144
+  , "deepseek-v4-1-flash-1017": 262144
+  , "deepseek-v4-1-flash-1017-uncensored": 131072
   , "deepseek-v4-pro": 32768
-  , "deepseek-v4-pro-0813": 32768
-  , "google-gemma-4-31b-it": 8192
+  , "deepseek-v4-pro-0813": 262144
+  , "google-gemma-4-31b-it": 16384
   , "gemma-4-uncensored": 8192
   , "gemini-3-8-flash": 65536
   , "z-ai-glm-5-3-flash": 131072
@@ -626,7 +623,7 @@ VENICE_CHAT_COMPLETION_TOKENS = {
   , "mistral-small-3-2-24b-instruct": 16384
   , "nvidia-nemotron-3-nano-30b-a3b": 16384
   , "nvidia-nemotron-3-ultra-550b-a55b": 32768
-  , "nvidia-nemotron-3-5-super-vl-120b-a12b": 32768
+  , "nvidia-nemotron-3-5-super-vl-120b-a12b": 102400
   , "abliteration-abliterated-model-large-v2": 32768
   , "abliteration-abliterated-model-large-flash": 131072
 }
